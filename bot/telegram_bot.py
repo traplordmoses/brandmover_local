@@ -27,11 +27,20 @@ def create_bot() -> Application:
     app.add_handler(CommandHandler("help", handlers.help_command))
     app.add_handler(CommandHandler("start", handlers.help_command))
     app.add_handler(CommandHandler("status", handlers.status_command))
+    app.add_handler(CommandHandler("refs", handlers.refs_command))
     app.add_handler(CommandHandler("cancel", handlers.cancel_command))
     app.add_handler(CommandHandler("approve", handlers.approve_command))
     app.add_handler(CommandHandler("reject", handlers.reject_command))
+    app.add_handler(CommandHandler("feedback", handlers.feedback_command))
+    app.add_handler(CommandHandler("learn", handlers.learn_command))
+    app.add_handler(CommandHandler("setup", handlers.setup_command))
 
-    # Plain text messages → content request pipeline
+    # Document uploads (PDF brand bootstrap)
+    app.add_handler(
+        MessageHandler(filters.Document.ALL, handlers.handle_document)
+    )
+
+    # Plain text messages → content request (pipeline or agent mode)
     app.add_handler(
         MessageHandler(filters.TEXT & ~filters.COMMAND, handlers.handle_message)
     )

@@ -1,10 +1,11 @@
 """
-Image generation via Replicate Flux 1.1 Pro.
-Uses the Replicate HTTP API directly (no SDK dependency).
+Image generation via Replicate with smart model routing.
+Routes to different models based on content_type and prompt keywords.
 """
 
 import logging
 import asyncio
+import re
 
 import httpx
 
@@ -12,15 +13,59 @@ from config import settings
 
 logger = logging.getLogger(__name__)
 
-_REPLICATE_API_URL = "https://api.replicate.com/v1/predictions"
+_REPLICATE_BASE_URL = "https://api.replicate.com/v1/models"
+
+# Model routing table
+_MODELS = {
+    "flux": "black-forest-labs/flux-1.1-pro",
+    "nano-banana": "google/nano-banana-pro",
+    "recraft-svg": "recraft-ai/recraft-v3-svg",
+    "seedream": "bytedance/seedream-4.5",
+}
+
+# Keywords that suggest text overlay in the prompt
+_TEXT_OVERLAY_KEYWORDS = re.compile(
+    r"text reads|headline|title overlay|bold text|text says|typography|lettering|words?.*overlay",
+    re.IGNORECASE,
+)
 
 
-async def generate_image(prompt: str) -> str | None:
+def select_model(content_type: str, prompt: str) -> tuple[str, str]:
     """
-    Generate an image using Replicate Flux 1.1 Pro.
+    Select the best image model based on content type and prompt.
+
+    Returns:
+        (model_id, reason) tuple.
+    """
+    # Manual override
+    if settings.IMAGE_MODEL != "auto":
+        return settings.IMAGE_MODEL, "manual override"
+
+    ct = content_type.lower()
+
+    # Text overlay detection
+    if ct == "announcement" or _TEXT_OVERLAY_KEYWORDS.search(prompt):
+        return _MODELS["nano-banana"], "announcement + text overlay"
+
+    # Brand assets
+    if ct == "brand_asset" or any(kw in prompt.lower() for kw in ("icon", "logo", "svg")):
+        return _MODELS["recraft-svg"], "brand asset / icon"
+
+    # Lifestyle / event photography
+    if ct in ("lifestyle", "event") or "photography" in prompt.lower():
+        return _MODELS["seedream"], "lifestyle / photography"
+
+    # Default
+    return _MODELS["flux"], "default (general purpose)"
+
+
+async def generate_image(prompt: str, content_type: str = "announcement") -> str | None:
+    """
+    Generate an image using Replicate with smart model routing.
 
     Args:
         prompt: Text prompt describing the desired image.
+        content_type: Content type for model selection routing.
 
     Returns:
         URL of the generated image, or None if generation fails.
@@ -29,6 +74,11 @@ async def generate_image(prompt: str) -> str | None:
         logger.warning("REPLICATE_API_TOKEN not set — skipping image generation")
         return None
 
+    model_id, reason = select_model(content_type, prompt)
+    logger.info("\U0001F3A8 Image model: %s (reason: %s)", model_id, reason)
+
+    api_url = f"{_REPLICATE_BASE_URL}/{model_id}/predictions"
+
     headers = {
         "Authorization": f"Bearer {settings.REPLICATE_API_TOKEN}",
         "Content-Type": "application/json",
@@ -36,12 +86,10 @@ async def generate_image(prompt: str) -> str | None:
     }
 
     payload = {
-        "version": "2e8de10f217bc6be1dece1a7bc0e33e3af29e648a0b89bba2e1b0d0eb3db2b73",
         "input": {
             "prompt": prompt,
             "aspect_ratio": "16:9",
             "output_format": "webp",
-            "safety_tolerance": 2,
         },
     }
 
@@ -49,8 +97,7 @@ async def generate_image(prompt: str) -> str | None:
         logger.info("Generating image with prompt: %s", prompt[:120])
 
         async with httpx.AsyncClient(timeout=120) as client:
-            # Create prediction
-            resp = await client.post(_REPLICATE_API_URL, json=payload, headers=headers)
+            resp = await client.post(api_url, json=payload, headers=headers)
             resp.raise_for_status()
             data = resp.json()
 
