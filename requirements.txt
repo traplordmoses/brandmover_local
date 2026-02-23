@@ -1,0 +1,8 @@
+python-telegram-bot>=20.0
+anthropic
+openai
+replicate
+tweepy>=4.0
+python-dotenv
+httpx
+Pillow
