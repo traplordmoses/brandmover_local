@@ -33,11 +33,25 @@ def create_bot() -> Application:
     app.add_handler(CommandHandler("reject", handlers.reject_command))
     app.add_handler(CommandHandler("feedback", handlers.feedback_command))
     app.add_handler(CommandHandler("learn", handlers.learn_command))
+    app.add_handler(CommandHandler("style", handlers.style_command))
     app.add_handler(CommandHandler("setup", handlers.setup_command))
 
-    # Document uploads (PDF brand bootstrap)
+    # Photo uploads (reference images)
     app.add_handler(
-        MessageHandler(filters.Document.ALL, handlers.handle_document)
+        MessageHandler(filters.PHOTO, handlers.handle_photo)
+    )
+
+    # Image documents (user sends image as file, not compressed)
+    app.add_handler(
+        MessageHandler(filters.Document.IMAGE, handlers.handle_photo)
+    )
+
+    # Non-image document uploads (PDF brand bootstrap)
+    app.add_handler(
+        MessageHandler(
+            filters.Document.ALL & ~filters.Document.IMAGE,
+            handlers.handle_document,
+        )
     )
 
     # Plain text messages → content request (pipeline or agent mode)

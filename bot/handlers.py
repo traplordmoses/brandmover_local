@@ -4,9 +4,13 @@ All handlers are async. Only responds to the authorized user.
 """
 
 import html
+import io
 import logging
+import re
 import time
+from pathlib import Path
 
+from PIL import Image as _PILImage
 from telegram import Update
 from telegram.ext import ContextTypes
 
@@ -53,6 +57,7 @@ _TOOL_ICONS = {
     "read_references": "\U0001F4C2",         # folder
     "check_figma_design": "\U0001F3A8",      # palette
     "generate_image": "\U0001F5BC",          # framed picture
+    "img2img": "\U0001F5BC",                 # framed picture
     "read_feedback_history": "\U0001F4AC",   # speech bubble
     "log_resource_usage": "\U0001F4CB",      # clipboard
     "execute_openclaw_script": "\u26D3",     # chain
@@ -76,6 +81,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         "/refs — Show loaded reference materials\n"
         "/feedback — Show approval/rejection stats\n"
         "/learn — Trigger preference learning from feedback history\n"
+        "/style — Manage visual style profiles\n"
         "/setup — Bootstrap guidelines from a PDF upload\n"
         "/cancel — Clear pending draft\n"
         "/help — Show this message"
@@ -150,6 +156,66 @@ async def approve_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         accepted=True,
         resources_used=pending.get("resources_used", []),
     )
+
+    # Save approved composed image to brand/references/ for style consistency
+    composed_path, composed_ct = state.get_last_composed()
+    if composed_path and Path(composed_path).exists():
+        try:
+            refs_dir = Path(settings.BRAND_FOLDER) / "references"
+            refs_dir.mkdir(parents=True, exist_ok=True)
+            ts = int(time.time())
+            save_name = f"approved_{composed_ct}_{ts}.png"
+            save_path = refs_dir / save_name
+            import shutil
+            shutil.copy2(composed_path, save_path)
+            logger.info("Saved approved reference: %s", save_path)
+
+            # Cap at 5 per content_type — delete oldest
+            existing = sorted(refs_dir.glob(f"approved_{composed_ct}_*.png"))
+            if len(existing) > 5:
+                for old in existing[:-5]:
+                    old.unlink(missing_ok=True)
+                    logger.info("Pruned old reference: %s", old.name)
+        except Exception as e:
+            logger.warning("Failed to save approved reference: %s", e)
+
+        # Save into active style profile if one is set for this content_type
+        try:
+            active_profile = state.get_active_profile(composed_ct)
+            if active_profile:
+                count = state.add_profile_image(active_profile, composed_path)
+                logger.info(
+                    "Saved approved image to profile %s (%d images)",
+                    active_profile, count,
+                )
+        except Exception as e:
+            logger.warning("Failed to save to style profile: %s", e)
+
+        # Clean up temp composed file
+        try:
+            Path(composed_path).unlink(missing_ok=True)
+        except Exception:
+            pass
+        state.clear_last_composed()
+
+    # Save approved Finny outputs to grow character reference library
+    _finny_kw = re.compile(r"finny|mascot", re.IGNORECASE)
+    _is_finny_draft = (
+        _finny_kw.search(pending.get("original_request", ""))
+        or _finny_kw.search(pending.get("image_prompt", ""))
+    )
+    if _is_finny_draft and pending.get("image_url"):
+        try:
+            import httpx as _httpx
+            async with _httpx.AsyncClient(timeout=20, follow_redirects=True) as _c:
+                _r = await _c.get(pending["image_url"])
+                _r.raise_for_status()
+                ts = int(time.time())
+                save_path = Path(settings.BRAND_FOLDER) / "assets" / f"finny_approved_{ts}.png"
+                _PILImage.open(io.BytesIO(_r.content)).convert("RGB").save(str(save_path), "PNG")
+                logger.info("Saved approved Finny output: %s", save_path)
+        except Exception as e:
+            logger.warning("Failed to save Finny output: %s", e)
 
     state.clear_pending()
     await update.message.reply_text(
@@ -363,6 +429,122 @@ async def learn_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         )
 
 
+async def style_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /style — manage style profiles."""
+    if not _authorized(update.effective_user.id):
+        return
+
+    text = (update.message.text or "").strip()
+    args = text.partition("/style")[2].strip().split()
+
+    # /style — list all profiles
+    if not args:
+        profiles = state.list_profiles()
+        if not profiles:
+            await update.message.reply_text(
+                "<b>Style Profiles</b>\n\n"
+                "No profiles yet.\n\n"
+                "<code>/style create &lt;name&gt; &lt;description&gt;</code> — create one\n"
+                "<code>/style &lt;name&gt; &lt;content_type&gt;</code> — set active\n"
+                "Upload a photo with the profile name as caption to add references.",
+                parse_mode="HTML",
+            )
+            return
+
+        lines = ["<b>Style Profiles</b>\n"]
+        for p in profiles:
+            active = ", ".join(p["active_for"]) if p["active_for"] else "none"
+            lines.append(
+                f"<b>{_esc(p['name'])}</b> — {_esc(p['description'])}\n"
+                f"  images: {p['image_count']} | strength: {p['strength']} | active for: {active}"
+            )
+        await update.message.reply_text("\n\n".join(lines), parse_mode="HTML")
+        return
+
+    # /style create <name> <description...>
+    if args[0] == "create":
+        if len(args) < 2:
+            await update.message.reply_text(
+                "Usage: <code>/style create &lt;name&gt; &lt;description&gt;</code>",
+                parse_mode="HTML",
+            )
+            return
+        name = args[1]
+        description = " ".join(args[2:]) if len(args) > 2 else ""
+        try:
+            state.add_style_profile(name, description=description)
+            await update.message.reply_text(
+                f"Created style profile <b>{_esc(name)}</b>\n"
+                f"Upload reference photos with caption <code>{_esc(name)}</code> to add images.",
+                parse_mode="HTML",
+            )
+        except ValueError as e:
+            await update.message.reply_text(f"Error: {_esc(str(e))}", parse_mode="HTML")
+        return
+
+    # First arg is a profile name
+    profile_name = args[0]
+    profiles = state.get_style_profiles()
+    if profile_name not in profiles:
+        await update.message.reply_text(
+            f"Profile <b>{_esc(profile_name)}</b> not found. "
+            f"Use <code>/style create {_esc(profile_name)} description</code> to create it.",
+            parse_mode="HTML",
+        )
+        return
+
+    # /style <name> info
+    if len(args) >= 2 and args[1] == "info":
+        p_data = profiles[profile_name]
+        refs = state.get_profile_refs(profile_name)
+        data = state._read_styles()
+        active_for = [ct for ct, p in data["active"].items() if p == profile_name]
+        active_str = ", ".join(active_for) if active_for else "none"
+        await update.message.reply_text(
+            f"<b>{_esc(profile_name)}</b>\n\n"
+            f"<b>Description:</b> {_esc(p_data.get('description', ''))}\n"
+            f"<b>Strength:</b> {p_data.get('strength', 0.3)}\n"
+            f"<b>Prompt prefix:</b> {_esc(p_data.get('prompt_prefix', '') or '(none)')}\n"
+            f"<b>Images:</b> {len(refs)}\n"
+            f"<b>Active for:</b> {active_str}",
+            parse_mode="HTML",
+        )
+        return
+
+    # /style <name> remove
+    if len(args) >= 2 and args[1] == "remove":
+        state.remove_active_profile(profile_name)
+        await update.message.reply_text(
+            f"Removed <b>{_esc(profile_name)}</b> from all active mappings (images kept).",
+            parse_mode="HTML",
+        )
+        return
+
+    # /style <name> <content_type> — set active
+    if len(args) >= 2:
+        content_type = args[1]
+        try:
+            state.set_active_profile(content_type, profile_name)
+            await update.message.reply_text(
+                f"Set <b>{_esc(profile_name)}</b> as active style for <b>{_esc(content_type)}</b>",
+                parse_mode="HTML",
+            )
+        except ValueError as e:
+            await update.message.reply_text(f"Error: {_esc(str(e))}", parse_mode="HTML")
+        return
+
+    # Shouldn't reach here, but show info as fallback
+    await update.message.reply_text(
+        f"Usage:\n"
+        f"<code>/style</code> — list profiles\n"
+        f"<code>/style create &lt;name&gt; &lt;desc&gt;</code> — create\n"
+        f"<code>/style &lt;name&gt; &lt;content_type&gt;</code> — set active\n"
+        f"<code>/style &lt;name&gt; info</code> — details\n"
+        f"<code>/style &lt;name&gt; remove</code> — deactivate",
+        parse_mode="HTML",
+    )
+
+
 async def setup_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle /setup — start PDF brand bootstrap."""
     if not _authorized(update.effective_user.id):
@@ -471,6 +653,91 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         )
 
 
+async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle photo uploads and image documents as reference images."""
+    if not _authorized(update.effective_user.id):
+        return
+    if not update.message:
+        return
+
+    # Determine source: photo[] or image document
+    tg_file = None
+    if update.message.photo:
+        tg_file = await update.message.photo[-1].get_file()
+    elif update.message.document:
+        mime = update.message.document.mime_type or ""
+        if not mime.startswith("image/"):
+            return
+        tg_file = await update.message.document.get_file()
+    else:
+        return
+
+    timestamp = int(time.time())
+    tmp_path = f"/tmp/brandmover_upload_{timestamp}.jpg"
+
+    try:
+        await tg_file.download_to_drive(tmp_path)
+    except Exception as e:
+        logger.error("Failed to download uploaded image: %s", e)
+        await update.message.reply_text(
+            "couldn't download that image, try sending it as a photo instead of a file"
+        )
+        return
+
+    # Convert to JPEG
+    try:
+        img = _PILImage.open(tmp_path).convert("RGB")
+        img.save(tmp_path, "JPEG", quality=95)
+    except Exception as e:
+        logger.warning("Image conversion failed (using as-is): %s", e)
+
+    state.set_reference_image(tmp_path)
+    logger.info("Reference image saved to state: %s", tmp_path)
+
+    caption = (update.message.caption or "").strip()
+
+    # Check if caption matches a style profile name (e.g. "3d_card" or "style 3d_card")
+    if caption:
+        style_name = caption
+        if caption.lower().startswith("style "):
+            style_name = caption[6:].strip()
+
+        profiles = state.get_style_profiles()
+        if style_name in profiles:
+            count = state.add_profile_image(style_name, tmp_path)
+            await update.message.reply_text(
+                f"added to <b>{_esc(style_name)}</b> profile ({count} images total)",
+                parse_mode="HTML",
+            )
+            return
+
+    if caption:
+        await update.message.reply_text("got it, generating with your image as reference...")
+
+        if _rate_limited(update.effective_user.id):
+            await update.message.reply_text(
+                f"Please wait {_RATE_LIMIT_SECONDS}s between requests."
+            )
+            return
+
+        if state.has_pending():
+            await update.message.reply_text(
+                "You have a pending draft. /approve, /reject, or /cancel it first.",
+                parse_mode="HTML",
+            )
+            return
+
+        if settings.AGENT_MODE == "agent":
+            await _handle_agent_mode(update, caption)
+        else:
+            await _handle_pipeline_mode(update, caption)
+    else:
+        await update.message.reply_text(
+            "got it. what should i do with this? reply with:\n"
+            "reference / finny / style <name> / background"
+        )
+
+
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle any plain text message as a content request — branches on AGENT_MODE."""
     if not _authorized(update.effective_user.id):
@@ -508,6 +775,11 @@ async def _handle_agent_mode(update: Update, request: str) -> None:
     """Run the agent tool-use loop for a content request."""
     await update.message.chat.send_action("typing")
 
+    # If a reference image is stored, inject it into the request for the agent
+    ref_path = state.get_reference_image()
+    if ref_path and Path(ref_path).exists():
+        request = f"{request}\n\n[REFERENCE IMAGE: {ref_path}]"
+
     async def on_tool_call(tool_name: str, description: str):
         icon = _TOOL_ICONS.get(tool_name, "\u26A1")
         await update.message.reply_text(
@@ -542,6 +814,15 @@ async def _handle_agent_mode(update: Update, request: str) -> None:
             image_prompt=result.draft.get("image_prompt", ""),
             original_request=request,
         )
+
+        # Clean up reference image temp file if one was used
+        ref_cleanup = state.get_reference_image()
+        if ref_cleanup:
+            try:
+                Path(ref_cleanup).unlink(missing_ok=True)
+            except Exception:
+                pass
+            state.clear_reference_image()
 
         await _send_draft(update, result.draft, image_url, resources=result.resources)
 
@@ -648,6 +929,18 @@ async def _send_draft(update: Update, draft: dict, image_url: str | None, resour
         content_type = draft.get("content_type", "default")
         composed = await compositor.compose_branded_image(draft, image_url, content_type)
         photo = composed if composed else image_url
+
+        # Save composed image to temp for approve-time archiving
+        if composed and isinstance(composed, io.BytesIO):
+            try:
+                tmp_composed = f"/tmp/brandmover_last_composed_{int(time.time())}.png"
+                with open(tmp_composed, "wb") as f:
+                    f.write(composed.getvalue())
+                composed.seek(0)  # reset for Telegram send
+                state.set_last_composed(tmp_composed, content_type)
+            except Exception as e:
+                logger.warning("Failed to save composed image for archiving: %s", e)
+
         try:
             await update.message.reply_photo(
                 photo=photo,

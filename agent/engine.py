@@ -62,7 +62,7 @@ def _try_parse_draft(text: str) -> dict | None:
 def _extract_image_url(tool_calls_made: list[dict]) -> str | None:
     """Extract image URL from generate_image tool results."""
     for call in tool_calls_made:
-        if call.get("name") == "generate_image":
+        if call.get("name") in ("generate_image", "img2img"):
             # Check the pre-extracted URL first (set during execution)
             if call.get("image_url"):
                 return call["image_url"]
@@ -188,11 +188,11 @@ async def run_agent(
             log_entry = {
                 "name": tool_name,
                 "input": tool_input,
-                "result": tool_result if tool_name == "generate_image" else tool_result[:500],
+                "result": tool_result if tool_name in ("generate_image", "img2img") else tool_result[:500],
             }
 
-            # Pre-extract image URL immediately when generate_image succeeds
-            if tool_name == "generate_image":
+            # Pre-extract image URL immediately when generate_image/img2img succeeds
+            if tool_name in ("generate_image", "img2img"):
                 try:
                     parsed = json.loads(tool_result)
                     if "image_url" in parsed:
@@ -245,6 +245,7 @@ def _tool_description(tool_name: str, tool_input: dict) -> str:
         "generate_image": "Generating brand image...",
         "read_feedback_history": "Reviewing feedback history...",
         "log_resource_usage": "Logging resources used...",
+        "img2img": f"Generating image from reference: {tool_input.get('reference_image_path', 'auto')}...",
         "execute_openclaw_script": f"Running {tool_input.get('script_name', 'script')}...",
     }
     return descs.get(tool_name, f"Executing {tool_name}...")

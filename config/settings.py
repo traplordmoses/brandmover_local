@@ -44,7 +44,7 @@ REFERENCES_FOLDER: str = os.getenv("REFERENCES_FOLDER", str(Path(BRAND_FOLDER) /
 # --- Agent Mode ---
 AGENT_MODE: str = os.getenv("AGENT_MODE", "pipeline")  # "pipeline" (existing) or "agent" (tool-use loop)
 AGENT_MAX_TURNS: int = int(os.getenv("AGENT_MAX_TURNS", "15"))
-AGENT_MODEL: str = os.getenv("AGENT_MODEL", "claude-sonnet-4-6")
+AGENT_MODEL: str = os.getenv("AGENT_MODEL", "claude-opus-4-6")
 FEEDBACK_SUMMARIZE_EVERY: int = int(os.getenv("FEEDBACK_SUMMARIZE_EVERY", "10"))
 
 # --- Figma ---

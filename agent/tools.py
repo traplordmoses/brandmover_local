@@ -10,9 +10,12 @@ import logging
 import re
 import shlex
 import subprocess
+import time as _time
 from pathlib import Path
 
-from agent import feedback, figma, guidelines, image_gen
+from PIL import Image as _PILImage
+
+from agent import feedback, figma, guidelines, image_gen, state as _state
 from agent.resource_log import ResourceTracker
 from config import settings
 
@@ -109,6 +112,30 @@ TOOL_DEFINITIONS = [
                     "enum": ["announcement", "lifestyle", "event", "educational", "brand_asset", "community", "market_commentary"],
                     "description": "Content type for smart model routing. Determines which image model is used.",
                     "default": "announcement",
+                },
+            },
+            "required": ["prompt"],
+        },
+    },
+    {
+        "name": "img2img",
+        "description": (
+            "Generate an image based on an existing reference image and a text prompt using "
+            "flux-kontext-pro (img2img). Use this when the user has uploaded a reference photo, "
+            "or when generating Finny the mascot (blue round head, orange spacesuit, white helmet "
+            "ring, gold B logo, deadpan expression). For Finny requests, reference images are "
+            "auto-loaded from brand assets if reference_image_path is not provided."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "prompt": {
+                    "type": "string",
+                    "description": "Detailed description of the desired image output.",
+                },
+                "reference_image_path": {
+                    "type": "string",
+                    "description": "Absolute path to the reference image on disk. Leave empty to auto-detect Finny references.",
                 },
             },
             "required": ["prompt"],
@@ -216,6 +243,9 @@ async def _handle_check_figma_design(
     return json.dumps(result, indent=2)
 
 
+_REFS_DIR = Path(settings.BRAND_FOLDER) / "references"
+
+
 async def _handle_generate_image(
     input_dict: dict, tracker: ResourceTracker
 ) -> str:
@@ -224,6 +254,67 @@ async def _handle_generate_image(
         return json.dumps({"error": "No prompt provided"})
 
     content_type = input_dict.get("content_type", "announcement")
+
+    # 1. Check for active style profile for this content_type
+    active_profile = _state.get_active_profile(content_type)
+    if active_profile:
+        profile_refs = _state.get_profile_refs(active_profile)
+        if profile_refs:
+            # Stitch up to 3 refs into a grid
+            if len(profile_refs) >= 3:
+                input_ref = _stitch_grid(profile_refs[:3], label="style")
+            else:
+                input_ref = profile_refs[-1]  # most recent single ref
+
+            # Get profile-specific settings
+            profiles = _state.get_style_profiles()
+            profile_data = profiles.get(active_profile, {})
+            strength = profile_data.get("strength", 0.3)
+            prefix = profile_data.get("prompt_prefix", "")
+
+            if prefix:
+                prompt = f"{prefix}, {prompt}"
+            prompt += ", visual reference: maintain same composition style, lighting, and layout"
+
+            logger.info(
+                "Using style profile '%s' for %s: %d refs, strength=%.2f",
+                active_profile, content_type, len(profile_refs), strength,
+            )
+            tracker.log_api(f"replicate:flux-kontext-pro (style profile: {active_profile})")
+            url = await image_gen.generate_img2img(prompt, input_ref, strength=strength)
+
+            # Clean up stitched temp file
+            if input_ref.startswith("/tmp/style_stitched_"):
+                try:
+                    Path(input_ref).unlink(missing_ok=True)
+                except Exception:
+                    pass
+
+            if url:
+                return json.dumps({
+                    "image_url": url,
+                    "model": "flux-kontext-pro",
+                    "reason": f"style profile: {active_profile}",
+                    "prompt_used": prompt,
+                })
+            logger.warning("Style profile img2img failed — falling back")
+
+    # 2. Fallback: check for approved references matching this content_type
+    approved_refs = sorted(_REFS_DIR.glob(f"approved_{content_type}_*.png"))
+    if approved_refs:
+        latest_ref = str(approved_refs[-1])
+        prompt = (
+            f"{prompt}, visual reference: maintain same composition style, "
+            f"lighting, and layout as previous approved posts of this type"
+        )
+        logger.info("Using approved style ref for %s: %s (strength=0.3)", content_type, latest_ref)
+        tracker.log_api("replicate:flux-kontext-pro (style ref)")
+        url = await image_gen.generate_img2img(prompt, latest_ref, strength=0.3)
+        if url:
+            return json.dumps({"image_url": url, "model": "flux-kontext-pro", "reason": "style reference from approved", "prompt_used": prompt})
+        logger.warning("img2img style ref failed — falling back to text-to-image")
+
+    # 3. Pure text-to-image generation
     model_id, reason = image_gen.select_model(content_type, prompt)
     tracker.log_api(f"replicate:{model_id.split('/')[-1]}")
 
@@ -233,6 +324,107 @@ async def _handle_generate_image(
         return json.dumps({"image_url": url, "model": model_id, "reason": reason, "prompt_used": prompt})
     else:
         return json.dumps({"error": "Image generation failed or REPLICATE_API_TOKEN not set", "model": model_id, "prompt_used": prompt})
+
+
+_FINNY_ASSETS_DIR = Path(settings.BRAND_FOLDER) / "assets"
+_FINNY_IDENTITY = (
+    "round blue alien fish head, big black eyes, blue fin antenna, "
+    "orange spacesuit with white helmet ring and gold B logo, deadpan grumpy expression"
+)
+
+
+def _stitch_grid(image_paths: list[str], max_images: int = 3, label: str = "ref") -> str:
+    """Stitch up to max_images reference images into a horizontal grid.
+    Returns path to the stitched image in /tmp."""
+    paths = image_paths[:max_images]
+    images = [_PILImage.open(p).convert("RGB") for p in paths]
+
+    # Normalize to same height (use the smallest)
+    min_h = min(img.height for img in images)
+    resized = []
+    for img in images:
+        w = int(min_h * img.width / img.height)
+        resized.append(img.resize((w, min_h), _PILImage.LANCZOS))
+
+    total_w = sum(img.width for img in resized)
+    grid = _PILImage.new("RGB", (total_w, min_h))
+    x = 0
+    for img in resized:
+        grid.paste(img, (x, 0))
+        x += img.width
+
+    out_path = f"/tmp/{label}_stitched_{int(_time.time())}.jpg"
+    grid.save(out_path, "JPEG", quality=95)
+    logger.info("Stitched %d %s refs into grid: %s (%dx%d)", len(resized), label, out_path, total_w, min_h)
+    return out_path
+
+
+def _build_finny_prompt(user_prompt: str) -> str:
+    """Rewrite a Finny prompt into the BFL-recommended structure for character consistency."""
+    return (
+        f"This character — {_FINNY_IDENTITY} — is now {user_prompt}. "
+        f"Keep exact character design, same face, same suit colors, same proportions. "
+        f"Change the background and scene while keeping the character in the exact same "
+        f"position, scale, and pose."
+    )
+
+
+async def _handle_img2img(
+    input_dict: dict, tracker: ResourceTracker
+) -> str:
+    prompt = input_dict.get("prompt", "")
+    if not prompt:
+        return json.dumps({"error": "No prompt provided"})
+
+    reference_image_path = input_dict.get("reference_image_path") or None
+
+    # Auto-detect Finny references when no explicit path and prompt mentions finny/mascot
+    is_finny = re.search(r"finny|mascot", prompt, re.IGNORECASE)
+    if reference_image_path is None and is_finny:
+        found = []
+        for i in range(1, 10):
+            p = _FINNY_ASSETS_DIR / f"finny_reference_{i}.png"
+            if p.exists():
+                found.append(str(p))
+
+        if found:
+            # Stitch multiple refs into a grid for Kontext (multiple angles in one image)
+            if len(found) >= 3:
+                reference_image_path = _stitch_grid(found, max_images=3, label="finny")
+            else:
+                reference_image_path = found[0]
+
+            prompt = _build_finny_prompt(prompt)
+            logger.info("Auto-selected %d Finny reference(s): input=%s", len(found), reference_image_path)
+        else:
+            logger.warning("Finny prompt but no finny_reference_*.png found - falling back to text-to-image")
+            url = await image_gen.generate_image(prompt, content_type="community")
+            tracker.log_api("replicate:flux-1.1-pro (finny fallback)")
+            if url:
+                return json.dumps({"image_url": url, "note": "Finny references not found, used text-to-image fallback"})
+            return json.dumps({"error": "Image generation failed"})
+
+    if reference_image_path is None:
+        logger.info("img2img called with no reference image and no Finny keyword - falling back to generate_image")
+        url = await image_gen.generate_image(prompt, content_type="announcement")
+        tracker.log_api("replicate:flux-1.1-pro (no-ref fallback)")
+        if url:
+            return json.dumps({"image_url": url, "note": "No reference image provided, used text-to-image"})
+        return json.dumps({"error": "Image generation failed"})
+
+    tracker.log_api("replicate:flux-kontext-pro")
+    url = await image_gen.generate_img2img(prompt, reference_image_path)
+
+    # Clean up stitched temp file
+    if reference_image_path.startswith("/tmp/finny_stitched_"):
+        try:
+            Path(reference_image_path).unlink(missing_ok=True)
+        except Exception:
+            pass
+
+    if url:
+        return json.dumps({"image_url": url, "model": "flux-kontext-pro", "reference": reference_image_path, "prompt_used": prompt})
+    return json.dumps({"error": "img2img generation failed", "reference": reference_image_path, "prompt_used": prompt})
 
 
 async def _handle_read_feedback_history(
@@ -309,6 +501,7 @@ _HANDLERS = {
     "read_references": _handle_read_references,
     "check_figma_design": _handle_check_figma_design,
     "generate_image": _handle_generate_image,
+    "img2img": _handle_img2img,
     "read_feedback_history": _handle_read_feedback_history,
     "log_resource_usage": _handle_log_resource_usage,
     "execute_openclaw_script": _handle_execute_openclaw_script,

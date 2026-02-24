@@ -6,9 +6,11 @@ Automatically enhances prompts with SPLICE-based structure, quality boosters,
 brand-specific terms, and negative prompts for higher-quality output.
 """
 
+import base64
 import logging
 import asyncio
 import re
+from pathlib import Path
 
 import httpx
 
@@ -107,6 +109,49 @@ _FINNY_NEGATIVE = (
 # Models that accept negative_prompt parameter
 _MODELS_WITH_NEGATIVE = {_MODELS["seedream"]}
 
+# ---------------------------------------------------------------------------
+# Locked directives — terms that must survive enhancement verbatim.
+# If the raw prompt contains any of these, the enhancer preserves them and
+# strips any added phrases that would contradict them.
+# ---------------------------------------------------------------------------
+_LOCKED_DIRECTIVES = [
+    "upright",
+    "portrait",
+    "70 degree",
+    "80 degree",
+    "matte black background",
+    "rim light",
+]
+
+# Map locked directives to contradictory phrases that must be stripped from
+# quality profiles and brand terms when the directive is present.
+_CONTRADICTION_MAP = {
+    "matte black background": re.compile(
+        r"black background|dark.*background|dark moody atmosphere", re.IGNORECASE
+    ),
+    "rim light": re.compile(
+        r"rim lighting|rim highlights", re.IGNORECASE
+    ),
+}
+
+
+def _extract_locked(prompt: str) -> list[str]:
+    """Return locked directives found in the prompt (case-insensitive)."""
+    lower = prompt.lower()
+    return [d for d in _LOCKED_DIRECTIVES if d.lower() in lower]
+
+
+def _strip_contradictions(text: str, locked: list[str]) -> str:
+    """Remove phrases from enhancement text that contradict locked directives."""
+    for directive in locked:
+        pattern = _CONTRADICTION_MAP.get(directive)
+        if pattern:
+            text = pattern.sub("", text)
+    # Clean up leftover double commas / leading commas
+    text = re.sub(r",\s*,", ",", text)
+    text = text.strip(", ")
+    return text
+
 
 def enhance_prompt(raw_prompt: str, content_type: str) -> tuple[str, str]:
     """
@@ -118,6 +163,10 @@ def enhance_prompt(raw_prompt: str, content_type: str) -> tuple[str, str]:
     - Composition: preserved from raw prompt if present
     - Enhancers: quality boosters and brand terms
 
+    Locked directives (e.g. "upright", "70 degree", "matte black background")
+    are detected in the raw prompt and preserved verbatim.  Enhancement phrases
+    that would contradict them are stripped automatically.
+
     Args:
         raw_prompt: The agent's original image prompt.
         content_type: Content type for profile selection.
@@ -127,6 +176,11 @@ def enhance_prompt(raw_prompt: str, content_type: str) -> tuple[str, str]:
     """
     ct = content_type.lower()
     prompt = raw_prompt.strip().rstrip(",. ")
+
+    # --- Detect locked directives ---
+    locked = _extract_locked(prompt)
+    if locked:
+        logger.info("Locked directives detected: %s", locked)
 
     # --- Finny has its own aesthetic ---
     if "finny" in prompt.lower():
@@ -140,25 +194,33 @@ def enhance_prompt(raw_prompt: str, content_type: str) -> tuple[str, str]:
         return enhanced, _FINNY_NEGATIVE
 
     # --- Build enhanced prompt ---
-    parts = [prompt]
-
-    # Add content-type quality profile
+    # Add content-type quality profile (strip contradictions if locked)
     quality = _QUALITY_PROFILES.get(ct, _QUALITY_PROFILES["announcement"])
-    parts.append(quality)
+    if locked:
+        quality = _strip_contradictions(quality, locked)
 
-    # Add brand terms if not already present
+    parts = [prompt]
+    if quality:
+        parts.append(quality)
+
+    # Add brand terms if not already present (strip contradictions if locked)
     if not _BRAND_INDICATORS.search(prompt):
-        parts.append(_BRAND_TERMS)
+        brand = _BRAND_TERMS
+        if locked:
+            brand = _strip_contradictions(brand, locked)
+        if brand:
+            parts.append(brand)
 
     enhanced = ", ".join(parts)
 
     # Log the enhancement
     added = len(enhanced) - len(raw_prompt)
     logger.info(
-        "Prompt enhanced: +%d chars (%s profile, brand=%s)",
+        "Prompt enhanced: +%d chars (%s profile, brand=%s, locked=%s)",
         added,
         ct,
         "skipped" if _BRAND_INDICATORS.search(prompt) else "added",
+        locked or "none",
     )
 
     return enhanced, _NEGATIVE_PROMPT
@@ -326,4 +388,92 @@ async def generate_image(prompt: str, content_type: str = "announcement") -> str
 
     except Exception as e:
         logger.error("Image generation failed: %s", e)
+        return None
+
+
+async def generate_img2img(
+    prompt: str,
+    input_image_path: str,
+    strength: float = 0.8,
+) -> str | None:
+    """
+    Generate an image from a reference image + prompt using flux-kontext-pro.
+
+    Args:
+        prompt: Text prompt describing the desired output.
+        input_image_path: Absolute path to the input image on disk.
+        strength: How much to deviate from the input (0.0-1.0).
+
+    Returns:
+        URL of the generated image, or None on failure.
+    """
+    if not settings.REPLICATE_API_TOKEN:
+        logger.warning("REPLICATE_API_TOKEN not set — skipping img2img generation")
+        return None
+
+    model_id = "black-forest-labs/flux-kontext-pro"
+    logger.info("img2img model: %s | input: %s | prompt: %s", model_id, input_image_path, prompt[:120])
+
+    try:
+        image_bytes = Path(input_image_path).read_bytes()
+        b64 = base64.b64encode(image_bytes).decode("utf-8")
+        input_image_data_url = f"data:image/png;base64,{b64}"
+    except OSError as e:
+        logger.error("Failed to read input image %s: %s", input_image_path, e)
+        return None
+
+    api_url = f"{_REPLICATE_BASE_URL}/{model_id}/predictions"
+
+    headers = {
+        "Authorization": f"Bearer {settings.REPLICATE_API_TOKEN}",
+        "Content-Type": "application/json",
+        "Prefer": "wait",
+    }
+
+    payload = {
+        "input": {
+            "prompt": prompt,
+            "input_image": input_image_data_url,
+            "strength": strength,
+        },
+    }
+
+    try:
+        async with httpx.AsyncClient(timeout=120) as client:
+            resp = await client.post(api_url, json=payload, headers=headers)
+            resp.raise_for_status()
+            data = resp.json()
+
+            if data.get("status") == "succeeded" and data.get("output"):
+                image_url = _extract_url(data["output"])
+                if image_url:
+                    logger.info("img2img generated: %s", image_url[:120])
+                    return image_url
+
+            poll_url = data.get("urls", {}).get("get")
+            if not poll_url:
+                logger.error("No poll URL in Replicate img2img response")
+                return None
+
+            for _ in range(60):
+                await asyncio.sleep(2)
+                poll_resp = await client.get(poll_url, headers=headers)
+                poll_resp.raise_for_status()
+                poll_data = poll_resp.json()
+
+                status = poll_data.get("status")
+                if status == "succeeded":
+                    image_url = _extract_url(poll_data.get("output"))
+                    if image_url:
+                        logger.info("img2img generated: %s", image_url[:120])
+                        return image_url
+                elif status in ("failed", "canceled"):
+                    logger.error("img2img %s: %s", status, poll_data.get("error"))
+                    return None
+
+            logger.error("img2img timed out after polling")
+            return None
+
+    except Exception as e:
+        logger.error("img2img generation failed: %s", e)
         return None
