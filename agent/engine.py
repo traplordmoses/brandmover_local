@@ -42,7 +42,7 @@ def _try_parse_draft(text: str) -> dict | None:
     if fence_match:
         try:
             obj = json.loads(fence_match.group(1))
-            if "caption" in obj and "hashtags" in obj:
+            if "caption" in obj:
                 return obj
         except json.JSONDecodeError:
             pass
@@ -51,7 +51,7 @@ def _try_parse_draft(text: str) -> dict | None:
     for match in re.finditer(r"\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}", text, re.DOTALL):
         try:
             obj = json.loads(match.group())
-            if "caption" in obj and "hashtags" in obj:
+            if "caption" in obj:
                 return obj
         except json.JSONDecodeError:
             continue

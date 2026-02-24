@@ -7,6 +7,8 @@ Each handler receives (input_dict, ResourceTracker) and returns a string.
 import asyncio
 import json
 import logging
+import re
+import shlex
 import subprocess
 from pathlib import Path
 
@@ -263,9 +265,17 @@ async def _handle_execute_openclaw_script(
     if not script_path.exists():
         return json.dumps({"error": f"Script not found at {script_path}. Install OpenClaw skills first."})
 
+    # Sanitize args — reject shell metacharacters, use shlex for safe splitting
+    _UNSAFE_CHARS = re.compile(r"[;&|`$(){}!<>\\]")
+    if args and _UNSAFE_CHARS.search(args):
+        return json.dumps({"error": "Arguments contain unsafe characters. Only alphanumeric, hyphens, underscores, dots, and spaces are allowed."})
+
     cmd = ["node", str(script_path)]
     if args:
-        cmd.extend(args.split())
+        try:
+            cmd.extend(shlex.split(args))
+        except ValueError as e:
+            return json.dumps({"error": f"Invalid arguments: {e}"})
 
     tracker.log_script(script_name)
 

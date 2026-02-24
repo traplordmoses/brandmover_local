@@ -1,6 +1,27 @@
+# Python
 __pycache__/
 *.pyc
+*.pyo
+venv/
+
+# macOS
+.DS_Store
+
+# Secrets
 .env
+
+# IDE
 .vscode/
+
+# Runtime / generated
 bot.log
 state.json
+feedback.json
+learned_preferences.md
+*.bak
+
+# Brand assets (may contain proprietary material)
+brand/references/
+brand/assets/fonts/
+brand/assets/pdf_pages/
+brand/assets/images/

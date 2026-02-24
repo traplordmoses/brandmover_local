@@ -49,8 +49,8 @@ FEEDBACK_SUMMARIZE_EVERY: int = int(os.getenv("FEEDBACK_SUMMARIZE_EVERY", "10"))
 
 # --- Figma ---
 FIGMA_ACCESS_TOKEN: str = os.getenv("FIGMA_ACCESS_TOKEN", "")
-FIGMA_FILE_KEY: str = os.getenv("FIGMA_FILE_KEY", "nIYabvWGD24bCCZ6fx6uD0")
-FIGMA_NODE_ID: str = os.getenv("FIGMA_NODE_ID", "0:5")
+FIGMA_FILE_KEY: str = os.getenv("FIGMA_FILE_KEY", "")
+FIGMA_NODE_ID: str = os.getenv("FIGMA_NODE_ID", "")
 
 # --- OpenClaw ---
 OPENCLAW_SCRIPTS_DIR: str = os.getenv(

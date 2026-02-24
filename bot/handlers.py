@@ -10,15 +10,29 @@ import time
 from telegram import Update
 from telegram.ext import ContextTypes
 
-from agent import brain, engine, feedback, guidelines, image_gen, publisher, state
+from agent import brain, compositor, engine, feedback, guidelines, image_gen, publisher, state
 from config import settings
 
 logger = logging.getLogger(__name__)
+
+# Rate limiting — minimum seconds between generation requests per user
+_RATE_LIMIT_SECONDS = 10
+_last_request_time: dict[int, float] = {}
 
 
 def _authorized(user_id: int) -> bool:
     """Check if a Telegram user is the authorized operator."""
     return user_id == settings.TELEGRAM_ALLOWED_USER_ID
+
+
+def _rate_limited(user_id: int) -> bool:
+    """Check if user is sending requests too fast. Returns True if blocked."""
+    now = time.time()
+    last = _last_request_time.get(user_id, 0)
+    if now - last < _RATE_LIMIT_SECONDS:
+        return True
+    _last_request_time[user_id] = now
+    return False
 
 
 def _esc(text: str) -> str:
@@ -97,7 +111,6 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         f"<b>Pending Draft</b>\n\n"
         f"<b>Request:</b> {_esc(pending['original_request'])}\n\n"
         f"<b>Caption:</b>\n{_esc(pending['caption'])}\n\n"
-        f"<b>Hashtags:</b> {_esc(' '.join(pending['hashtags']))}\n\n"
         f"<b>Image:</b> {'Yes' if pending.get('image_url') else 'No'}\n"
         f"<b>Waiting:</b> {minutes} min\n\n"
         f"Reply /approve to post or /reject <i>feedback</i> to revise."
@@ -228,7 +241,7 @@ async def _handle_pipeline_revision(update: Update, pending: dict, feedback_text
         # Save revised draft
         state.save_pending(
             caption=draft["caption"],
-            hashtags=draft["hashtags"],
+            hashtags=draft.get("hashtags", []),
             image_url=image_url,
             alt_text=draft["alt_text"],
             image_prompt=draft["image_prompt"],
@@ -259,7 +272,6 @@ async def _handle_agent_revision(update: Update, pending: dict, feedback_text: s
     revision_context = (
         f"PREVIOUS DRAFT (REJECTED):\n"
         f"Caption: {pending.get('caption', '')}\n"
-        f"Hashtags: {' '.join(pending.get('hashtags', []))}\n"
         f"Image prompt: {pending.get('image_prompt', '')}\n\n"
         f"USER FEEDBACK: {feedback_text}\n\n"
         f"Please revise the draft based on this feedback. Address the specific concerns raised."
@@ -291,7 +303,7 @@ async def _handle_agent_revision(update: Update, pending: dict, feedback_text: s
 
         state.save_pending(
             caption=result.draft["caption"],
-            hashtags=result.draft["hashtags"],
+            hashtags=result.draft.get("hashtags", []),
             image_url=image_url,
             alt_text=result.draft.get("alt_text", ""),
             image_prompt=result.draft.get("image_prompt", ""),
@@ -471,6 +483,13 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     if not request:
         return
 
+    # Rate limit — prevent accidental double-sends from burning API credits
+    if _rate_limited(update.effective_user.id):
+        await update.message.reply_text(
+            f"Please wait {_RATE_LIMIT_SECONDS}s between requests."
+        )
+        return
+
     # Block if there's already a pending draft
     if state.has_pending():
         await update.message.reply_text(
@@ -517,7 +536,7 @@ async def _handle_agent_mode(update: Update, request: str) -> None:
         # Save pending state
         state.save_pending(
             caption=result.draft["caption"],
-            hashtags=result.draft["hashtags"],
+            hashtags=result.draft.get("hashtags", []),
             image_url=image_url,
             alt_text=result.draft.get("alt_text", ""),
             image_prompt=result.draft.get("image_prompt", ""),
@@ -581,7 +600,7 @@ async def _handle_pipeline_mode(update: Update, request: str) -> None:
         # Save pending state
         state.save_pending(
             caption=draft["caption"],
-            hashtags=draft["hashtags"],
+            hashtags=draft.get("hashtags", []),
             image_url=image_url,
             alt_text=draft["alt_text"],
             image_prompt=draft["image_prompt"],
@@ -601,12 +620,21 @@ async def _handle_pipeline_mode(update: Update, request: str) -> None:
 async def _send_draft(update: Update, draft: dict, image_url: str | None, resources=None) -> None:
     """Send the generated draft to the user for review."""
     caption = draft["caption"]
-    hashtags = " ".join(draft["hashtags"])
+
+    # Build template section if title/subtitle present
+    template_section = ""
+    if draft.get("title") or draft.get("subtitle"):
+        template_section = (
+            f"\n<b>--- Image Template ---</b>\n"
+            f"<b>Title:</b> {_esc(draft.get('title', ''))}\n"
+            f"<b>Subtitle:</b> {_esc(draft.get('subtitle', ''))}\n"
+            f"<b>Platform:</b> {_esc(draft.get('platform', 'WEB'))}\n"
+        )
 
     text_msg = (
         f"<b>Draft Ready</b>\n\n"
-        f"{_esc(caption)}\n\n"
-        f"{_esc(hashtags)}\n\n"
+        f"{_esc(caption)}\n"
+        f"{template_section}\n"
         f"<i>Alt text:</i> {_esc(draft.get('alt_text', ''))}\n\n"
         f"/approve to post to X\n"
         f"/reject <i>feedback</i> to revise"
@@ -617,9 +645,12 @@ async def _send_draft(update: Update, draft: dict, image_url: str | None, resour
         text_msg += f"\n\n<i>Resources: {_esc(resources.to_summary())}</i>"
 
     if image_url:
+        content_type = draft.get("content_type", "default")
+        composed = await compositor.compose_branded_image(draft, image_url, content_type)
+        photo = composed if composed else image_url
         try:
             await update.message.reply_photo(
-                photo=image_url,
+                photo=photo,
                 caption=text_msg[:1024],  # Telegram photo caption limit
                 parse_mode="HTML",
             )

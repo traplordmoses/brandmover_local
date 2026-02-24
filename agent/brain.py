@@ -33,18 +33,25 @@ Your job: given a content request, produce a ready-to-publish social media post 
 RULES:
 - Follow the brand voice and tone exactly as described in the guidelines.
 - Never use words or phrases listed under "Never use" in the guidelines.
-- Keep captions punchy — under 280 characters for X/Twitter unless the request calls for a longer format.
-- Hashtags: pick 3-5 relevant ones from the approved list in the guidelines.
-- The image_prompt should describe a visual that matches the brand's illustration style and color palette.
+- Sound HUMAN, not like AI. Avoid: "revolutionizing," "leveraging," "cutting-edge," "seamlessly," "dive into," "unlock."
+- Keep captions short and punchy — 50-150 characters ideal, under 280 max for X/Twitter.
+- Use crypto slang naturally: DYOR, gm, perps, LFG, NFA.
+- Hashtags are sparse — often zero. Only when they genuinely add value.
+- Use 1-3 emojis max, placed purposefully. Key emojis: 🫡 🐳 🔥 👉 📈 👀
+- Write image_prompt using the SPLICE structure: Subject (specific) + Parameters (style/medium) + Lighting (dramatic orange rim light) + Image Type (3D render, photo) + Composition (angle, framing) + Enhancers (sharp, 8K). The system auto-adds quality boosters and brand terms — focus on describing the SUBJECT clearly.
+- Be SPECIFIC in image prompts: "3D matte black metallic smartphone with glowing orange trading UI" not "a phone showing trading"
+- Use professional art terms in prompts: chiaroscuro, bokeh, volumetric, rim light, specular highlight
 - Output ONLY valid JSON. No markdown fences, no commentary, no preamble.
 
 OUTPUT FORMAT (strict JSON):
 {{
   "caption": "The post caption text",
-  "hashtags": ["#Tag1", "#Tag2", "#Tag3"],
   "alt_text": "Accessible image description",
   "image_prompt": "Detailed prompt for image generation matching brand visual style",
-  "content_type": "announcement"
+  "content_type": "announcement",
+  "title": "UPPERCASE HEADLINE",
+  "subtitle": "Brief explanation of the feature or topic",
+  "platform": "WEB"
 }}
 
 CONTENT_TYPE values (pick the best fit):
@@ -54,7 +61,13 @@ CONTENT_TYPE values (pick the best fit):
 - "educational" — tutorials, explainers, how-tos
 - "brand_asset" — logos, icons, badges, graphics
 - "community" — giveaways, polls, engagement posts
-- "market_commentary" — market analysis, price action, trends"""
+- "market_commentary" — market analysis, price action, trends
+
+TEMPLATE FIELDS:
+- "title": ALL CAPS headline for the post image template (max 4-5 words, action-oriented)
+- "subtitle": Brief feature/topic explanation for the image template (1-2 sentences)
+- "platform": Badge to show — "WEB", "APP", or "PRO"
+"""
 
 _REVISION_PROMPT_TEMPLATE = """The user rejected the previous draft and provided feedback.
 
@@ -68,10 +81,12 @@ Revise the draft based on the feedback. Keep following the brand guidelines.
 Output ONLY valid JSON in the same format:
 {{
   "caption": "...",
-  "hashtags": ["..."],
   "alt_text": "...",
   "image_prompt": "...",
-  "content_type": "..."
+  "content_type": "...",
+  "title": "...",
+  "subtitle": "...",
+  "platform": "..."
 }}"""
 
 # ---------------------------------------------------------------------------
@@ -182,10 +197,12 @@ USER REQUEST:
 Output ONLY valid JSON — no markdown fences, no commentary:
 {{
   "caption": "The post caption text",
-  "hashtags": ["#Tag1", "#Tag2", "#Tag3"],
   "alt_text": "Accessible image description",
   "image_prompt": "Detailed prompt for image generation matching brand visual style",
-  "content_type": "announcement"
+  "content_type": "announcement",
+  "title": "UPPERCASE HEADLINE",
+  "subtitle": "Brief explanation of the feature or topic",
+  "platform": "WEB"
 }}"""
 
 _PLAN_AND_VERIFY_PROMPT = """You are BrandMover's creative planning + compliance module for {brand_name}.
@@ -250,7 +267,7 @@ def _parse_llm_response(text: str) -> dict:
             lines = lines[:-1]
         cleaned = "\n".join(lines).strip()
     result = json.loads(cleaned)
-    required = {"caption", "hashtags", "alt_text", "image_prompt"}
+    required = {"caption", "alt_text", "image_prompt"}
     missing = required - set(result.keys())
     if missing:
         raise ValueError(f"LLM response missing keys: {missing}")
