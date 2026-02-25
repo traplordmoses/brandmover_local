@@ -70,6 +70,7 @@ This content type has its own dedicated pipeline:
 - Your image_prompt should contain ONLY the object description and composition — do NOT add lighting, background, or render quality terms (those are locked in the master prompt automatically)
 - If a LoRA is available, the prompt is prefixed with BLOFIN3D trigger word
 - If no LoRA, the master prompt is used with reference images from the training set
+- **IMPORTANT: The pipeline automatically generates 3 parallel image options from a single `generate_image` call.** You should call `generate_image` ONCE per concept. Do NOT call it 3 times to get 3 options — that wastes 9 API calls instead of 3. If the user asks for "3 options" or "multiple options", one call is sufficient.
 
 **Good brand_3d prompts** (object + composition only):
 - "A trophy with USDT coins spilling out"

@@ -13,7 +13,7 @@ import subprocess
 import time as _time
 from pathlib import Path
 
-from PIL import Image as _PILImage
+from PIL import Image as _PILImage, ImageOps as _PILImageOps
 
 from agent import feedback, figma, guidelines, image_gen, state as _state
 from agent.resource_log import ResourceTracker
@@ -289,34 +289,55 @@ async def _handle_generate_image(
         ref_images = _select_3d_refs(training_dir, prompt)
 
         # Inject logo refs when prompt mentions logo/B logo/BloFin logo
+        _logo_contrast_temps: list[str] = []  # track contrast files for cleanup
         if _LOGO_PATTERN.search(prompt):
             logo_dir = training_dir / "logos"
             if logo_dir.is_dir():
                 logo_refs = sorted(logo_dir.glob("*.png"))
                 if logo_refs:
-                    # Add logo refs to end of stack, avoid duplicates
                     existing_paths = {str(p) for p in ref_images}
                     for lr in logo_refs:
-                        if str(lr) not in existing_paths:
-                            ref_images.append(lr)
-                    logger.info("brand_3d: injected %d logo refs (prompt mentions logo)", len(logo_refs))
+                        usable, tmp = _prepare_logo_ref(lr)
+                        if tmp:
+                            _logo_contrast_temps.append(tmp)
+                        if str(usable) not in existing_paths:
+                            ref_images.append(usable)
+                            existing_paths.add(str(usable))
+                    logger.info("brand_3d: injected %d logo refs (prompt mentions logo, %d contrast-boosted)", len(logo_refs), len(_logo_contrast_temps))
 
-        # --- Step 3: Generate N=3 options in parallel ---
+        # Inject MCP logo refs as safety net (always when folder has files)
+        mcp_refs_dir = training_dir / "mcp_refs"
+        if mcp_refs_dir.is_dir():
+            mcp_ref_files = sorted(mcp_refs_dir.glob("*.png"))
+            if mcp_ref_files:
+                existing_paths = {str(p) for p in ref_images}
+                for mr in mcp_ref_files:
+                    if str(mr) not in existing_paths:
+                        ref_images.append(mr)
+                logger.info("brand_3d: injected %d MCP refs", len(mcp_ref_files))
+
+        # --- Step 3: Generate N=3 options with staggered calls ---
         _N_OPTIONS = 3
+        _STAGGER_DELAY = 1.5  # seconds between calls to avoid 429s
 
         if ref_images:
             ref_grid = _stitch_grid([str(p) for p in ref_images], max_images=4, label="3d_ref")
-            logger.info("brand_3d: stitched %d refs into grid (lora=%s), generating %d options", len(ref_images), lora_ready, _N_OPTIONS)
+            logger.info("brand_3d: stitched %d refs into grid (lora=%s), generating %d options (staggered %.1fs)", len(ref_images), lora_ready, _N_OPTIONS, _STAGGER_DELAY)
             tracker.log_api("replicate:flux-kontext-pro (brand_3d + refs x%d)" % _N_OPTIONS)
-            results = await asyncio.gather(
-                *[image_gen.generate_img2img(final_prompt, ref_grid, strength=0.15) for _ in range(_N_OPTIONS)],
-                return_exceptions=True,
+            results = await _staggered_generate(
+                [lambda p=final_prompt, g=ref_grid: image_gen.generate_img2img(p, g, strength=0.15) for _ in range(_N_OPTIONS)],
+                delay=_STAGGER_DELAY,
             )
-            # Clean up stitched temp file
+            # Clean up stitched temp file + contrast logo temps
             try:
                 Path(ref_grid).unlink(missing_ok=True)
             except Exception:
                 pass
+            for _tmp in _logo_contrast_temps:
+                try:
+                    Path(_tmp).unlink(missing_ok=True)
+                except Exception:
+                    pass
             urls = [r for r in results if isinstance(r, str) and r]
             if urls:
                 _state.save_last_generated(urls[0], "brand_3d")
@@ -335,9 +356,9 @@ async def _handle_generate_image(
         # Use flux-1.1-pro (never nano-banana-pro for brand_3d)
         model_id = "black-forest-labs/flux-1.1-pro"
         tracker.log_api("replicate:flux-1.1-pro (brand_3d fallback x%d)" % _N_OPTIONS)
-        results = await asyncio.gather(
-            *[image_gen.generate_image(final_prompt, content_type="community") for _ in range(_N_OPTIONS)],
-            return_exceptions=True,
+        results = await _staggered_generate(
+            [lambda p=final_prompt: image_gen.generate_image(p, content_type="community") for _ in range(_N_OPTIONS)],
+            delay=_STAGGER_DELAY,
         )
         urls = [r for r in results if isinstance(r, str) and r]
         if urls:
@@ -431,6 +452,79 @@ _FINNY_IDENTITY = (
 )
 
 
+def _prepare_logo_ref(logo_path: Path) -> tuple[Path, str | None]:
+    """Check if a logo image is too dark for the model to see and create a
+    contrast-boosted version in /tmp/ if needed.
+
+    Returns (usable_path, tmp_path_or_None).
+    tmp_path is set only when a contrast file was created (caller must clean up).
+    """
+    try:
+        img = _PILImage.open(logo_path)
+
+        # If the image has transparency, flatten onto a white background
+        if img.mode in ("RGBA", "LA", "PA"):
+            bg = _PILImage.new("RGB", img.size, (255, 255, 255))
+            bg.paste(img, mask=img.split()[-1])  # use alpha as mask
+            tmp_name = f"/tmp/logo_contrast_{logo_path.name}"
+            bg.save(tmp_name, "PNG")
+            logger.info("brand_3d logo: flattened %s onto white background", logo_path.name)
+            return Path(tmp_name), tmp_name
+
+        # Check mean brightness — if predominantly dark, invert
+        rgb = img.convert("RGB")
+        import numpy as _np
+        mean_val = _np.array(rgb).mean()
+        if mean_val < 30:
+            inverted = _PILImageOps.invert(rgb)
+            tmp_name = f"/tmp/logo_contrast_{logo_path.name}"
+            inverted.save(tmp_name, "PNG")
+            logger.info("brand_3d logo: inverted %s (mean=%.1f → too dark)", logo_path.name, mean_val)
+            return Path(tmp_name), tmp_name
+
+        # Logo is fine as-is
+        return logo_path, None
+    except Exception as e:
+        logger.warning("brand_3d logo: failed to preprocess %s: %s", logo_path.name, e)
+        return logo_path, None
+
+
+async def _staggered_generate(
+    callables: list,
+    delay: float = 1.5,
+    max_retries: int = 2,
+) -> list:
+    """Run generation callables with staggered start times and retry on 429.
+
+    Each callable is fired with `delay` seconds between launches, then all
+    are awaited concurrently.  If a call fails with a 429, it retries up to
+    `max_retries` times with exponential backoff (delay * 2^attempt).
+    Returns a list of results (str URLs or Exceptions).
+    """
+
+    async def _run_with_retry(fn, index: int):
+        # Stagger: wait index * delay before starting
+        if index > 0:
+            await asyncio.sleep(index * delay)
+        for attempt in range(max_retries + 1):
+            try:
+                result = await fn()
+                if result:
+                    return result
+                return None
+            except Exception as e:
+                is_429 = "429" in str(e)
+                if is_429 and attempt < max_retries:
+                    backoff = delay * (2 ** (attempt + 1))
+                    logger.info("brand_3d option %d: 429 rate-limited, retrying in %.1fs (attempt %d/%d)", index + 1, backoff, attempt + 1, max_retries)
+                    await asyncio.sleep(backoff)
+                    continue
+                return e
+
+    tasks = [_run_with_retry(fn, i) for i, fn in enumerate(callables)]
+    return await asyncio.gather(*tasks)
+
+
 def _stitch_grid(image_paths: list[str], max_images: int = 3, label: str = "ref") -> str:
     """Stitch up to max_images reference images into a horizontal grid.
     Returns path to the stitched image in /tmp."""
@@ -463,7 +557,8 @@ def _stitch_grid(image_paths: list[str], max_images: int = 3, label: str = "ref"
 
 # Keyword → category folder(s) mapping. First match wins.
 _3D_CATEGORY_RULES: list[tuple[re.Pattern, list[str]]] = [
-    (re.compile(r"server|cube|MCP|circuit|protocol|node|network|tech", re.IGNORECASE), ["platforms_and_bases"]),
+    (re.compile(r"MCP|model context protocol", re.IGNORECASE), ["platforms_and_bases", "mcp_refs"]),
+    (re.compile(r"server|cube|circuit|node|network|tech", re.IGNORECASE), ["platforms_and_bases"]),
     (re.compile(r"coin|USDT|token", re.IGNORECASE), ["coins_and_tokens", "usdt_coin_refs"]),
     (re.compile(r"safe|vault|lock", re.IGNORECASE), ["safes_and_security"]),
     (re.compile(r"gift|box|reward", re.IGNORECASE), ["gift_boxes"]),

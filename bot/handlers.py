@@ -317,8 +317,23 @@ async def edit_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
         # Get existing pending draft for compositing context
         pending = state.get_pending()
-        draft = pending if pending else {"caption": "Edited image", "alt_text": "Edited brand image"}
-        ct = content_type or draft.get("content_type", "default")
+        ct = content_type or "brand_3d"
+
+        # Build a draft dict the compositor can use (needs title + subtitle)
+        if pending:
+            draft = dict(pending)
+            ct = content_type or pending.get("content_type", ct)
+        else:
+            draft = {"caption": "Edited image", "alt_text": "Edited brand image"}
+
+        # Ensure the compositor has title/subtitle — synthesize from caption if missing
+        if not draft.get("title") and not draft.get("subtitle"):
+            caption_text = draft.get("caption", "")
+            if caption_text:
+                # First sentence or first 60 chars → title, rest → subtitle
+                sentences = caption_text.split(". ", 1)
+                draft["title"] = sentences[0].rstrip(".")
+                draft["subtitle"] = sentences[1] if len(sentences) > 1 else ""
 
         composed = await compositor.compose_branded_image(draft, url, ct)
         photo = composed if composed else url
@@ -1049,6 +1064,12 @@ async def _send_draft(
     """
     caption = draft["caption"]
     content_type = draft.get("content_type", "default")
+
+    # Ensure the compositor has title/subtitle — synthesize from caption if missing
+    if not draft.get("title") and not draft.get("subtitle") and caption:
+        sentences = caption.split(". ", 1)
+        draft["title"] = sentences[0].rstrip(".")
+        draft["subtitle"] = sentences[1] if len(sentences) > 1 else ""
 
     # Build template section if title/subtitle present
     template_section = ""
