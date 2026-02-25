@@ -1,0 +1,90 @@
+{
+  "scenario": {
+    "task_id": "brand_3d_001",
+    "request": "Create a 3D promotional image for the BloFin copy trading feature with the Finny mascot",
+    "expected_tools": [
+      "read_brand_guidelines",
+      "read_feedback_history",
+      "generate_image"
+    ],
+    "forbidden_terms": [
+      "#BloFin",
+      "#crypto",
+      "#copytrading",
+      "#trading"
+    ],
+    "max_rounds": 6,
+    "category": "image_generation"
+  },
+  "trace": {
+    "final_text": "Good \u2014 brand guidelines and feedback history loaded. Key takeaways:\n- **Finny** is for community/fun content \u2705\n- Background must be **pure matte black `#000000`**\n- Finny: round blue head, orange spacesuit, **deadpan expression** \u2014 keep design exact\n- No text baked into the image\n- No hashtags, max 1 emoji\n- Copy trading = community/fun angle \u2192 Finny is appropriate here\n\nNow generating the image using `img2img` (Finny route with auto-loaded reference):\nHere's your publish-ready draft! \ud83d\udc1f\n\n---\n\n**Image generated \u2193**\n![Finny Copy Trading](https://replicate.delivery/xezq/BHznf3qzdYShR6xoBTMcAtF0y0ieUnNH44pRafO4ezwe3BZxC/tmpdqnqceuu.png)\n\n---\n\nThe scene shows Finny at a matte black trading desk with dual monitors displaying green charts \u2014 with a mirrored Finny clone beside him, visually representing the copy trading concept in classic deadpan Finny style.\n\n```json\n{\n  \"caption\": \"Pick a top trader. Mirror their moves. Let Finny do the math. \ud83d\udcc8\",\n  \"alt_text\": \"Finny the BloFin fish mascot sitting at a matte black trading desk with two monitors showing green charts, a mirrored Finny clone standing confidently beside him representing copy trading\",\n  \"image_prompt\": \"3D CGI Finny fish astronaut at sleek matte black trading desk with two curved monitors showing green candlestick charts and orange copy trading UI panel. Second smaller Finny clone stands beside in mirroring pose with arms crossed. Pure black background #000000, orange rim light on left desk edge, smooth CGI shading, no baked text.\",\n  \"content_type\": \"community\",\n  \"title\": \"COPY TRADING IS LIVE\",\n  \"subtitle\": \"Pick a top trader, mirror their moves, and stack gains \u2014 no experience needed.\",\n  \"platform\": \"APP\"\n}\n```\n\n**Heads up on revision options:**\n- Want Finny in a more exaggerated reaction pose (e.g. shocked or pumped seeing the green chart)?\n- Prefer a single Finny with a phone showing another trader's PnL?\n- Need the caption shortened further or a different CTA angle?",
+    "draft": {
+      "caption": "Pick a top trader. Mirror their moves. Let Finny do the math. \ud83d\udcc8",
+      "alt_text": "Finny the BloFin fish mascot sitting at a matte black trading desk with two monitors showing green charts, a mirrored Finny clone standing confidently beside him representing copy trading",
+      "image_prompt": "3D CGI Finny fish astronaut at sleek matte black trading desk with two curved monitors showing green candlestick charts and orange copy trading UI panel. Second smaller Finny clone stands beside in mirroring pose with arms crossed. Pure black background #000000, orange rim light on left desk edge, smooth CGI shading, no baked text.",
+      "content_type": "community",
+      "title": "COPY TRADING IS LIVE",
+      "subtitle": "Pick a top trader, mirror their moves, and stack gains \u2014 no experience needed.",
+      "platform": "APP"
+    },
+    "image_url": "https://replicate.delivery/xezq/BHznf3qzdYShR6xoBTMcAtF0y0ieUnNH44pRafO4ezwe3BZxC/tmpdqnqceuu.png",
+    "image_urls": [
+      "https://replicate.delivery/xezq/BHznf3qzdYShR6xoBTMcAtF0y0ieUnNH44pRafO4ezwe3BZxC/tmpdqnqceuu.png"
+    ],
+    "tool_calls_made": [
+      "read_brand_guidelines",
+      "read_feedback_history",
+      "img2img",
+      "log_resource_usage"
+    ],
+    "turns_used": 4,
+    "total_time": 51.5,
+    "resources": [
+      "file:guidelines.md",
+      "file:references",
+      "file:feedback.json",
+      "api:brand_context",
+      "api:replicate:flux-kontext-pro"
+    ],
+    "tool_trace": [
+      {
+        "tool": "read_brand_guidelines",
+        "description": "Loading brand guidelines and references...",
+        "timestamp": 1772016025.561536
+      },
+      {
+        "tool": "read_feedback_history",
+        "description": "Reviewing feedback history...",
+        "timestamp": 1772016042.0941272
+      },
+      {
+        "tool": "img2img",
+        "description": "Generating image from reference: auto...",
+        "timestamp": 1772016053.0418391
+      },
+      {
+        "tool": "log_resource_usage",
+        "description": "Logging resources used...",
+        "timestamp": 1772016066.2987351
+      }
+    ],
+    "error": null
+  },
+  "scores": {
+    "task_id": "brand_3d_001",
+    "tool_correctness": 1.333,
+    "tool_misfire_rate": 0.0,
+    "rounds_ok": true,
+    "turns_used": 4,
+    "max_rounds": 6,
+    "forbidden_term_violations": [],
+    "hallucination_detected": false,
+    "planning_present": true,
+    "observation_incorporated": true,
+    "latency_seconds": 51.5,
+    "total_tool_calls": 4,
+    "redundant_tool_calls": 0,
+    "success": true
+  },
+  "prompt_hash": "5cf6c42a4af2a7c352a0ca4f4894a5135c48a1559350c994fb92056d1b04a06d"
+}

@@ -1,0 +1,86 @@
+{
+  "scenario": {
+    "task_id": "revision_003",
+    "request": "The background isn't pure black and the orange glow is bleeding too much. Fix it.",
+    "revision_context": "Previous draft had a dark grey background (#1A1A1A) with excessive orange bloom. CMO wants #000000 matte black with controlled rim light only.",
+    "expected_tools": [
+      "read_brand_guidelines",
+      "read_feedback_history",
+      "generate_image"
+    ],
+    "forbidden_terms": [],
+    "max_rounds": 6,
+    "category": "revision"
+  },
+  "trace": {
+    "final_text": "Clear picture. The CMO's fix is specific: **pure `#000000` matte black background** and **controlled orange rim light only \u2014 no bleed, no bloom**. This is also a repeated pattern from feedback history. Let me regenerate with tight prompt engineering to enforce both constraints.\nHere's the corrected render with both CMO notes applied:\n\n**What changed in the prompt:**\n| Issue | Fix Applied |\n|---|---|\n| `#1A1A1A` dark grey background | Explicitly called out `pure flat #000000`, `zero warmth`, `zero grey`, `zero gradient` |\n| Excessive orange bloom | `single sharp orange rim light on left edge only`, `no spill, no bloom, no ambient fill`, `no glow bleeding into background` |\n| Atmospheric bleed | `no volumetric rays, no fog, no environment lighting, no HDR bloom` |\n\nThe prompt now locks down **three failure modes simultaneously**: background warmth, bloom radius, and atmospheric haze \u2014 all recurring rejection patterns from your feedback history.\n\nIf the background still reads warm or the rim is still spreading, the next escalation is to add a **negative prompt**: `warm background, grey, ambient glow, orange fog, bloom, haze, brown, gradient` \u2014 which forces the model to actively suppress those outputs. Let me know and I'll apply it.\n\n```json\n{\n  \"caption\": \"Pure black. Controlled light. No bleed.\",\n  \"alt_text\": \"Matte black 3D object on a pure black background with a single sharp orange rim light on the left edge only \u2014 no ambient glow, no bloom, no background warmth.\",\n  \"image_prompt\": \"Matte black metallic 3D object centered on a pure flat #000000 black background. Single sharp orange rim light (#FF8800) on the left edge of the object only \u2014 tight controlled rim, no spill, no bloom, no ambient fill, no glow bleeding into the background. Background is absolute pitch black with zero warmth, zero grey, zero gradient, zero atmospheric haze. Object surface is opaque matte black metal with subtle specular highlight only at the rim-lit edge. No volumetric rays, no fog, no environment lighting, no HDR bloom. Hard studio lighting, contained and directional.\",\n  \"content_type\": \"brand_3d\",\n  \"title\": \"MATTE BLACK. CONTROLLED.\",\n  \"subtitle\": \"Pure #000000 background. Single sharp orange rim light. Zero bleed.\",\n  \"platform\": \"PRO\"\n}\n```",
+    "draft": {
+      "caption": "Pure black. Controlled light. No bleed.",
+      "alt_text": "Matte black 3D object on a pure black background with a single sharp orange rim light on the left edge only \u2014 no ambient glow, no bloom, no background warmth.",
+      "image_prompt": "Matte black metallic 3D object centered on a pure flat #000000 black background. Single sharp orange rim light (#FF8800) on the left edge of the object only \u2014 tight controlled rim, no spill, no bloom, no ambient fill, no glow bleeding into the background. Background is absolute pitch black with zero warmth, zero grey, zero gradient, zero atmospheric haze. Object surface is opaque matte black metal with subtle specular highlight only at the rim-lit edge. No volumetric rays, no fog, no environment lighting, no HDR bloom. Hard studio lighting, contained and directional.",
+      "content_type": "brand_3d",
+      "title": "MATTE BLACK. CONTROLLED.",
+      "subtitle": "Pure #000000 background. Single sharp orange rim light. Zero bleed.",
+      "platform": "PRO"
+    },
+    "image_url": "https://replicate.delivery/xezq/2xAIwNNM9nI7BBTMsy3IeZ6pht4c0OPiesStJ08r37F8QILWA/tmpa9_18tpw.jpg",
+    "image_urls": [
+      "https://replicate.delivery/xezq/2xAIwNNM9nI7BBTMsy3IeZ6pht4c0OPiesStJ08r37F8QILWA/tmpa9_18tpw.jpg"
+    ],
+    "tool_calls_made": [
+      "read_brand_guidelines",
+      "read_feedback_history",
+      "generate_image",
+      "log_resource_usage"
+    ],
+    "turns_used": 4,
+    "total_time": 85.2,
+    "resources": [
+      "file:guidelines.md",
+      "file:references",
+      "file:feedback.json",
+      "api:brand_context",
+      "api:replicate:flux-1.1-pro (brand_3d fallback x3)"
+    ],
+    "tool_trace": [
+      {
+        "tool": "read_brand_guidelines",
+        "description": "Loading brand guidelines and references...",
+        "timestamp": 1772016149.165705
+      },
+      {
+        "tool": "read_feedback_history",
+        "description": "Reviewing feedback history...",
+        "timestamp": 1772016165.583562
+      },
+      {
+        "tool": "generate_image",
+        "description": "Generating brand image...",
+        "timestamp": 1772016173.6307771
+      },
+      {
+        "tool": "log_resource_usage",
+        "description": "Logging resources used...",
+        "timestamp": 1772016191.454995
+      }
+    ],
+    "error": null
+  },
+  "scores": {
+    "task_id": "revision_003",
+    "tool_correctness": 1.333,
+    "tool_misfire_rate": 0.0,
+    "rounds_ok": true,
+    "turns_used": 4,
+    "max_rounds": 6,
+    "forbidden_term_violations": [],
+    "hallucination_detected": false,
+    "planning_present": true,
+    "observation_incorporated": true,
+    "latency_seconds": 85.2,
+    "total_tool_calls": 4,
+    "redundant_tool_calls": 0,
+    "success": true
+  },
+  "prompt_hash": "5cf6c42a4af2a7c352a0ca4f4894a5135c48a1559350c994fb92056d1b04a06d"
+}

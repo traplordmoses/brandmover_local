@@ -1,0 +1,61 @@
+{
+  "scenario": {
+    "task_id": "guidelines_check_004",
+    "request": "What are the current brand color rules for BloFin 3D assets?",
+    "expected_tools": [
+      "read_brand_guidelines"
+    ],
+    "forbidden_terms": [],
+    "max_rounds": 3,
+    "category": "information_retrieval"
+  },
+  "trace": {
+    "final_text": "Here's a full breakdown of the **BloFin 3D asset color rules**, pulled directly from the brand guidelines:\n\n---\n\n## \ud83c\udfa8 BloFin 3D Asset \u2014 Color Rules\n\n### Core Color Palette\n\n| Role | Color Name | Hex | Usage in 3D |\n|---|---|---|---|\n| **Primary Accent** | BloFin Orange | `#FF8800` | Glows, edge highlights, rim lighting, emissive surfaces |\n| **Primary Background** | Black | `#000000` | All backgrounds \u2014 always dark/pure black |\n| **Accent** | Neon Green | `#A8FF00` | Sparingly \u2014 futuristic tech highlights only |\n| **Surface/Text** | White | `#FFFFFF` | Reflections, specular highlights, secondary text |\n| **Gradient** | Black \u2192 Orange | `#000000` \u2192 `#FF8800` | Key graphic elements, hero gradients |\n| **Gradient** | Black \u2192 Dark Grey | `#000000` \u2192 `#4C4C4C` | Subtle background depth |\n\n---\n\n### 3D-Specific Material Rules\n\n- **Base material:** Matte black metal \u2014 dark gray to pure black tone, rounded edges, subtle highlights\n- **Glow/accent:** Orange (`#FF8800`) rim lighting, edge glow, or emissive accent \u2014 **always present**\n- **Reflections:** White specular highlights on surface highlights only\n- **Neon Green:** Use sparingly as a futuristic accent \u2014 never dominant\n- **Backgrounds:** Always **pure black or very dark** with orange glow falloff \u2014 never light, never pastel\n- **Perspective:** Slightly tilted 3D views for spatial depth; isometric or three-quarter angles work best\n\n---\n\n### Hard DON'Ts for 3D Assets\n\n| \u274c Never Use | Reason |\n|---|---|\n| Pastel colors | Off-brand \u2014 too soft |\n| Light/white backgrounds | Kills premium feel |\n| Rainbow or off-brand gradients | Dilutes identity |\n| Soft or diffused lighting only | Needs drama and contrast |\n| Generic chrome or silver without orange | Misses brand accent |\n| Logo with glow/shadow effects | Logo rules prohibit this |\n\n---\n\n### 3D Prompt Template\n\nWhen generating 3D assets, the **`brand_3d` content type** locks in lighting, background, and materials automatically. You only need to describe the **object and composition**. For example:\n\n> \u2705 `\"A trophy with USDT coins spilling out\"`\n> \u2705 `\"A gift box overflowing with BTC coins\"`\n> \u274c `\"A trophy with dramatic orange rim lighting on pure black background, 8K render\"` \u2190 don't add locked params\n\n---\n\n**Note:** Figma styles returned no published tokens (likely not connected), so all values above come from the official brand guidelines document (v3.1).",
+    "draft": {},
+    "image_url": null,
+    "image_urls": [],
+    "tool_calls_made": [
+      "read_brand_guidelines",
+      "check_figma_design"
+    ],
+    "turns_used": 2,
+    "total_time": 51.9,
+    "resources": [
+      "file:guidelines.md",
+      "file:references",
+      "figma:0:5",
+      "api:brand_context",
+      "api:figma"
+    ],
+    "tool_trace": [
+      {
+        "tool": "read_brand_guidelines",
+        "description": "Loading brand guidelines and references...",
+        "timestamp": 1772016232.457581
+      },
+      {
+        "tool": "check_figma_design",
+        "description": "Checking Figma design (styles)...",
+        "timestamp": 1772016248.935735
+      }
+    ],
+    "error": null
+  },
+  "scores": {
+    "task_id": "guidelines_check_004",
+    "tool_correctness": 1.0,
+    "tool_misfire_rate": 0.0,
+    "rounds_ok": true,
+    "turns_used": 2,
+    "max_rounds": 3,
+    "forbidden_term_violations": [],
+    "hallucination_detected": false,
+    "planning_present": true,
+    "observation_incorporated": false,
+    "latency_seconds": 51.9,
+    "total_tool_calls": 2,
+    "redundant_tool_calls": 0,
+    "success": true
+  },
+  "prompt_hash": "5cf6c42a4af2a7c352a0ca4f4894a5135c48a1559350c994fb92056d1b04a06d"
+}
