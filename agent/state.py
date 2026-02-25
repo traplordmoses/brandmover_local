@@ -50,6 +50,7 @@ def save_pending(
     alt_text: str,
     image_prompt: str,
     original_request: str,
+    image_urls: list[str] | None = None,
 ) -> None:
     """
     Save a draft as pending approval.
@@ -61,25 +62,30 @@ def save_pending(
         alt_text: Image alt text.
         image_prompt: The prompt used for image generation.
         original_request: The user's original message.
+        image_urls: Optional list of all generated image option URLs.
     """
-    state = {
-        "pending": {
-            "caption": caption,
-            "hashtags": hashtags,
-            "image_url": image_url,
-            "alt_text": alt_text,
-            "image_prompt": image_prompt,
-            "original_request": original_request,
-            "timestamp": time.time(),
-        }
+    pending = {
+        "caption": caption,
+        "hashtags": hashtags,
+        "image_url": image_url,
+        "alt_text": alt_text,
+        "image_prompt": image_prompt,
+        "original_request": original_request,
+        "timestamp": time.time(),
     }
-    _write_state(state)
+    if image_urls:
+        pending["image_urls"] = image_urls
+    s = _read_state()
+    s["pending"] = pending
+    _write_state(s)
     logger.info("Saved pending draft for: %s", original_request[:80])
 
 
 def clear_pending() -> None:
-    """Clear any pending draft."""
-    _write_state({})
+    """Clear any pending draft (preserves other state like last_generated)."""
+    s = _read_state()
+    s.pop("pending", None)
+    _write_state(s)
     logger.info("Cleared pending state")
 
 
@@ -124,6 +130,45 @@ def clear_last_composed() -> None:
     s.pop("last_composed_path", None)
     s.pop("last_composed_content_type", None)
     _write_state(s)
+
+
+def save_last_generated(image_url: str, content_type: str) -> None:
+    """Store the URL of the last generated image for /edit reuse."""
+    s = _read_state()
+    s["last_generated"] = {"image_url": image_url, "content_type": content_type}
+    _write_state(s)
+    logger.info("Saved last generated image: %s (%s)", image_url[:80], content_type)
+
+
+def get_last_generated() -> tuple[str | None, str]:
+    """Return (image_url, content_type) of the last generated image, or (None, 'brand_3d')."""
+    s = _read_state()
+    lg = s.get("last_generated")
+    if not lg:
+        return None, "brand_3d"
+    return lg.get("image_url"), lg.get("content_type", "brand_3d")
+
+
+# ---------------------------------------------------------------------------
+# 3D master prompt — brand/prompts/master_prompt_3d.txt
+# ---------------------------------------------------------------------------
+
+_3D_PROMPT_FILE = Path(settings.BRAND_FOLDER) / "prompts" / "master_prompt_3d.txt"
+
+
+def get_3d_master_prompt() -> str | None:
+    """Read the 3D master prompt from brand/prompts/master_prompt_3d.txt.
+
+    Returns the file content as a string, or None if the file doesn't exist.
+    """
+    if not _3D_PROMPT_FILE.exists():
+        logger.warning("3D master prompt not found: %s", _3D_PROMPT_FILE)
+        return None
+    try:
+        return _3D_PROMPT_FILE.read_text(encoding="utf-8")
+    except OSError as e:
+        logger.error("Failed to read 3D master prompt: %s", e)
+        return None
 
 
 # ---------------------------------------------------------------------------

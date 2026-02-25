@@ -57,8 +57,30 @@ CONTENT_TYPE values (pick the best fit for the request):
 - "brand_asset" — logos, icons, badges, graphics (uses SVG-optimized model)
 - "community" — giveaways, polls, engagement posts
 - "market_commentary" — market analysis, price action, trends
+- "brand_3d" — BloFin-style 3D product illustrations, objects, and brand assets
 
 The content_type you choose determines which image generation model is used automatically.
+
+## BRAND_3D CONTENT TYPE
+
+When the user requests a **3D brand asset** or **BloFin-style product illustration** (e.g. 3D objects with matte black + amber/orange glass aesthetic), set content_type to `"brand_3d"`.
+
+This content type has its own dedicated pipeline:
+- A locked master prompt controls ALL lighting, materials, background, render quality, and camera settings
+- Your image_prompt should contain ONLY the object description and composition — do NOT add lighting, background, or render quality terms (those are locked in the master prompt automatically)
+- If a LoRA is available, the prompt is prefixed with BLOFIN3D trigger word
+- If no LoRA, the master prompt is used with reference images from the training set
+
+**Good brand_3d prompts** (object + composition only):
+- "A trophy with USDT coins spilling out"
+- "A locked safe with amber glow from the keyhole"
+- "A gift box overflowing with BTC coins"
+- "A glass cylinder filled with stacked XRP coins on a matte black platform"
+
+**Bad brand_3d prompts** (do NOT include these — they're locked in master prompt):
+- "...with dramatic orange rim lighting, volumetric rays, 8K, ultra-detailed" (lighting/quality locked)
+- "...on pure black background with studio lighting" (background locked)
+- "...matte black metallic with warm highlights" (materials locked)
 
 ## BRAND CONTENT RULES
 

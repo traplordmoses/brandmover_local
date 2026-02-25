@@ -75,8 +75,9 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         "Send any message to generate a branded post draft.\n"
         "I'll think through it in multiple steps and show you my reasoning.\n\n"
         "<b>Commands:</b>\n"
-        "/approve — Approve the pending draft\n"
+        "/approve [N] — Approve the pending draft (option N if multiple)\n"
         "/reject <i>reason</i> — Revise the draft with feedback\n"
+        "/edit <i>feedback</i> — Surgical edit on the last generated image\n"
         "/status — Show pending draft details\n"
         "/refs — Show loaded reference materials\n"
         "/feedback — Show approval/rejection stats\n"
@@ -138,13 +139,34 @@ async def cancel_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
 
 async def approve_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Handle /approve — approve the pending draft and log feedback."""
+    """Handle /approve [N] — approve the pending draft and log feedback."""
     if not _authorized(update.effective_user.id):
         return
 
     pending = state.get_pending()
     if not pending:
         await update.message.reply_text("Nothing to approve. Send me a content request first.")
+        return
+
+    # Parse optional option number from "/approve N"
+    text = (update.message.text or "").strip()
+    parts = text.split()
+    option_num = 1
+    if len(parts) >= 2:
+        try:
+            option_num = int(parts[1])
+        except ValueError:
+            pass
+
+    # If multiple image options exist, select the chosen one
+    image_urls = pending.get("image_urls", [])
+    if image_urls and 1 <= option_num <= len(image_urls):
+        pending["image_url"] = image_urls[option_num - 1]
+        logger.info("Approve: selected option %d of %d", option_num, len(image_urls))
+    elif image_urls and option_num > len(image_urls):
+        await update.message.reply_text(
+            f"Only {len(image_urls)} options available. Use /approve 1-{len(image_urls)}."
+        )
         return
 
     await update.message.chat.send_action("typing")
@@ -234,6 +256,119 @@ async def approve_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             )
         except Exception as e:
             logger.error("Auto-summarize failed: %s", e)
+
+
+async def edit_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /edit <feedback> — surgical img2img edit on the last generated image."""
+    if not _authorized(update.effective_user.id):
+        return
+
+    text = (update.message.text or "").strip()
+    feedback_text = text.partition("/edit")[2].strip()
+    if not feedback_text:
+        await update.message.reply_text(
+            "Usage: /edit <i>make the background darker</i>\n\n"
+            "This applies a light img2img edit to the last generated image.",
+            parse_mode="HTML",
+        )
+        return
+
+    last_url, content_type = state.get_last_generated()
+    if not last_url:
+        await update.message.reply_text("No image to edit — generate one first with a brand_3d request.")
+        return
+
+    await update.message.chat.send_action("upload_photo")
+    await update.message.reply_text(f"\U0001F58C Editing: {_esc(feedback_text)}", parse_mode="HTML")
+
+    try:
+        # Download the last generated image to a temp file
+        import httpx
+        ts = int(time.time())
+        tmp_path = f"/tmp/edit_ref_{ts}.jpg"
+        async with httpx.AsyncClient(timeout=30, follow_redirects=True) as client:
+            resp = await client.get(last_url)
+            resp.raise_for_status()
+            _PILImage.open(io.BytesIO(resp.content)).convert("RGB").save(tmp_path, "JPEG", quality=95)
+
+        # Build edit prompt with BloFin brand constraints
+        edit_prompt = (
+            f"Edit this image: {feedback_text}. "
+            f"Keep everything else identical. Maintain BloFin brand style: "
+            f"matte black materials, amber orange accents, pure #000000 background, "
+            f"no gradients, no glow."
+        )
+
+        # Low strength for surgical edits
+        url = await image_gen.generate_img2img(edit_prompt, tmp_path, strength=0.2)
+
+        # Clean up temp file
+        try:
+            Path(tmp_path).unlink(missing_ok=True)
+        except Exception:
+            pass
+
+        if not url:
+            await update.message.reply_text("Edit failed — image generation returned no result. Try again.")
+            return
+
+        # Save as new last generated
+        state.save_last_generated(url, content_type or "brand_3d")
+
+        # Get existing pending draft for compositing context
+        pending = state.get_pending()
+        draft = pending if pending else {"caption": "Edited image", "alt_text": "Edited brand image"}
+        ct = content_type or draft.get("content_type", "default")
+
+        composed = await compositor.compose_branded_image(draft, url, ct)
+        photo = composed if composed else url
+
+        # Save composed for archiving
+        if composed and isinstance(composed, io.BytesIO):
+            try:
+                tmp_composed = f"/tmp/brandmover_edit_composed_{ts}.png"
+                with open(tmp_composed, "wb") as f:
+                    f.write(composed.getvalue())
+                composed.seek(0)
+                state.set_last_composed(tmp_composed, ct)
+            except Exception:
+                pass
+
+        # Update pending with the new image URL
+        if pending:
+            state.save_pending(
+                caption=pending.get("caption", ""),
+                hashtags=pending.get("hashtags", []),
+                image_url=url,
+                alt_text=pending.get("alt_text", ""),
+                image_prompt=pending.get("image_prompt", ""),
+                original_request=pending.get("original_request", ""),
+            )
+
+        try:
+            await update.message.reply_photo(
+                photo=photo,
+                caption=(
+                    f"<b>Edited</b>: {_esc(feedback_text)}\n\n"
+                    f"/approve to post\n"
+                    f"/edit <i>more changes</i>\n"
+                    f"/reject <i>feedback</i> to start over"
+                ),
+                parse_mode="HTML",
+            )
+        except Exception as e:
+            logger.warning("Failed to send edited image: %s", e)
+            await update.message.reply_text(
+                f"Edit complete but couldn't send image: {_esc(str(e))}",
+                parse_mode="HTML",
+            )
+
+    except Exception as e:
+        logger.error("Edit command failed: %s", e)
+        await update.message.reply_text(
+            f"Edit failed: {_esc(str(e))}",
+            parse_mode="HTML",
+        )
 
 
 async def reject_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -804,6 +939,7 @@ async def _handle_agent_mode(update: Update, request: str) -> None:
             return
 
         image_url = result.image_url
+        image_urls = result.image_urls
 
         # Save pending state
         state.save_pending(
@@ -813,6 +949,7 @@ async def _handle_agent_mode(update: Update, request: str) -> None:
             alt_text=result.draft.get("alt_text", ""),
             image_prompt=result.draft.get("image_prompt", ""),
             original_request=request,
+            image_urls=image_urls if len(image_urls) > 1 else None,
         )
 
         # Clean up reference image temp file if one was used
@@ -824,7 +961,7 @@ async def _handle_agent_mode(update: Update, request: str) -> None:
                 pass
             state.clear_reference_image()
 
-        await _send_draft(update, result.draft, image_url, resources=result.resources)
+        await _send_draft(update, result.draft, image_url, resources=result.resources, image_urls=image_urls)
 
     except Exception as e:
         logger.error("Agent error: %s", e)
@@ -898,9 +1035,20 @@ async def _handle_pipeline_mode(update: Update, request: str) -> None:
         )
 
 
-async def _send_draft(update: Update, draft: dict, image_url: str | None, resources=None) -> None:
-    """Send the generated draft to the user for review."""
+async def _send_draft(
+    update: Update,
+    draft: dict,
+    image_url: str | None,
+    resources=None,
+    image_urls: list[str] | None = None,
+) -> None:
+    """Send the generated draft to the user for review.
+
+    When image_urls has >1 item, sends each as a numbered option with its own
+    composed brand template so the CMO can compare side-by-side.
+    """
     caption = draft["caption"]
+    content_type = draft.get("content_type", "default")
 
     # Build template section if title/subtitle present
     template_section = ""
@@ -912,13 +1060,60 @@ async def _send_draft(update: Update, draft: dict, image_url: str | None, resour
             f"<b>Platform:</b> {_esc(draft.get('platform', 'WEB'))}\n"
         )
 
+    # --- Multi-option path (N>1 images) ---
+    if image_urls and len(image_urls) > 1:
+        for idx, url in enumerate(image_urls, 1):
+            composed = await compositor.compose_branded_image(draft, url, content_type)
+            photo = composed if composed else url
+
+            # Save composed image for approve-time archiving (save last option)
+            if composed and isinstance(composed, io.BytesIO):
+                try:
+                    tmp_composed = f"/tmp/brandmover_composed_opt{idx}_{int(time.time())}.png"
+                    with open(tmp_composed, "wb") as f:
+                        f.write(composed.getvalue())
+                    composed.seek(0)
+                    # Store last composed for the first option by default
+                    if idx == 1:
+                        state.set_last_composed(tmp_composed, content_type)
+                except Exception as e:
+                    logger.warning("Failed to save composed option %d: %s", idx, e)
+
+            opt_caption = f"<b>Option {idx} of {len(image_urls)}</b>"
+            try:
+                await update.message.reply_photo(
+                    photo=photo,
+                    caption=opt_caption,
+                    parse_mode="HTML",
+                )
+            except Exception as e:
+                logger.warning("Failed to send option %d image: %s", idx, e)
+
+        # Send summary text after all options
+        approve_hints = " | ".join(f"/approve {i}" for i in range(1, len(image_urls) + 1))
+        text_msg = (
+            f"<b>Draft Ready — {len(image_urls)} options</b>\n\n"
+            f"{_esc(caption)}\n"
+            f"{template_section}\n"
+            f"<i>Alt text:</i> {_esc(draft.get('alt_text', ''))}\n\n"
+            f"{approve_hints}\n"
+            f"/reject <i>feedback</i> to revise\n"
+            f"/edit [feedback] to surgically fix specific elements"
+        )
+        if resources:
+            text_msg += f"\n\n<i>Resources: {_esc(resources.to_summary())}</i>"
+        await update.message.reply_text(text_msg, parse_mode="HTML")
+        return
+
+    # --- Single image path (original behavior) ---
     text_msg = (
         f"<b>Draft Ready</b>\n\n"
         f"{_esc(caption)}\n"
         f"{template_section}\n"
         f"<i>Alt text:</i> {_esc(draft.get('alt_text', ''))}\n\n"
         f"/approve to post to X\n"
-        f"/reject <i>feedback</i> to revise"
+        f"/reject <i>feedback</i> to revise\n"
+        f"/edit [feedback] to surgically fix specific elements"
     )
 
     # Append resource summary if available
@@ -926,7 +1121,6 @@ async def _send_draft(update: Update, draft: dict, image_url: str | None, resour
         text_msg += f"\n\n<i>Resources: {_esc(resources.to_summary())}</i>"
 
     if image_url:
-        content_type = draft.get("content_type", "default")
         composed = await compositor.compose_branded_image(draft, image_url, content_type)
         photo = composed if composed else image_url
 

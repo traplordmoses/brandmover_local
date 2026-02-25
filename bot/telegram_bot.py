@@ -34,6 +34,7 @@ def create_bot() -> Application:
     app.add_handler(CommandHandler("feedback", handlers.feedback_command))
     app.add_handler(CommandHandler("learn", handlers.learn_command))
     app.add_handler(CommandHandler("style", handlers.style_command))
+    app.add_handler(CommandHandler("edit", handlers.edit_command))
     app.add_handler(CommandHandler("setup", handlers.setup_command))
 
     # Photo uploads (reference images)

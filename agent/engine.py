@@ -26,6 +26,7 @@ class AgentResult:
     final_text: str = ""
     draft: dict = field(default_factory=dict)
     image_url: str | None = None
+    image_urls: list[str] = field(default_factory=list)
     resources: ResourceTracker = field(default_factory=ResourceTracker)
     tool_calls_made: list[str] = field(default_factory=list)
     turns_used: int = 0
@@ -79,6 +80,30 @@ def _extract_image_url(tool_calls_made: list[dict]) -> str | None:
             if url_match:
                 return url_match.group()
     return None
+
+
+def _extract_image_urls(tool_calls_made: list[dict]) -> list[str]:
+    """Extract all image URLs (including parallel options) from tool results."""
+    urls: list[str] = []
+    for call in tool_calls_made:
+        if call.get("name") in ("generate_image", "img2img"):
+            result_str = call.get("result", "")
+            try:
+                result = json.loads(result_str)
+                # Check for image_urls array (parallel generation)
+                if "image_urls" in result:
+                    urls.extend(result["image_urls"])
+                    continue
+                # Single image_url
+                if "image_url" in result:
+                    urls.append(result["image_url"])
+                    continue
+            except (json.JSONDecodeError, TypeError):
+                pass
+            # Pre-extracted URL
+            if call.get("image_url"):
+                urls.append(call["image_url"])
+    return urls
 
 
 # Type for the on_tool_call callback
@@ -223,6 +248,7 @@ async def run_agent(
 
     # Extract image URL from tool calls
     result.image_url = _extract_image_url(tool_call_log)
+    result.image_urls = _extract_image_urls(tool_call_log)
 
     logger.info(
         "Agent run complete: %d turns, %.1fs, %d tool calls, draft=%s, image=%s",

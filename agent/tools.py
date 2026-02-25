@@ -109,7 +109,7 @@ TOOL_DEFINITIONS = [
                 },
                 "content_type": {
                     "type": "string",
-                    "enum": ["announcement", "lifestyle", "event", "educational", "brand_asset", "community", "market_commentary"],
+                    "enum": ["announcement", "lifestyle", "event", "educational", "brand_asset", "community", "market_commentary", "brand_3d"],
                     "description": "Content type for smart model routing. Determines which image model is used.",
                     "default": "announcement",
                 },
@@ -255,6 +255,104 @@ async def _handle_generate_image(
 
     content_type = input_dict.get("content_type", "announcement")
 
+    # 0. brand_3d — dedicated 3D asset pipeline
+    # Always: master prompt splice + category refs + optional logo refs
+    # LoRA trigger (BLOFIN3D) appended as suffix when available (never prepended)
+    if content_type == "brand_3d":
+        master_prompt = _state.get_3d_master_prompt()
+        lora_path = Path(settings.BRAND_FOLDER) / "loras" / "blofin3d.safetensors"
+        lora_ready = lora_path.exists()
+
+        # --- Step 1: Build final prompt (master prompt splice always) ---
+        if master_prompt:
+            marker = "GENERATION REQUEST"
+            idx = master_prompt.find(marker)
+            if idx != -1:
+                final_prompt = master_prompt[:idx] + f"GENERATION REQUEST\n\n{prompt}"
+            else:
+                final_prompt = f"{master_prompt}\n\nGENERATION REQUEST\n\n{prompt}"
+            logger.info("brand_3d: master prompt spliced")
+        else:
+            final_prompt = prompt
+            logger.warning("brand_3d: no master prompt found — using raw prompt")
+
+        # Append LoRA trigger as SUFFIX (not prefix) to avoid rendering as text
+        if lora_ready:
+            final_prompt = f"{final_prompt}\n\nBLOFIN3D"
+            logger.info("brand_3d: LoRA ready — appended BLOFIN3D trigger as suffix")
+
+        # Enforce pure black background (overrides any ambient light leakage)
+        final_prompt += "\n\nCRITICAL: background must be pure #000000 black, no gradients, no warm tones, no brown, no ambient light, no floor reflection, no vignette."
+
+        # --- Step 2: Collect reference images (category + logo) ---
+        training_dir = Path(settings.BRAND_FOLDER) / "assets" / "blofin3d_training"
+        ref_images = _select_3d_refs(training_dir, prompt)
+
+        # Inject logo refs when prompt mentions logo/B logo/BloFin logo
+        if _LOGO_PATTERN.search(prompt):
+            logo_dir = training_dir / "logos"
+            if logo_dir.is_dir():
+                logo_refs = sorted(logo_dir.glob("*.png"))
+                if logo_refs:
+                    # Add logo refs to end of stack, avoid duplicates
+                    existing_paths = {str(p) for p in ref_images}
+                    for lr in logo_refs:
+                        if str(lr) not in existing_paths:
+                            ref_images.append(lr)
+                    logger.info("brand_3d: injected %d logo refs (prompt mentions logo)", len(logo_refs))
+
+        # --- Step 3: Generate N=3 options in parallel ---
+        _N_OPTIONS = 3
+
+        if ref_images:
+            ref_grid = _stitch_grid([str(p) for p in ref_images], max_images=4, label="3d_ref")
+            logger.info("brand_3d: stitched %d refs into grid (lora=%s), generating %d options", len(ref_images), lora_ready, _N_OPTIONS)
+            tracker.log_api("replicate:flux-kontext-pro (brand_3d + refs x%d)" % _N_OPTIONS)
+            results = await asyncio.gather(
+                *[image_gen.generate_img2img(final_prompt, ref_grid, strength=0.15) for _ in range(_N_OPTIONS)],
+                return_exceptions=True,
+            )
+            # Clean up stitched temp file
+            try:
+                Path(ref_grid).unlink(missing_ok=True)
+            except Exception:
+                pass
+            urls = [r for r in results if isinstance(r, str) and r]
+            if urls:
+                _state.save_last_generated(urls[0], "brand_3d")
+                return json.dumps({
+                    "image_url": urls[0],
+                    "image_urls": urls,
+                    "model": "flux-kontext-pro",
+                    "reason": "brand_3d with master prompt + refs" + (" + LoRA" if lora_ready else ""),
+                    "prompt_used": final_prompt[:500],
+                    "lora_ready": lora_ready,
+                    "options_generated": len(urls),
+                })
+            logger.warning("brand_3d img2img failed (all %d options) — falling back to text-to-image", _N_OPTIONS)
+
+        # Text-to-image fallback (no refs available or img2img failed)
+        # Use flux-1.1-pro (never nano-banana-pro for brand_3d)
+        model_id = "black-forest-labs/flux-1.1-pro"
+        tracker.log_api("replicate:flux-1.1-pro (brand_3d fallback x%d)" % _N_OPTIONS)
+        results = await asyncio.gather(
+            *[image_gen.generate_image(final_prompt, content_type="community") for _ in range(_N_OPTIONS)],
+            return_exceptions=True,
+        )
+        urls = [r for r in results if isinstance(r, str) and r]
+        if urls:
+            _state.save_last_generated(urls[0], "brand_3d")
+            return json.dumps({
+                "image_url": urls[0],
+                "image_urls": urls,
+                "model": model_id,
+                "reason": "brand_3d fallback (flux-1.1-pro)" + (" + LoRA" if lora_ready else ""),
+                "prompt_used": final_prompt[:500],
+                "lora_ready": lora_ready,
+                "options_generated": len(urls),
+            })
+        return json.dumps({"error": "brand_3d image generation failed", "model": model_id, "prompt_used": final_prompt[:500]})
+
     # 1. Check for active style profile for this content_type
     active_profile = _state.get_active_profile(content_type)
     if active_profile:
@@ -357,6 +455,55 @@ def _stitch_grid(image_paths: list[str], max_images: int = 3, label: str = "ref"
     grid.save(out_path, "JPEG", quality=95)
     logger.info("Stitched %d %s refs into grid: %s (%dx%d)", len(resized), label, out_path, total_w, min_h)
     return out_path
+
+
+# ---------------------------------------------------------------------------
+# brand_3d smart category routing for reference image selection
+# ---------------------------------------------------------------------------
+
+# Keyword → category folder(s) mapping. First match wins.
+_3D_CATEGORY_RULES: list[tuple[re.Pattern, list[str]]] = [
+    (re.compile(r"server|cube|MCP|circuit|protocol|node|network|tech", re.IGNORECASE), ["platforms_and_bases"]),
+    (re.compile(r"coin|USDT|token", re.IGNORECASE), ["coins_and_tokens", "usdt_coin_refs"]),
+    (re.compile(r"safe|vault|lock", re.IGNORECASE), ["safes_and_security"]),
+    (re.compile(r"gift|box|reward", re.IGNORECASE), ["gift_boxes"]),
+    (re.compile(r"container|jar|glass", re.IGNORECASE), ["containers_and_vessels"]),
+    (re.compile(r"trophy|scene|rocket", re.IGNORECASE), ["scenes_and_compositions"]),
+    (re.compile(r"icon|feature", re.IGNORECASE), ["feature_icons"]),
+]
+
+# Logo keyword pattern — checked separately so logo refs are ADDED to the stack
+_LOGO_PATTERN = re.compile(r"\blogo\b|B\s*logo|BloFin\s*logo", re.IGNORECASE)
+
+
+def _select_3d_refs(training_dir: Path, prompt: str, max_refs: int = 3) -> list[Path]:
+    """Select up to max_refs reference images from blofin3d_training/ subdirectories.
+
+    Uses keyword matching to route to the best category folders.
+    Falls back to pulling 1 image from each of the top 3 most populated categories.
+    """
+    if not training_dir.is_dir():
+        return []
+
+    # Try keyword-based category routing
+    for pattern, folders in _3D_CATEGORY_RULES:
+        if pattern.search(prompt):
+            pool: list[Path] = []
+            for folder in folders:
+                cat_dir = training_dir / folder
+                if cat_dir.is_dir():
+                    pool.extend(sorted(cat_dir.glob("*.png")))
+            if pool:
+                selected = pool[:max_refs]
+                logger.info(
+                    "brand_3d refs: keyword '%s' → %s (%d refs)",
+                    pattern.pattern, folders, len(selected),
+                )
+                return selected
+
+    # No keyword match — return empty (no random refs)
+    logger.info("brand_3d refs: no keyword match — skipping refs")
+    return []
 
 
 def _build_finny_prompt(user_prompt: str) -> str:
