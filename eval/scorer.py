@@ -7,6 +7,28 @@ from __future__ import annotations
 
 import re
 
+# Tools that are interchangeable — treat either as matching the other
+TOOL_ALIASES: dict[str, str] = {
+    "img2img": "generate_image",
+    "generate_image": "img2img",
+}
+
+# Utility tools that the agent may call freely — never count as misfires
+UTILITY_TOOLS: frozenset[str] = frozenset({
+    "log_resource_usage",
+    "read_references",
+    "check_figma_design",
+})
+
+
+def _expand_with_aliases(tools: set[str]) -> set[str]:
+    """Expand a tool set by adding aliases for every tool present."""
+    expanded = set(tools)
+    for tool in tools:
+        if tool in TOOL_ALIASES:
+            expanded.add(TOOL_ALIASES[tool])
+    return expanded
+
 
 def score(scenario: dict, trace: dict) -> dict:
     """Score an agent trace against a scenario's expectations.
@@ -22,13 +44,19 @@ def score(scenario: dict, trace: dict) -> dict:
     actual = set(trace.get("tool_calls_made", []))
     total_calls = len(trace.get("tool_calls_made", []))
 
+    # Expand both sets with aliases so img2img ↔ generate_image match
+    expected_expanded = _expand_with_aliases(expected)
+    actual_expanded = _expand_with_aliases(actual)
+
     # Tool correctness: intersection / expected
     tool_correctness = (
-        len(expected & actual) / len(expected) if expected else 1.0
+        len(expected_expanded & actual_expanded) / len(expected)
+        if expected else 1.0
     )
 
     # Misfire rate: tools called that weren't expected / total calls
-    unexpected = actual - expected
+    # Exclude utility tools — they're always acceptable
+    unexpected = actual - expected_expanded - UTILITY_TOOLS
     tool_misfire_rate = (
         len(unexpected) / total_calls if total_calls > 0 else 0.0
     )
@@ -38,15 +66,18 @@ def score(scenario: dict, trace: dict) -> dict:
     turns_used = trace.get("turns_used", 0)
     rounds_ok = turns_used <= max_rounds
 
-    # Forbidden term scan
+    # Forbidden term scan — only check user-facing draft fields,
+    # NOT final_text (which contains agent reasoning + hex codes like #000000)
     forbidden = scenario.get("forbidden_terms", [])
+    draft = trace.get("draft", {})
     text_corpus = " ".join(
         filter(
             None,
             [
-                trace.get("final_text", ""),
-                trace.get("draft", {}).get("caption", ""),
-                trace.get("draft", {}).get("text", ""),
+                draft.get("caption", ""),
+                draft.get("text", ""),
+                draft.get("title", ""),
+                draft.get("subtitle", ""),
             ],
         )
     )

@@ -60,6 +60,51 @@ def _try_parse_draft(text: str) -> dict | None:
     return None
 
 
+# AI-sounding words to strip from captions (case-insensitive)
+_AI_WORDS = re.compile(
+    r"\b(?:revolutionizing|leveraging|cutting-edge|seamlessly|dive into|unlock)\b",
+    re.IGNORECASE,
+)
+
+# Hashtag pattern: # followed by word chars (but not hex color codes like #000000 in image_prompt)
+_HASHTAG_RE = re.compile(r"#[A-Za-z]\w*")
+
+_DRAFT_TEXT_FIELDS = ("caption", "title", "subtitle")
+
+
+def _sanitize_draft(draft: dict) -> dict:
+    """Post-process a parsed draft to enforce hard compliance rules.
+
+    Strips hashtags and AI-sounding words from user-facing text fields.
+    Returns the (possibly modified) draft. No-op for compliant drafts.
+    """
+    for field in _DRAFT_TEXT_FIELDS:
+        original = draft.get(field)
+        if not original or not isinstance(original, str):
+            continue
+
+        cleaned = original
+
+        # Strip hashtags (e.g. #BloFin, #crypto) but not hex colors (#FF8800)
+        hashtags = _HASHTAG_RE.findall(cleaned)
+        if hashtags:
+            cleaned = _HASHTAG_RE.sub("", cleaned)
+            logger.warning("Sanitized %d hashtag(s) from draft.%s: %s", len(hashtags), field, hashtags)
+
+        # Strip AI-sounding words
+        ai_matches = _AI_WORDS.findall(cleaned)
+        if ai_matches:
+            cleaned = _AI_WORDS.sub("", cleaned)
+            logger.warning("Sanitized AI word(s) from draft.%s: %s", field, ai_matches)
+
+        # Collapse double spaces and strip
+        if cleaned != original:
+            cleaned = re.sub(r"  +", " ", cleaned).strip()
+            draft[field] = cleaned
+
+    return draft
+
+
 def _extract_image_url(tool_calls_made: list[dict]) -> str | None:
     """Extract image URL from generate_image tool results."""
     for call in tool_calls_made:
@@ -244,7 +289,7 @@ async def run_agent(
     # Try to parse a draft from the final text
     draft = _try_parse_draft(result.final_text)
     if draft:
-        result.draft = draft
+        result.draft = _sanitize_draft(draft)
 
     # Extract image URL from tool calls
     result.image_url = _extract_image_url(tool_call_log)

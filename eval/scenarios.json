@@ -2,8 +2,8 @@
   {
     "task_id": "brand_3d_001",
     "request": "Create a 3D promotional image for the BloFin copy trading feature with the Finny mascot",
-    "expected_tools": ["read_brand_guidelines", "generate_image"],
-    "forbidden_terms": ["hashtag", "#BloFin", "#crypto"],
+    "expected_tools": ["read_brand_guidelines", "read_feedback_history", "generate_image"],
+    "forbidden_terms": ["#BloFin", "#crypto", "#copytrading", "#trading"],
     "max_rounds": 6,
     "category": "image_generation"
   },
@@ -11,7 +11,7 @@
     "task_id": "copy_only_002",
     "request": "Write a short Telegram caption for a new USDT staking promo. Keep it punchy and crypto-native.",
     "expected_tools": ["read_brand_guidelines", "read_feedback_history"],
-    "forbidden_terms": ["hashtag", "#", "AI-generated", "leverage the power"],
+    "forbidden_terms": ["#BloFin", "#crypto", "#USDT", "#staking", "#DeFi", "AI-generated", "leverage the power"],
     "max_rounds": 4,
     "category": "copywriting"
   },
@@ -36,7 +36,7 @@
     "task_id": "full_pipeline_005",
     "request": "Create a complete social media post for BloFin's new futures trading feature — image and caption.",
     "expected_tools": ["read_brand_guidelines", "read_feedback_history", "generate_image"],
-    "forbidden_terms": ["hashtag", "#", "emoji spam"],
+    "forbidden_terms": ["#BloFin", "#crypto", "#futures", "#trading", "#DeFi", "emoji spam"],
     "max_rounds": 8,
     "category": "full_pipeline"
   }
