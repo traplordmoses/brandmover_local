@@ -181,10 +181,10 @@ def main():
     print("\n--- X / Twitter (optional) ---")
     setup_x = _yes_no("Configure X/Twitter posting?", default=False)
     x_api_key = ""
-    x_api_secret = ""
-    x_access_token = ""
-    x_access_secret = ""
-    x_bearer_token = ""
+    x_api_secret = ""  # nosec B105 — empty default, overwritten by user input
+    x_access_token = ""  # nosec B105
+    x_access_secret = ""  # nosec B105
+    x_bearer_token = ""  # nosec B105
     if setup_x:
         x_api_key = _input_secret("X API Key")
         x_api_secret = _input_secret("X API Secret")
@@ -203,7 +203,7 @@ def main():
     # --- Figma (optional) ---
     print("\n--- Figma (optional) ---")
     setup_figma = _yes_no("Configure Figma integration?", default=False)
-    figma_token = ""
+    figma_token = ""  # nosec B105 — empty default, overwritten by user input
     figma_file_key = ""
     figma_node_id = "0:5"
     if setup_figma:

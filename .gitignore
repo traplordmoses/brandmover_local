@@ -20,6 +20,10 @@ feedback.json
 learned_preferences.md
 *.bak
 
+# Eval runtime output
+eval/results/*.json
+*.evalbak
+
 # Brand assets (may contain proprietary material)
 brand/references/
 brand/assets/fonts/

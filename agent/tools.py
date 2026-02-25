@@ -9,7 +9,8 @@ import json
 import logging
 import re
 import shlex
-import subprocess
+import subprocess  # nosec B404 — mitigated by _OPENCLAW_ALLOWLIST + shlex + _UNSAFE_CHARS
+import tempfile
 import time as _time
 from pathlib import Path
 
@@ -331,13 +332,13 @@ async def _handle_generate_image(
             # Clean up stitched temp file + contrast logo temps
             try:
                 Path(ref_grid).unlink(missing_ok=True)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug("Temp cleanup failed for %s: %s", ref_grid, e)
             for _tmp in _logo_contrast_temps:
                 try:
                     Path(_tmp).unlink(missing_ok=True)
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug("Logo temp cleanup failed for %s: %s", _tmp, e)
             urls = [r for r in results if isinstance(r, str) and r]
             if urls:
                 _state.save_last_generated(urls[0], "brand_3d")
@@ -403,11 +404,11 @@ async def _handle_generate_image(
             url = await image_gen.generate_img2img(prompt, input_ref, strength=strength)
 
             # Clean up stitched temp file
-            if input_ref.startswith("/tmp/style_stitched_"):
+            if input_ref.startswith(tempfile.gettempdir()):
                 try:
                     Path(input_ref).unlink(missing_ok=True)
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug("Style ref cleanup failed for %s: %s", input_ref, e)
 
             if url:
                 return json.dumps({
@@ -466,7 +467,7 @@ def _prepare_logo_ref(logo_path: Path) -> tuple[Path, str | None]:
         if img.mode in ("RGBA", "LA", "PA"):
             bg = _PILImage.new("RGB", img.size, (255, 255, 255))
             bg.paste(img, mask=img.split()[-1])  # use alpha as mask
-            tmp_name = f"/tmp/logo_contrast_{logo_path.name}"
+            tmp_name = str(Path(tempfile.gettempdir()) / f"logo_contrast_{logo_path.name}")
             bg.save(tmp_name, "PNG")
             logger.info("brand_3d logo: flattened %s onto white background", logo_path.name)
             return Path(tmp_name), tmp_name
@@ -477,7 +478,7 @@ def _prepare_logo_ref(logo_path: Path) -> tuple[Path, str | None]:
         mean_val = _np.array(rgb).mean()
         if mean_val < 30:
             inverted = _PILImageOps.invert(rgb)
-            tmp_name = f"/tmp/logo_contrast_{logo_path.name}"
+            tmp_name = str(Path(tempfile.gettempdir()) / f"logo_contrast_{logo_path.name}")
             inverted.save(tmp_name, "PNG")
             logger.info("brand_3d logo: inverted %s (mean=%.1f → too dark)", logo_path.name, mean_val)
             return Path(tmp_name), tmp_name
@@ -545,7 +546,7 @@ def _stitch_grid(image_paths: list[str], max_images: int = 3, label: str = "ref"
         grid.paste(img, (x, 0))
         x += img.width
 
-    out_path = f"/tmp/{label}_stitched_{int(_time.time())}.jpg"
+    out_path = str(Path(tempfile.gettempdir()) / f"{label}_stitched_{int(_time.time())}.jpg")
     grid.save(out_path, "JPEG", quality=95)
     logger.info("Stitched %d %s refs into grid: %s (%dx%d)", len(resized), label, out_path, total_w, min_h)
     return out_path
@@ -658,11 +659,11 @@ async def _handle_img2img(
     url = await image_gen.generate_img2img(prompt, reference_image_path)
 
     # Clean up stitched temp file
-    if reference_image_path.startswith("/tmp/finny_stitched_"):
+    if reference_image_path.startswith(tempfile.gettempdir()):
         try:
             Path(reference_image_path).unlink(missing_ok=True)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("Finny ref cleanup failed for %s: %s", reference_image_path, e)
 
     if url:
         return json.dumps({"image_url": url, "model": "flux-kontext-pro", "reference": reference_image_path, "prompt_used": prompt})

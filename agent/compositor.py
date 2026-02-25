@@ -157,14 +157,14 @@ def _load_font(style: str, size: int) -> ImageFont.FreeTypeFont:
     if p.exists():
         try:
             font = ImageFont.truetype(str(p), size)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("Font load failed for %s: %s", p, e)
     if font is None and Path(_SYSTEM_FONT).exists():
         try:
             idx = 8 if ("bold" in style or style == "black") else 5
             font = ImageFont.truetype(_SYSTEM_FONT, size, index=idx)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("System font load failed: %s", e)
     if font is None:
         try:
             font = ImageFont.load_default(size=size)

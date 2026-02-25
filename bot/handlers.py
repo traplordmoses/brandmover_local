@@ -7,6 +7,7 @@ import html
 import io
 import logging
 import re
+import tempfile
 import time
 from pathlib import Path
 
@@ -216,8 +217,8 @@ async def approve_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         # Clean up temp composed file
         try:
             Path(composed_path).unlink(missing_ok=True)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("Composed cleanup failed for %s: %s", composed_path, e)
         state.clear_last_composed()
 
     # Save approved Finny outputs to grow character reference library
@@ -285,7 +286,7 @@ async def edit_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         # Download the last generated image to a temp file
         import httpx
         ts = int(time.time())
-        tmp_path = f"/tmp/edit_ref_{ts}.jpg"
+        tmp_path = str(Path(tempfile.gettempdir()) / f"edit_ref_{ts}.jpg")
         async with httpx.AsyncClient(timeout=30, follow_redirects=True) as client:
             resp = await client.get(last_url)
             resp.raise_for_status()
@@ -305,8 +306,8 @@ async def edit_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         # Clean up temp file
         try:
             Path(tmp_path).unlink(missing_ok=True)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("Temp cleanup failed for %s: %s", tmp_path, e)
 
         if not url:
             await update.message.reply_text("Edit failed — image generation returned no result. Try again.")
@@ -341,13 +342,13 @@ async def edit_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         # Save composed for archiving
         if composed and isinstance(composed, io.BytesIO):
             try:
-                tmp_composed = f"/tmp/brandmover_edit_composed_{ts}.png"
+                tmp_composed = str(Path(tempfile.gettempdir()) / f"brandmover_edit_composed_{ts}.png")
                 with open(tmp_composed, "wb") as f:
                     f.write(composed.getvalue())
                 composed.seek(0)
                 state.set_last_composed(tmp_composed, ct)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug("Failed to save edit composed image: %s", e)
 
         # Update pending with the new image URL
         if pending:
@@ -823,7 +824,7 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         return
 
     timestamp = int(time.time())
-    tmp_path = f"/tmp/brandmover_upload_{timestamp}.jpg"
+    tmp_path = str(Path(tempfile.gettempdir()) / f"brandmover_upload_{timestamp}.jpg")
 
     try:
         await tg_file.download_to_drive(tmp_path)
@@ -972,8 +973,8 @@ async def _handle_agent_mode(update: Update, request: str) -> None:
         if ref_cleanup:
             try:
                 Path(ref_cleanup).unlink(missing_ok=True)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug("Ref cleanup failed for %s: %s", ref_cleanup, e)
             state.clear_reference_image()
 
         await _send_draft(update, result.draft, image_url, resources=result.resources, image_urls=image_urls)
@@ -1090,7 +1091,7 @@ async def _send_draft(
             # Save composed image for approve-time archiving (save last option)
             if composed and isinstance(composed, io.BytesIO):
                 try:
-                    tmp_composed = f"/tmp/brandmover_composed_opt{idx}_{int(time.time())}.png"
+                    tmp_composed = str(Path(tempfile.gettempdir()) / f"brandmover_composed_opt{idx}_{int(time.time())}.png")
                     with open(tmp_composed, "wb") as f:
                         f.write(composed.getvalue())
                     composed.seek(0)
@@ -1148,7 +1149,7 @@ async def _send_draft(
         # Save composed image to temp for approve-time archiving
         if composed and isinstance(composed, io.BytesIO):
             try:
-                tmp_composed = f"/tmp/brandmover_last_composed_{int(time.time())}.png"
+                tmp_composed = str(Path(tempfile.gettempdir()) / f"brandmover_last_composed_{int(time.time())}.png")
                 with open(tmp_composed, "wb") as f:
                     f.write(composed.getvalue())
                 composed.seek(0)  # reset for Telegram send

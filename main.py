@@ -5,8 +5,10 @@ Starts the Telegram bot polling loop.
 
 import logging
 import sys
+import tempfile
+from pathlib import Path
 
-_LOG_FILE = "/tmp/brandmover_bot.log"
+_LOG_FILE = str(Path(tempfile.gettempdir()) / "brandmover_bot.log")
 
 # Log to both stdout and a persistent file
 _file_handler = logging.FileHandler(_LOG_FILE)
