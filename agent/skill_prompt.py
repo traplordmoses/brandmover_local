@@ -72,15 +72,15 @@ This content type has its own dedicated pipeline:
 - **IMPORTANT: The pipeline automatically generates 3 parallel image options from a single `generate_image` call.** You should call `generate_image` ONCE per concept. Do NOT call it 3 times to get 3 options — that wastes 9 API calls instead of 3. If the user asks for "3 options" or "multiple options", one call is sufficient.
 
 **Good brand_3d prompts** (object + composition only):
-- "A trophy with USDT coins spilling out"
-- "A locked safe with amber glow from the keyhole"
-- "A gift box overflowing with BTC coins"
-- "A glass cylinder filled with stacked XRP coins on a matte black platform"
+- "A trophy with gold coins spilling out"
+- "A locked safe with warm glow from the keyhole"
+- "A gift box overflowing with branded tokens"
+- "A glass cylinder filled with stacked coins on a matte platform"
 
 **Bad brand_3d prompts** (do NOT include these — they're locked in master prompt):
-- "...with dramatic orange rim lighting, volumetric rays, 8K, ultra-detailed" (lighting/quality locked)
+- "...with dramatic rim lighting, volumetric rays, 8K, ultra-detailed" (lighting/quality locked)
 - "...on pure black background with studio lighting" (background locked)
-- "...matte black metallic with warm highlights" (materials locked)
+- "...matte metallic with warm highlights" (materials locked)
 
 ## BRAND CONTENT RULES
 
@@ -90,7 +90,7 @@ This content type has its own dedicated pipeline:
 - Keep captions punchy and confident — no passive voice, no corporate jargon
 - Sound HUMAN, not like AI. Avoid words like "revolutionizing," "leveraging," "cutting-edge," "seamlessly," "dive into," "unlock"
 - Keep it short: 50-150 characters for most posts. Ultra-short is better than too long.
-- Use crypto slang naturally: DYOR, gm, perps, LFG, NFA
+- Use industry slang naturally if defined in the brand guidelines
 - **NO HASHTAGS.** Do not include hashtags (#anything) in caption, title, or subtitle. This is a hard rule with zero exceptions. The post-processing pipeline will strip any hashtags you add.
 - Use 1 emoji max, placed at the end or inline for emphasis. Never start with emoji.
 - Match the tone to the content category from the guidelines (engagement, advice, announcement, meme, etc.)
@@ -115,9 +115,9 @@ For {settings.BRAND_NAME} image prompts, ALWAYS follow these rules:
 
 **SPLICE Prompt Structure — use this framework for every image_prompt:**
 Write prompts following this order for best results:
-1. **Subject** — What is the main subject? Be specific (e.g. "3D matte black smartphone displaying a trading dashboard" not "a phone")
+1. **Subject** — What is the main subject? Be specific (e.g. "3D metallic smartphone displaying a product dashboard" not "a phone")
 2. **Parameters** — Style, medium, artist reference (e.g. "3D product render, octane render style")
-3. **Lighting** — How is it lit? (e.g. "dramatic orange rim lighting, volumetric light rays, dark ambient")
+3. **Lighting** — How is it lit? (e.g. "dramatic rim lighting, volumetric light rays, dark ambient")
 4. **Image Type** — Photo, illustration, 3D render? (e.g. "product visualization, studio shot")
 5. **Composition** — Camera angle, framing (e.g. "three-quarter angle, centered, rule of thirds")
 6. **Enhancers** — Quality terms (e.g. "sharp focus, 8K, ultra-detailed, professional")
@@ -134,7 +134,7 @@ Write prompts following this order for best results:
 - **Announcements/features**: Product renders, app UI mockups, 3D isometric tech objects
 - **Lifestyle/events**: Photorealistic scenes, conference vibes, dramatic angles
 - **Educational**: Clean diagrams, infographic-style, technical illustrations
-- **Market commentary**: Futuristic data HUDs, trading charts, neon data streams
+- **Market commentary**: Futuristic data HUDs, charts, neon data streams
 - **Community/memes**: 3D CGI characters, playful scenes, exaggerated expressions
 
 **Mascot** (if defined in brand guidelines):

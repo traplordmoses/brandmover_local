@@ -50,13 +50,13 @@ INDEX_TEMPLATE = """<!DOCTYPE html>
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
            background: #0a0a0a; color: #e0e0e0; padding: 2rem; }
-    h1 { color: #ff8800; margin-bottom: 1.5rem; }
-    h2 { color: #ff8800; margin: 1.5rem 0 0.75rem; }
-    a { color: #ff8800; text-decoration: none; }
+    h1 { color: #4fc3f7; margin-bottom: 1.5rem; }
+    h2 { color: #4fc3f7; margin: 1.5rem 0 0.75rem; }
+    a { color: #4fc3f7; text-decoration: none; }
     a:hover { text-decoration: underline; }
     table { width: 100%%; border-collapse: collapse; margin-bottom: 2rem; }
     th, td { padding: 0.6rem 1rem; text-align: left; border-bottom: 1px solid #222; }
-    th { color: #ff8800; font-weight: 600; }
+    th { color: #4fc3f7; font-weight: 600; }
     .pass { color: #4caf50; font-weight: bold; }
     .fail { color: #f44336; font-weight: bold; }
     .chart-wrap { max-width: 700px; margin: 1rem 0 2rem; }
@@ -117,19 +117,19 @@ DETAIL_TEMPLATE = """<!DOCTYPE html>
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
            background: #0a0a0a; color: #e0e0e0; padding: 2rem; }
-    h1 { color: #ff8800; margin-bottom: 0.5rem; }
-    h2 { color: #ff8800; margin: 1.5rem 0 0.75rem; }
-    a { color: #ff8800; }
+    h1 { color: #4fc3f7; margin-bottom: 0.5rem; }
+    h2 { color: #4fc3f7; margin: 1.5rem 0 0.75rem; }
+    a { color: #4fc3f7; }
     .card { background: #111; border-radius: 8px; padding: 1.5rem; margin-bottom: 1rem; }
     pre { background: #0d0d0d; padding: 1rem; border-radius: 6px; overflow-x: auto;
           font-size: 0.85rem; margin: 0.5rem 0; }
     table { width: 100%%; border-collapse: collapse; }
     th, td { padding: 0.4rem 0.8rem; text-align: left; border-bottom: 1px solid #222; }
-    th { color: #ff8800; }
+    th { color: #4fc3f7; }
     .pass { color: #4caf50; } .fail { color: #f44336; }
     img { max-width: 400px; border-radius: 8px; margin: 0.5rem 0; }
     .timeline { list-style: none; padding: 0; }
-    .timeline li { padding: 0.3rem 0; border-left: 2px solid #ff8800; padding-left: 1rem;
+    .timeline li { padding: 0.3rem 0; border-left: 2px solid #4fc3f7; padding-left: 1rem;
                    margin-left: 0.5rem; }
   </style>
 </head>

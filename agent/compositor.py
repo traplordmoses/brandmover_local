@@ -18,10 +18,12 @@ logger = logging.getLogger(__name__)
 
 CANVAS_W, CANVAS_H = 1280, 720
 
-BRAND_PRIMARY = (255, 136, 0)
-BRAND_BG      = (0, 0, 0)
-BRAND_TEXT     = (255, 255, 255)
-BRAND_ACCENT   = (168, 255, 0)
+# Default brand colors — override these by editing your brand/guidelines.md
+# and updating the values here to match your palette.
+BRAND_PRIMARY = (80, 140, 250)   # accent color — change to your brand's primary
+BRAND_BG      = (0, 0, 0)        # background
+BRAND_TEXT     = (255, 255, 255)  # text
+BRAND_ACCENT   = (100, 220, 180) # secondary accent — change to your brand's accent
 
 ContentType = Literal[
     "announcement", "campaign", "market", "meme", "engagement", "advice", "default"
@@ -219,7 +221,7 @@ def _draw_platform_badge(
     draw: ImageDraw.ImageDraw, x: int, y: int,
     platform: str, logo_height: int = 44,
 ) -> None:
-    """Outline-style badge — orange border, transparent fill, orange text."""
+    """Outline-style badge — brand color border, transparent fill, brand color text."""
     bf   = _load_font("bold", 15)
     text = (platform or "WEB").upper()
     tb   = bf.getbbox(text)

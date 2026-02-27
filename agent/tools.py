@@ -550,17 +550,9 @@ def _stitch_grid(image_paths: list[str], max_images: int = 3, label: str = "ref"
 # brand_3d smart category routing for reference image selection
 # ---------------------------------------------------------------------------
 
-# Keyword → category folder(s) mapping. First match wins.
-_3D_CATEGORY_RULES: list[tuple[re.Pattern, list[str]]] = [
-    (re.compile(r"MCP|model context protocol", re.IGNORECASE), ["platforms_and_bases", "mcp_refs"]),
-    (re.compile(r"server|cube|circuit|node|network|tech", re.IGNORECASE), ["platforms_and_bases"]),
-    (re.compile(r"coin|USDT|token", re.IGNORECASE), ["coins_and_tokens", "usdt_coin_refs"]),
-    (re.compile(r"safe|vault|lock", re.IGNORECASE), ["safes_and_security"]),
-    (re.compile(r"gift|box|reward", re.IGNORECASE), ["gift_boxes"]),
-    (re.compile(r"container|jar|glass", re.IGNORECASE), ["containers_and_vessels"]),
-    (re.compile(r"trophy|scene|rocket", re.IGNORECASE), ["scenes_and_compositions"]),
-    (re.compile(r"icon|feature", re.IGNORECASE), ["feature_icons"]),
-]
+# Auto-discovered at runtime from subdirectory names in brand3d_training/.
+# Each subdirectory name is matched against the prompt as a keyword.
+# e.g. a folder named "coins_and_tokens" matches prompts containing "coin" or "token".
 
 # Logo keyword pattern — checked separately so logo refs are ADDED to the stack
 _LOGO_PATTERN = re.compile(r"\blogo\b|brand\s*logo", re.IGNORECASE)
@@ -569,25 +561,27 @@ _LOGO_PATTERN = re.compile(r"\blogo\b|brand\s*logo", re.IGNORECASE)
 def _select_3d_refs(training_dir: Path, prompt: str, max_refs: int = 3) -> list[Path]:
     """Select up to max_refs reference images from brand3d_training/ subdirectories.
 
-    Uses keyword matching to route to the best category folders.
-    Falls back to pulling 1 image from each of the top 3 most populated categories.
+    Auto-discovers category folders and matches subdirectory name keywords against
+    the prompt. e.g. a folder named "coins_and_tokens" matches "coin" or "token".
     """
     if not training_dir.is_dir():
         return []
 
-    # Try keyword-based category routing
-    for pattern, folders in _3D_CATEGORY_RULES:
-        if pattern.search(prompt):
-            pool: list[Path] = []
-            for folder in folders:
-                cat_dir = training_dir / folder
-                if cat_dir.is_dir():
-                    pool.extend(sorted(cat_dir.glob("*.png")))
+    prompt_lower = prompt.lower()
+
+    # Auto-discover subdirectories and match keywords from folder names
+    for cat_dir in sorted(training_dir.iterdir()):
+        if not cat_dir.is_dir() or cat_dir.name.startswith("."):
+            continue
+        # Split folder name into keywords (e.g. "coins_and_tokens" → ["coins", "tokens"])
+        keywords = [w for w in cat_dir.name.lower().replace("_", " ").split() if len(w) > 2 and w != "and"]
+        if any(kw in prompt_lower for kw in keywords):
+            pool = sorted(cat_dir.glob("*.png"))
             if pool:
                 selected = pool[:max_refs]
                 logger.info(
-                    "brand_3d refs: keyword '%s' → %s (%d refs)",
-                    pattern.pattern, folders, len(selected),
+                    "brand_3d refs: folder '%s' matched (%d refs)",
+                    cat_dir.name, len(selected),
                 )
                 return selected
 

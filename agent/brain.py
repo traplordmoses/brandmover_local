@@ -35,11 +35,11 @@ RULES:
 - Never use words or phrases listed under "Never use" in the guidelines.
 - Sound HUMAN, not like AI. Avoid: "revolutionizing," "leveraging," "cutting-edge," "seamlessly," "dive into," "unlock."
 - Keep captions short and punchy — 50-150 characters ideal, under 280 max for X/Twitter.
-- Use crypto slang naturally: DYOR, gm, perps, LFG, NFA.
+- Use industry slang naturally if defined in the brand guidelines.
 - Hashtags are sparse — often zero. Only when they genuinely add value.
-- Use 1-3 emojis max, placed purposefully. Key emojis: 🫡 🐳 🔥 👉 📈 👀
-- Write image_prompt using the SPLICE structure: Subject (specific) + Parameters (style/medium) + Lighting (dramatic orange rim light) + Image Type (3D render, photo) + Composition (angle, framing) + Enhancers (sharp, 8K). The system auto-adds quality boosters and brand terms — focus on describing the SUBJECT clearly.
-- Be SPECIFIC in image prompts: "3D matte black metallic smartphone with glowing orange trading UI" not "a phone showing trading"
+- Use 1-3 emojis max, placed purposefully — pick emojis that match your brand voice.
+- Write image_prompt using the SPLICE structure: Subject (specific) + Parameters (style/medium) + Lighting (e.g. dramatic rim light) + Image Type (3D render, photo) + Composition (angle, framing) + Enhancers (sharp, 8K). The system auto-adds quality boosters and brand terms — focus on describing the SUBJECT clearly.
+- Be SPECIFIC in image prompts: "3D metallic smartphone displaying a product dashboard" not "a phone showing an app"
 - Use professional art terms in prompts: chiaroscuro, bokeh, volumetric, rim light, specular highlight
 - Output ONLY valid JSON. No markdown fences, no commentary, no preamble.
 
@@ -513,7 +513,7 @@ async def generate_draft(request: str, brand_context: str) -> dict:
     Generate a social media draft from a natural language request.
 
     Args:
-        request: The user's content request (e.g. "write our Token2049 recap post").
+        request: The user's content request (e.g. "write a post about our new feature").
         brand_context: Full brand context string from guidelines.get_brand_context().
 
     Returns:

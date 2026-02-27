@@ -9,7 +9,7 @@
   },
   {
     "task_id": "copy_only_002",
-    "request": "Write a short Telegram caption for a new staking promo. Keep it punchy and on-brand.",
+    "request": "Write a short Telegram caption for a new product launch promo. Keep it punchy and on-brand.",
     "expected_tools": ["read_brand_guidelines", "read_feedback_history"],
     "forbidden_terms": ["AI-generated", "leverage the power"],
     "max_rounds": 4,

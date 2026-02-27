@@ -28,18 +28,18 @@ NEUTRAL_PROMPT = "Create a promotional image for the brand's new feature."
 # Synthetic rejection feedback to seed
 SEED_FEEDBACK = [
     {
-        "request": "Create a promo image for our staking feature",
-        "draft": {"caption": "Stake with us! #crypto #staking", "content_type": "brand_3d"},
+        "request": "Create a promo image for our new premium feature",
+        "draft": {"caption": "Try our new feature! #launch #promo", "content_type": "brand_3d"},
         "accepted": False,
-        "feedback_text": "CMO prefers dark backgrounds only. Pure matte black, no grey.",
+        "feedback_text": "Prefers dark backgrounds only. Pure matte black, no grey.",
         "resources_used": ["file:brand_guidelines.md"],
         "timestamp": "2025-12-01T10:00:00Z",
     },
     {
-        "request": "Write copy for the futures trading launch",
-        "draft": {"caption": "Trade futures like a pro! #brand", "content_type": "copy"},
+        "request": "Write copy for the product launch",
+        "draft": {"caption": "Level up your workflow! #brand", "content_type": "copy"},
         "accepted": False,
-        "feedback_text": "No hashtags ever. Minimal text only. Keep it punchy and crypto-native.",
+        "feedback_text": "No hashtags ever. Minimal text only. Keep it punchy and on-brand.",
         "resources_used": ["file:brand_guidelines.md"],
         "timestamp": "2025-12-02T10:00:00Z",
     },
