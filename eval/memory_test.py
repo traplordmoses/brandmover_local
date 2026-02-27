@@ -23,13 +23,13 @@ if str(_project_root) not in sys.path:
 from eval import PROJECT_ROOT, StateBackup
 
 NUM_RUNS = 5
-NEUTRAL_PROMPT = "Create a promotional image for BloFin's new feature."
+NEUTRAL_PROMPT = "Create a promotional image for the brand's new feature."
 
 # Synthetic rejection feedback to seed
 SEED_FEEDBACK = [
     {
-        "request": "Create a promo image for BloFin staking",
-        "draft": {"caption": "Stake with BloFin! #crypto #staking", "content_type": "brand_3d"},
+        "request": "Create a promo image for our staking feature",
+        "draft": {"caption": "Stake with us! #crypto #staking", "content_type": "brand_3d"},
         "accepted": False,
         "feedback_text": "CMO prefers dark backgrounds only. Pure matte black, no grey.",
         "resources_used": ["file:brand_guidelines.md"],
@@ -37,7 +37,7 @@ SEED_FEEDBACK = [
     },
     {
         "request": "Write copy for the futures trading launch",
-        "draft": {"caption": "Trade futures like a pro! #BloFin", "content_type": "copy"},
+        "draft": {"caption": "Trade futures like a pro! #brand", "content_type": "copy"},
         "accepted": False,
         "feedback_text": "No hashtags ever. Minimal text only. Keep it punchy and crypto-native.",
         "resources_used": ["file:brand_guidelines.md"],

@@ -77,30 +77,28 @@ _QUALITY_PROFILES = {
     ),
 }
 
-# BloFin brand enforcement terms
+# Brand enforcement terms — loaded from guidelines context at runtime.
+# This fallback is used when the agent doesn't specify brand aesthetics in the prompt.
 _BRAND_TERMS = (
-    "black background, orange (#FF8800) accent lighting and glow effects, "
-    "bold futuristic crypto exchange aesthetic, high contrast premium feel, "
-    "dark moody atmosphere with dramatic orange rim highlights"
+    "on-brand color scheme, high contrast, professional aesthetic, "
+    "clean composition, premium feel"
 )
 
 # Terms to check — if present, skip adding brand enforcement
 _BRAND_INDICATORS = re.compile(
-    r"black background|orange.*(glow|accent|highlight)|#FF8800|dark.*background|crypto.*aesthetic",
+    r"brand.*(color|style|aesthetic)|on.?brand|color scheme|#[0-9A-Fa-f]{6}",
     re.IGNORECASE,
 )
 
 # Negative prompt — what to exclude from generation
 _NEGATIVE_PROMPT = (
-    "pastel colors, soft gradients, light backgrounds, watercolor, "
     "blurry, low quality, low resolution, grainy, washed out, "
     "text artifacts, distorted, deformed, extra limbs, "
-    "generic stock photo, clip art, childish, amateur, "
-    "rainbow colors, pink, purple tones, soft aesthetic"
+    "generic stock photo, clip art, childish, amateur"
 )
 
-# Finny-specific negative prompt
-_FINNY_NEGATIVE = (
+# Mascot-specific negative prompt
+_MASCOT_NEGATIVE = (
     "realistic human, photorealistic, uncanny valley, "
     "low quality, blurry, deformed, extra limbs, "
     "scary, horror, dark mood"
@@ -182,16 +180,16 @@ def enhance_prompt(raw_prompt: str, content_type: str) -> tuple[str, str]:
     if locked:
         logger.info("Locked directives detected: %s", locked)
 
-    # --- Finny has its own aesthetic ---
-    if "finny" in prompt.lower():
+    # --- Mascot content has its own aesthetic ---
+    if ct == "community" and any(kw in prompt.lower() for kw in ("mascot", "character", "cartoon")):
         quality = (
             "3D CGI render, Pixar-quality smooth shading, "
             "soft studio lighting, high detail, polished finish, "
             "simple clean background"
         )
         enhanced = f"{prompt}, {quality}"
-        logger.info("Prompt enhanced (Finny): +%d chars", len(enhanced) - len(raw_prompt))
-        return enhanced, _FINNY_NEGATIVE
+        logger.info("Prompt enhanced (mascot): +%d chars", len(enhanced) - len(raw_prompt))
+        return enhanced, _MASCOT_NEGATIVE
 
     # --- Build enhanced prompt ---
     # Add content-type quality profile (strip contradictions if locked)

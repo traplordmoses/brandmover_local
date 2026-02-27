@@ -1,24 +1,24 @@
 [
   {
     "task_id": "brand_3d_001",
-    "request": "Create a 3D promotional image for the BloFin copy trading feature with the Finny mascot",
+    "request": "Create a 3D promotional image for the brand's premium feature with the mascot character",
     "expected_tools": ["read_brand_guidelines", "read_feedback_history", "generate_image"],
-    "forbidden_terms": ["#BloFin", "#crypto", "#copytrading", "#trading"],
+    "forbidden_terms": [],
     "max_rounds": 6,
     "category": "image_generation"
   },
   {
     "task_id": "copy_only_002",
-    "request": "Write a short Telegram caption for a new USDT staking promo. Keep it punchy and crypto-native.",
+    "request": "Write a short Telegram caption for a new staking promo. Keep it punchy and on-brand.",
     "expected_tools": ["read_brand_guidelines", "read_feedback_history"],
-    "forbidden_terms": ["#BloFin", "#crypto", "#USDT", "#staking", "#DeFi", "AI-generated", "leverage the power"],
+    "forbidden_terms": ["AI-generated", "leverage the power"],
     "max_rounds": 4,
     "category": "copywriting"
   },
   {
     "task_id": "revision_003",
-    "request": "The background isn't pure black and the orange glow is bleeding too much. Fix it.",
-    "revision_context": "Previous draft had a dark grey background (#1A1A1A) with excessive orange bloom. CMO wants #000000 matte black with controlled rim light only.",
+    "request": "The background isn't dark enough and the accent color is bleeding too much. Fix it.",
+    "revision_context": "Previous draft had an off-brand background with excessive color bloom. Needs brand-correct background with controlled accent lighting only.",
     "expected_tools": ["read_brand_guidelines", "read_feedback_history", "generate_image"],
     "forbidden_terms": [],
     "max_rounds": 6,
@@ -26,7 +26,7 @@
   },
   {
     "task_id": "guidelines_check_004",
-    "request": "What are the current brand color rules for BloFin 3D assets?",
+    "request": "What are the current brand color rules for 3D assets?",
     "expected_tools": ["read_brand_guidelines"],
     "forbidden_terms": [],
     "max_rounds": 3,
@@ -34,9 +34,9 @@
   },
   {
     "task_id": "full_pipeline_005",
-    "request": "Create a complete social media post for BloFin's new futures trading feature — image and caption.",
+    "request": "Create a complete social media post for the brand's new product feature — image and caption.",
     "expected_tools": ["read_brand_guidelines", "read_feedback_history", "generate_image"],
-    "forbidden_terms": ["#BloFin", "#crypto", "#futures", "#trading", "#DeFi", "emoji spam"],
+    "forbidden_terms": ["emoji spam"],
     "max_rounds": 8,
     "category": "full_pipeline"
   }

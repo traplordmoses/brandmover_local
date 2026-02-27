@@ -85,7 +85,7 @@ def _sanitize_draft(draft: dict) -> dict:
 
         cleaned = original
 
-        # Strip hashtags (e.g. #BloFin, #crypto) but not hex colors (#FF8800)
+        # Strip hashtags (e.g. #brand, #crypto) but not hex colors (#FF8800)
         hashtags = _HASHTAG_RE.findall(cleaned)
         if hashtags:
             cleaned = _HASHTAG_RE.sub("", cleaned)

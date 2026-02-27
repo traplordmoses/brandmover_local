@@ -100,7 +100,7 @@ def main():
 
     # --- Brand ---
     print("\n--- Brand Identity ---")
-    brand_name = _input("Brand name", "BloFin")
+    brand_name = _input("Brand name", "MyBrand")
     brand_folder = _input("Brand folder path", "./brand")
 
     # Create brand folder structure

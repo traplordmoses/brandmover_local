@@ -221,24 +221,24 @@ async def approve_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             logger.debug("Composed cleanup failed for %s: %s", composed_path, e)
         state.clear_last_composed()
 
-    # Save approved Finny outputs to grow character reference library
-    _finny_kw = re.compile(r"finny|mascot", re.IGNORECASE)
-    _is_finny_draft = (
-        _finny_kw.search(pending.get("original_request", ""))
-        or _finny_kw.search(pending.get("image_prompt", ""))
+    # Save approved mascot outputs to grow character reference library
+    _mascot_kw = re.compile(r"mascot|character", re.IGNORECASE)
+    _is_mascot_draft = (
+        _mascot_kw.search(pending.get("original_request", ""))
+        or _mascot_kw.search(pending.get("image_prompt", ""))
     )
-    if _is_finny_draft and pending.get("image_url"):
+    if _is_mascot_draft and pending.get("image_url"):
         try:
             import httpx as _httpx
             async with _httpx.AsyncClient(timeout=20, follow_redirects=True) as _c:
                 _r = await _c.get(pending["image_url"])
                 _r.raise_for_status()
                 ts = int(time.time())
-                save_path = Path(settings.BRAND_FOLDER) / "assets" / f"finny_approved_{ts}.png"
+                save_path = Path(settings.BRAND_FOLDER) / "assets" / f"mascot_approved_{ts}.png"
                 _PILImage.open(io.BytesIO(_r.content)).convert("RGB").save(str(save_path), "PNG")
-                logger.info("Saved approved Finny output: %s", save_path)
+                logger.info("Saved approved mascot output: %s", save_path)
         except Exception as e:
-            logger.warning("Failed to save Finny output: %s", e)
+            logger.warning("Failed to save mascot output: %s", e)
 
     state.clear_pending()
     await update.message.reply_text(
@@ -292,12 +292,10 @@ async def edit_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             resp.raise_for_status()
             _PILImage.open(io.BytesIO(resp.content)).convert("RGB").save(tmp_path, "JPEG", quality=95)
 
-        # Build edit prompt with BloFin brand constraints
+        # Build edit prompt with brand constraints
         edit_prompt = (
             f"Edit this image: {feedback_text}. "
-            f"Keep everything else identical. Maintain BloFin brand style: "
-            f"matte black materials, amber orange accents, pure #000000 background, "
-            f"no gradients, no glow."
+            f"Keep everything else identical. Maintain the brand's visual style."
         )
 
         # Low strength for surgical edits
@@ -885,7 +883,7 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     else:
         await update.message.reply_text(
             "got it. what should i do with this? reply with:\n"
-            "reference / finny / style <name> / background"
+            "reference / mascot / style <name> / background"
         )
 
 

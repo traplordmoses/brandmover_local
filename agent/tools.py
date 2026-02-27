@@ -98,8 +98,7 @@ TOOL_DEFINITIONS = [
             "Generate an image using Replicate with smart model routing. The model is auto-selected "
             "based on content_type: announcements → Nano Banana (text overlays), brand assets → "
             "Recraft SVG, lifestyle/events → Seedream, general → Flux 1.1 Pro. "
-            "For BloFin: use black/orange (#FF8800) color scheme, bold futuristic crypto aesthetic, "
-            "dark backgrounds, 3D matte black metallic objects with orange glow."
+            "Use the brand's color scheme and visual style as defined in the guidelines."
         ),
         "input_schema": {
             "type": "object",
@@ -123,8 +122,7 @@ TOOL_DEFINITIONS = [
         "description": (
             "Generate an image based on an existing reference image and a text prompt using "
             "flux-kontext-pro (img2img). Use this when the user has uploaded a reference photo, "
-            "or when generating Finny the mascot (blue round head, orange spacesuit, white helmet "
-            "ring, gold B logo, deadpan expression). For Finny requests, reference images are "
+            "or when generating a brand mascot. For mascot requests, reference images are "
             "auto-loaded from brand assets if reference_image_path is not provided."
         ),
         "input_schema": {
@@ -136,7 +134,7 @@ TOOL_DEFINITIONS = [
                 },
                 "reference_image_path": {
                     "type": "string",
-                    "description": "Absolute path to the reference image on disk. Leave empty to auto-detect Finny references.",
+                    "description": "Absolute path to the reference image on disk. Leave empty to auto-detect mascot references.",
                 },
             },
             "required": ["prompt"],
@@ -258,10 +256,10 @@ async def _handle_generate_image(
 
     # 0. brand_3d — dedicated 3D asset pipeline
     # Always: master prompt splice + category refs + optional logo refs
-    # LoRA trigger (BLOFIN3D) appended as suffix when available (never prepended)
+    # LoRA trigger (BRAND3D) appended as suffix when available (never prepended)
     if content_type == "brand_3d":
         master_prompt = _state.get_3d_master_prompt()
-        lora_path = Path(settings.BRAND_FOLDER) / "loras" / "blofin3d.safetensors"
+        lora_path = Path(settings.BRAND_FOLDER) / "loras" / "brand3d.safetensors"
         lora_ready = lora_path.exists()
 
         # --- Step 1: Build final prompt (master prompt splice always) ---
@@ -279,17 +277,17 @@ async def _handle_generate_image(
 
         # Append LoRA trigger as SUFFIX (not prefix) to avoid rendering as text
         if lora_ready:
-            final_prompt = f"{final_prompt}\n\nBLOFIN3D"
-            logger.info("brand_3d: LoRA ready — appended BLOFIN3D trigger as suffix")
+            final_prompt = f"{final_prompt}\n\nBRAND3D"
+            logger.info("brand_3d: LoRA ready — appended BRAND3D trigger as suffix")
 
         # Enforce pure black background (overrides any ambient light leakage)
         final_prompt += "\n\nCRITICAL: background must be pure #000000 black, no gradients, no warm tones, no brown, no ambient light, no floor reflection, no vignette."
 
         # --- Step 2: Collect reference images (category + logo) ---
-        training_dir = Path(settings.BRAND_FOLDER) / "assets" / "blofin3d_training"
+        training_dir = Path(settings.BRAND_FOLDER) / "assets" / "brand3d_training"
         ref_images = _select_3d_refs(training_dir, prompt)
 
-        # Inject logo refs when prompt mentions logo/B logo/BloFin logo
+        # Inject logo refs when prompt mentions logo
         _logo_contrast_temps: list[str] = []  # track contrast files for cleanup
         if _LOGO_PATTERN.search(prompt):
             logo_dir = training_dir / "logos"
@@ -446,11 +444,7 @@ async def _handle_generate_image(
         return json.dumps({"error": "Image generation failed or REPLICATE_API_TOKEN not set", "model": model_id, "prompt_used": prompt})
 
 
-_FINNY_ASSETS_DIR = Path(settings.BRAND_FOLDER) / "assets"
-_FINNY_IDENTITY = (
-    "round blue alien fish head, big black eyes, blue fin antenna, "
-    "orange spacesuit with white helmet ring and gold B logo, deadpan grumpy expression"
-)
+_MASCOT_ASSETS_DIR = Path(settings.BRAND_FOLDER) / "assets"
 
 
 def _prepare_logo_ref(logo_path: Path) -> tuple[Path, str | None]:
@@ -569,11 +563,11 @@ _3D_CATEGORY_RULES: list[tuple[re.Pattern, list[str]]] = [
 ]
 
 # Logo keyword pattern — checked separately so logo refs are ADDED to the stack
-_LOGO_PATTERN = re.compile(r"\blogo\b|B\s*logo|BloFin\s*logo", re.IGNORECASE)
+_LOGO_PATTERN = re.compile(r"\blogo\b|brand\s*logo", re.IGNORECASE)
 
 
 def _select_3d_refs(training_dir: Path, prompt: str, max_refs: int = 3) -> list[Path]:
-    """Select up to max_refs reference images from blofin3d_training/ subdirectories.
+    """Select up to max_refs reference images from brand3d_training/ subdirectories.
 
     Uses keyword matching to route to the best category folders.
     Falls back to pulling 1 image from each of the top 3 most populated categories.
@@ -602,11 +596,11 @@ def _select_3d_refs(training_dir: Path, prompt: str, max_refs: int = 3) -> list[
     return []
 
 
-def _build_finny_prompt(user_prompt: str) -> str:
-    """Rewrite a Finny prompt into the BFL-recommended structure for character consistency."""
+def _build_mascot_prompt(user_prompt: str) -> str:
+    """Rewrite a mascot prompt into the BFL-recommended structure for character consistency."""
     return (
-        f"This character — {_FINNY_IDENTITY} — is now {user_prompt}. "
-        f"Keep exact character design, same face, same suit colors, same proportions. "
+        f"This character is now {user_prompt}. "
+        f"Keep exact character design, same face, same colors, same proportions. "
         f"Change the background and scene while keeping the character in the exact same "
         f"position, scale, and pose."
     )
@@ -621,34 +615,34 @@ async def _handle_img2img(
 
     reference_image_path = input_dict.get("reference_image_path") or None
 
-    # Auto-detect Finny references when no explicit path and prompt mentions finny/mascot
-    is_finny = re.search(r"finny|mascot", prompt, re.IGNORECASE)
-    if reference_image_path is None and is_finny:
+    # Auto-detect mascot references when no explicit path and prompt mentions mascot
+    is_mascot = re.search(r"mascot|character", prompt, re.IGNORECASE)
+    if reference_image_path is None and is_mascot:
         found = []
         for i in range(1, 10):
-            p = _FINNY_ASSETS_DIR / f"finny_reference_{i}.png"
+            p = _MASCOT_ASSETS_DIR / f"mascot_reference_{i}.png"
             if p.exists():
                 found.append(str(p))
 
         if found:
             # Stitch multiple refs into a grid for Kontext (multiple angles in one image)
             if len(found) >= 3:
-                reference_image_path = _stitch_grid(found, max_images=3, label="finny")
+                reference_image_path = _stitch_grid(found, max_images=3, label="mascot")
             else:
                 reference_image_path = found[0]
 
-            prompt = _build_finny_prompt(prompt)
-            logger.info("Auto-selected %d Finny reference(s): input=%s", len(found), reference_image_path)
+            prompt = _build_mascot_prompt(prompt)
+            logger.info("Auto-selected %d mascot reference(s): input=%s", len(found), reference_image_path)
         else:
-            logger.warning("Finny prompt but no finny_reference_*.png found - falling back to text-to-image")
+            logger.warning("Mascot prompt but no mascot_reference_*.png found - falling back to text-to-image")
             url = await image_gen.generate_image(prompt, content_type="community")
-            tracker.log_api("replicate:flux-1.1-pro (finny fallback)")
+            tracker.log_api("replicate:flux-1.1-pro (mascot fallback)")
             if url:
-                return json.dumps({"image_url": url, "note": "Finny references not found, used text-to-image fallback"})
+                return json.dumps({"image_url": url, "note": "Mascot references not found, used text-to-image fallback"})
             return json.dumps({"error": "Image generation failed"})
 
     if reference_image_path is None:
-        logger.info("img2img called with no reference image and no Finny keyword - falling back to generate_image")
+        logger.info("img2img called with no reference image and no mascot keyword - falling back to generate_image")
         url = await image_gen.generate_image(prompt, content_type="announcement")
         tracker.log_api("replicate:flux-1.1-pro (no-ref fallback)")
         if url:
@@ -663,7 +657,7 @@ async def _handle_img2img(
         try:
             Path(reference_image_path).unlink(missing_ok=True)
         except Exception as e:
-            logger.debug("Finny ref cleanup failed for %s: %s", reference_image_path, e)
+            logger.debug("Mascot ref cleanup failed for %s: %s", reference_image_path, e)
 
     if url:
         return json.dumps({"image_url": url, "model": "flux-kontext-pro", "reference": reference_image_path, "prompt_used": prompt})

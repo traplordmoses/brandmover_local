@@ -13,7 +13,7 @@ An autonomous AI marketing agent that runs via Telegram. Send a natural language
 - **Surgical /edit** — apply targeted img2img edits to the last generated image without re-running the full pipeline (`/edit make the background darker`)
 - **Adaptive compositor** — branded image templates with text overlays, logo placement, and platform badges
 - **Style profiles** — named collections of reference images that apply a consistent visual style (e.g. Revolut-style 3D cards) via img2img
-- **Finny mascot** — character-consistent generation using multi-reference stitched grids
+- **Mascot generation** — character-consistent generation using multi-reference stitched grids
 - **Feedback learning** — learns from approve/reject history and auto-summarizes preferences
 - **PDF brand bootstrap** — upload a brand guidelines PDF and auto-extract structured guidelines
 - **OpenClaw integration** — execute onchain scripts for campaign logging, task management, vault reads
@@ -23,7 +23,6 @@ An autonomous AI marketing agent that runs via Telegram. Send a natural language
 ### 1. Clone and install
 
 ```bash
-cd /Users/bengalagan/brandmover_local
 pip install -r requirements.txt
 cp .env.example .env
 ```
@@ -92,7 +91,7 @@ Just message the bot on Telegram:
 - **/setup** — bootstrap guidelines from a PDF upload
 - **/help** — shows available commands
 
-Upload a photo to use as a reference image. Add a caption to immediately generate with it, or reply with `reference`, `finny`, `style <name>`, or `background`.
+Upload a photo to use as a reference image. Add a caption to immediately generate with it, or reply with `reference`, `mascot`, `style <name>`, or `background`.
 
 Only messages from your authorized Telegram user ID are processed. Everyone else is ignored.
 

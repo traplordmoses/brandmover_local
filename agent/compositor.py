@@ -1,11 +1,5 @@
 """
-Smart Image Compositor v2.2 — BloFin BrandMover
-
-v2.2 changes:
-  - Loads actual blofin_logo.png instead of vector drawing
-  - WEB badge is outline style (orange border, transparent fill) matching brand ref
-  - Title uses letter tracking for premium feel
-  - Logo height bumped to 44px
+Smart Image Compositor — BrandMover
 
 Public API:
     composed = await compose_branded_image(draft, image_url, content_type)
@@ -24,10 +18,10 @@ logger = logging.getLogger(__name__)
 
 CANVAS_W, CANVAS_H = 1280, 720
 
-BLOFIN_ORANGE = (255, 136, 0)
-BLOFIN_BLACK  = (0, 0, 0)
-BLOFIN_WHITE  = (255, 255, 255)
-BLOFIN_GREEN  = (168, 255, 0)
+BRAND_PRIMARY = (255, 136, 0)
+BRAND_BG      = (0, 0, 0)
+BRAND_TEXT     = (255, 255, 255)
+BRAND_ACCENT   = (168, 255, 0)
 
 ContentType = Literal[
     "announcement", "campaign", "market", "meme", "engagement", "advice", "default"
@@ -54,20 +48,20 @@ class CompositorProfile:
 PROFILES: dict[str, CompositorProfile] = {
     "announcement": CompositorProfile(
         layout="SPLIT",
-        glow_color=BLOFIN_ORANGE,
+        glow_color=BRAND_PRIMARY,
         glow_intensity_1=28, glow_intensity_2=55, glow_intensity_3=75,
         glow_x_factor=1.0, glow_y_factor=1.0,
         title_size=68, subtitle_size=21,
-        title_color=BLOFIN_WHITE, subtitle_color=(170, 170, 170),
+        title_color=BRAND_TEXT, subtitle_color=(170, 170, 170),
         title_uppercase=True, card_inner_pad=0, scrim_opacity=0,
     ),
     "campaign": CompositorProfile(
         layout="FULL_BLEED",
-        glow_color=BLOFIN_ORANGE,
+        glow_color=BRAND_PRIMARY,
         glow_intensity_1=45, glow_intensity_2=80, glow_intensity_3=110,
         glow_x_factor=0.85, glow_y_factor=0.85,
         title_size=72, subtitle_size=22,
-        title_color=BLOFIN_WHITE, subtitle_color=BLOFIN_WHITE,
+        title_color=BRAND_TEXT, subtitle_color=BRAND_TEXT,
         title_uppercase=True, card_inner_pad=0, scrim_opacity=160,
     ),
     "market": CompositorProfile(
@@ -76,43 +70,43 @@ PROFILES: dict[str, CompositorProfile] = {
         glow_intensity_1=20, glow_intensity_2=40, glow_intensity_3=55,
         glow_x_factor=1.0, glow_y_factor=0.5,
         title_size=62, subtitle_size=20,
-        title_color=BLOFIN_WHITE, subtitle_color=(160, 160, 160),
+        title_color=BRAND_TEXT, subtitle_color=(160, 160, 160),
         title_uppercase=True, card_inner_pad=0, scrim_opacity=0,
     ),
     "meme": CompositorProfile(
         layout="FULL_BLEED",
-        glow_color=BLOFIN_ORANGE,
+        glow_color=BRAND_PRIMARY,
         glow_intensity_1=35, glow_intensity_2=65, glow_intensity_3=85,
         glow_x_factor=0.5, glow_y_factor=0.7,
         title_size=64, subtitle_size=24,
-        title_color=BLOFIN_WHITE, subtitle_color=BLOFIN_ORANGE,
+        title_color=BRAND_TEXT, subtitle_color=BRAND_PRIMARY,
         title_uppercase=False, card_inner_pad=0, scrim_opacity=140,
     ),
     "engagement": CompositorProfile(
         layout="CENTERED",
-        glow_color=BLOFIN_ORANGE,
+        glow_color=BRAND_PRIMARY,
         glow_intensity_1=20, glow_intensity_2=45, glow_intensity_3=60,
         glow_x_factor=0.9, glow_y_factor=0.9,
         title_size=62, subtitle_size=21,
-        title_color=BLOFIN_WHITE, subtitle_color=(170, 170, 170),
+        title_color=BRAND_TEXT, subtitle_color=(170, 170, 170),
         title_uppercase=True, card_inner_pad=0, scrim_opacity=0,
     ),
     "advice": CompositorProfile(
         layout="CENTERED",
-        glow_color=BLOFIN_ORANGE,
+        glow_color=BRAND_PRIMARY,
         glow_intensity_1=15, glow_intensity_2=35, glow_intensity_3=50,
         glow_x_factor=0.95, glow_y_factor=0.95,
         title_size=70, subtitle_size=22,
-        title_color=BLOFIN_WHITE, subtitle_color=(150, 150, 150),
+        title_color=BRAND_TEXT, subtitle_color=(150, 150, 150),
         title_uppercase=True, card_inner_pad=0, scrim_opacity=0,
     ),
     "default": CompositorProfile(
         layout="SPLIT",
-        glow_color=BLOFIN_ORANGE,
+        glow_color=BRAND_PRIMARY,
         glow_intensity_1=28, glow_intensity_2=55, glow_intensity_3=75,
         glow_x_factor=1.0, glow_y_factor=1.0,
         title_size=68, subtitle_size=21,
-        title_color=BLOFIN_WHITE, subtitle_color=(170, 170, 170),
+        title_color=BRAND_TEXT, subtitle_color=(170, 170, 170),
         title_uppercase=True, card_inner_pad=0, scrim_opacity=0,
     ),
 }
@@ -187,19 +181,18 @@ def _fit_font_to_width(text: str, style: str, start_size: int, max_w: int, track
 
 
 # ---------------------------------------------------------------------------
-# Logo — load actual PNG, vector fallback
+# Logo — load brand logo PNG
 # ---------------------------------------------------------------------------
-_LOGO_PNG = Path(__file__).resolve().parent.parent / "brand" / "assets" / "blofin_logo.png"
+_LOGO_PNG = Path(__file__).resolve().parent.parent / "brand" / "assets" / "logo.png"
 logger.info("Logo PNG path resolved to: %s (exists=%s)", _LOGO_PNG, _LOGO_PNG.exists())
 _logo_cache: dict[int, tuple] = {}
 
 
 def _load_logo_png(height: int):
-    logger.info("_load_logo_png called: path=%s exists=%s", _LOGO_PNG, _LOGO_PNG.exists())
     if height in _logo_cache:
         return _logo_cache[height]
     if not _LOGO_PNG.exists():
-        logger.warning("Logo PNG not found at %s", _LOGO_PNG)
+        logger.warning("Logo PNG not found at %s — place your logo as brand/assets/logo.png", _LOGO_PNG)
         return None
     try:
         logo = Image.open(_LOGO_PNG).convert("RGBA")
@@ -212,32 +205,14 @@ def _load_logo_png(height: int):
         return None
 
 
-def _draw_blofin_logo(canvas: Image.Image, x: int, y: int, height: int = 44) -> int:
-    """Draw logo, returns width."""
+def _draw_brand_logo(canvas: Image.Image, x: int, y: int, height: int = 44) -> int:
+    """Draw brand logo on canvas. Returns width, or 0 if logo not found."""
     result = _load_logo_png(height)
     if result:
         logo_img, logo_w = result
         canvas.paste(logo_img, (x, y), logo_img)
         return logo_w
-
-    # Vector fallback
-    draw = ImageDraw.Draw(canvas)
-    lf  = _load_font("black", height)
-    lf2 = _load_font("bold",  height)
-    b_bb  = lf.getbbox("B")
-    b_w, b_h, b_top = b_bb[2]-b_bb[0], b_bb[3]-b_bb[1], b_bb[1]
-    draw.text((x, y - b_top), "B", fill=BLOFIN_WHITE, font=lf)
-    sx = x + int(b_w * 0.28)
-    sy = y - b_top + int(b_h * 0.04)
-    draw.polygon([
-        (sx + int(b_w*0.60), sy),
-        (sx + int(b_w*0.75), sy),
-        (sx + int(b_w*0.20), sy + int(b_h*0.52)),
-        (sx + int(b_w*0.05), sy + int(b_h*0.52)),
-    ], fill=BLOFIN_ORANGE)
-    r_bb = lf2.getbbox("loFin")
-    draw.text((x + b_w + 3, y - r_bb[1]), "loFin", fill=BLOFIN_WHITE, font=lf2)
-    return b_w + 3 + (r_bb[2] - r_bb[0])
+    return 0
 
 
 def _draw_platform_badge(
@@ -253,8 +228,8 @@ def _draw_platform_badge(
     bh     = th + py * 2
     by_    = y + (logo_height - bh) // 2
     rect   = [x, by_, x + tw + px*2, by_ + bh]
-    draw.rounded_rectangle(rect, radius=7, outline=BLOFIN_ORANGE, width=2)
-    draw.text((x + px, by_ + py - tb[1]), text, fill=BLOFIN_ORANGE, font=bf)
+    draw.rounded_rectangle(rect, radius=7, outline=BRAND_PRIMARY, width=2)
+    draw.text((x + px, by_ + py - tb[1]), text, fill=BRAND_PRIMARY, font=bf)
 
 
 # ---------------------------------------------------------------------------
@@ -282,7 +257,7 @@ def _draw_tracked(
 # ---------------------------------------------------------------------------
 
 def _create_background(profile: CompositorProfile) -> Image.Image:
-    canvas = Image.new("RGBA", (CANVAS_W, CANVAS_H), BLOFIN_BLACK + (255,))
+    canvas = Image.new("RGBA", (CANVAS_W, CANVAS_H), BRAND_BG + (255,))
     r, g, b = profile.glow_color
     cx = int(CANVAS_W * profile.glow_x_factor) + 140
     cy = int(CANVAS_H * profile.glow_y_factor) + 90
@@ -399,7 +374,7 @@ def _render_split(
     canvas, feature_img, title, subtitle, platform, profile
 ):
     draw = ImageDraw.Draw(canvas)
-    logo_w = _draw_blofin_logo(canvas, LOGO_X, LOGO_Y, LOGO_H)
+    logo_w = _draw_brand_logo(canvas, LOGO_X, LOGO_Y, LOGO_H)
     _draw_platform_badge(draw, LOGO_X + logo_w + 10, LOGO_Y, platform, LOGO_H)
 
     if feature_img:
@@ -446,7 +421,7 @@ def _render_full_bleed(
         sd.rectangle([x0, 0, x1, CANVAS_H], fill=(0, 0, 0, a))
     canvas.alpha_composite(scrim)
 
-    logo_w = _draw_blofin_logo(canvas, LOGO_X, LOGO_Y, LOGO_H)
+    logo_w = _draw_brand_logo(canvas, LOGO_X, LOGO_Y, LOGO_H)
     _draw_platform_badge(draw, LOGO_X + logo_w + 10, LOGO_Y, platform, LOGO_H)
 
     text_x    = 56
@@ -475,7 +450,7 @@ def _render_centered(
     canvas, feature_img, title, subtitle, platform, profile
 ):
     draw = ImageDraw.Draw(canvas)
-    logo_w = _draw_blofin_logo(canvas, LOGO_X, LOGO_Y, LOGO_H)
+    logo_w = _draw_brand_logo(canvas, LOGO_X, LOGO_Y, LOGO_H)
     _draw_platform_badge(draw, LOGO_X + logo_w + 10, LOGO_Y, platform, LOGO_H)
 
     iw, ih = 600, 380

@@ -34,7 +34,7 @@ X_BEARER_TOKEN: str = os.getenv("X_BEARER_TOKEN", "")
 
 # --- Brand ---
 BRAND_FOLDER: str = os.getenv("BRAND_FOLDER", str(_project_root / "brand"))
-BRAND_NAME: str = os.getenv("BRAND_NAME", "BloFin")
+BRAND_NAME: str = os.getenv("BRAND_NAME", "MyBrand")
 
 # --- Pipeline ---
 PIPELINE_MODE: str = os.getenv("PIPELINE_MODE", "full")  # "full" (4-step) or "fast" (3-step, merges plan+verify)

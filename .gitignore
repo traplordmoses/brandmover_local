@@ -29,3 +29,9 @@ brand/references/
 brand/assets/fonts/
 brand/assets/pdf_pages/
 brand/assets/images/
+brand/assets/*.png
+brand/assets/*.svg
+brand/assets/*.jpg
+
+# Eval baselines (generated per-brand)
+eval/baselines/*.json
