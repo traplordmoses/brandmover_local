@@ -9,7 +9,7 @@ An autonomous AI marketing agent that runs via Telegram. Send a natural language
 - **Agent mode** — Claude tool-use loop with brand guidelines, Figma, feedback history, and onchain scripts
 - **Smart image routing** — auto-selects the best Replicate model per content type (Nano Banana for text overlays, Recraft SVG for brand assets, Seedream for lifestyle, Flux 1.1 Pro general)
 - **brand_3d pipeline** — dedicated 3D asset generation with master prompt splicing, category-based reference image routing, optional LoRA trigger, and parallel N=3 option generation via `asyncio.gather`
-- **Parallel image options** — brand_3d generates 3 options simultaneously; the CMO picks the best with `/approve 1`, `/approve 2`, or `/approve 3`
+- **Parallel image options** — brand_3d generates 3 options simultaneously; pick the best with `/approve 1`, `/approve 2`, or `/approve 3`
 - **Surgical /edit** — apply targeted img2img edits to the last generated image without re-running the full pipeline (`/edit make the background darker`)
 - **Adaptive compositor** — branded image templates with text overlays, logo placement, and platform badges
 - **Style profiles** — named collections of reference images that apply a consistent visual style (e.g. Revolut-style 3D cards) via img2img
@@ -23,6 +23,8 @@ An autonomous AI marketing agent that runs via Telegram. Send a natural language
 ### 1. Clone and install
 
 ```bash
+git clone https://github.com/traplordmoses/brandmover_local.git
+cd brandmover_local
 pip install -r requirements.txt
 cp .env.example .env
 ```
@@ -62,9 +64,11 @@ You need API keys for the following services:
 - Set `LLM_PROVIDER=anthropic` and fill `ANTHROPIC_API_KEY`
 - Or use `openai` / `gemini` with their respective keys
 
-### 3. Add brand guidelines
+### 3. Add your brand
 
-Edit `brand/guidelines.md` with your brand's voice, tone, colors, hashtags, and style rules. The agent reads this file before every generation to stay on-brand.
+`brand/guidelines.md` ships as a template with `[YOUR_BRAND]` placeholders. Fill in each section with your brand's voice, tone, colors, hashtags, and style rules. The agent reads this file before every generation to stay on-brand.
+
+Place your logo as `brand/assets/logo.png` — the compositor overlays it on generated images. If no logo is found, the template renders without one.
 
 Add example posts as `.txt` files in `brand/examples/articles/` — the agent uses these as reference for tone and format.
 
@@ -78,7 +82,7 @@ python main.py
 
 Just message the bot on Telegram:
 
-- **"write our Token2049 recap post"** — generates a draft with image
+- **"write a post about our new feature launch"** — generates a draft with image
 - **/approve [N]** — approve the pending draft (option N if multiple images were generated)
 - **/reject make it more urgent** — revises the draft with your feedback (re-runs full pipeline)
 - **/edit make the background darker** — surgical img2img edit on the last generated image (strength 0.2, keeps composition)
