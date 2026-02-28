@@ -1,8 +1,10 @@
 """
 Main Telegram bot entry point.
-Builds the Application, registers handlers, and starts polling.
+Builds the Application, registers handlers, starts polling,
+and launches the auto-post scheduler as a background task.
 """
 
+import asyncio
 import logging
 
 from telegram.ext import Application, CommandHandler, MessageHandler, filters
@@ -34,8 +36,12 @@ def create_bot() -> Application:
     app.add_handler(CommandHandler("feedback", handlers.feedback_command))
     app.add_handler(CommandHandler("learn", handlers.learn_command))
     app.add_handler(CommandHandler("style", handlers.style_command))
+    app.add_handler(CommandHandler("brand", handlers.brand_command))
     app.add_handler(CommandHandler("edit", handlers.edit_command))
     app.add_handler(CommandHandler("setup", handlers.setup_command))
+    app.add_handler(CommandHandler("autostatus", handlers.autostatus_command))
+    app.add_handler(CommandHandler("autopause", handlers.autopause_command))
+    app.add_handler(CommandHandler("autoforce", handlers.autoforce_command))
 
     # Photo uploads (reference images)
     app.add_handler(
@@ -64,12 +70,29 @@ def create_bot() -> Application:
     return app
 
 
+async def _start_scheduler(app: Application) -> None:
+    """Post-init hook: launch the auto-post scheduler as a background task."""
+    from scripts.auto_post import run_scheduler_loop
+
+    bot = app.bot
+    task = asyncio.create_task(run_scheduler_loop(bot=bot))
+    # Store reference so it doesn't get GC'd
+    app.bot_data["_scheduler_task"] = task
+    logger.info("Auto-post scheduler background task launched")
+
+
 def run() -> None:
-    """Start the bot polling loop."""
+    """Start the bot polling loop with the auto-post scheduler."""
     logger.info(
-        "Starting BrandMover Local bot (user_id=%s, llm=%s)",
+        "Starting BrandMover Local bot (user_id=%s, llm=%s, auto_post=%s)",
         settings.TELEGRAM_ALLOWED_USER_ID,
         settings.LLM_PROVIDER,
+        settings.AUTO_POST_ENABLED,
     )
     app = create_bot()
+
+    # Register the scheduler as a post-init hook so it starts after the
+    # bot's event loop and updater are running.
+    app.post_init = _start_scheduler
+
     app.run_polling(drop_pending_updates=True)

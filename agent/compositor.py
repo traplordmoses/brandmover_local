@@ -18,12 +18,12 @@ logger = logging.getLogger(__name__)
 
 CANVAS_W, CANVAS_H = 1280, 720
 
-# Default brand colors — override these by editing your brand/guidelines.md
-# and updating the values here to match your palette.
-BRAND_PRIMARY = (80, 140, 250)   # accent color — change to your brand's primary
-BRAND_BG      = (0, 0, 0)        # background
-BRAND_TEXT     = (255, 255, 255)  # text
-BRAND_ACCENT   = (100, 220, 180) # secondary accent — change to your brand's accent
+# Brand colors — resolved at runtime from brand/guidelines.md
+from agent import compositor_config as _brand_cfg
+
+def _c(role: str, fallback: tuple) -> tuple:
+    """Shorthand for brand color lookup with hardcoded fallback."""
+    return _brand_cfg.get_color_rgb(role, fallback)
 
 ContentType = Literal[
     "announcement", "campaign", "market", "meme", "engagement", "advice", "default"
@@ -47,71 +47,88 @@ class CompositorProfile:
     scrim_opacity: int
 
 
-PROFILES: dict[str, CompositorProfile] = {
-    "announcement": CompositorProfile(
-        layout="SPLIT",
-        glow_color=BRAND_PRIMARY,
-        glow_intensity_1=28, glow_intensity_2=55, glow_intensity_3=75,
-        glow_x_factor=1.0, glow_y_factor=1.0,
-        title_size=68, subtitle_size=21,
-        title_color=BRAND_TEXT, subtitle_color=(170, 170, 170),
-        title_uppercase=True, card_inner_pad=0, scrim_opacity=0,
-    ),
-    "campaign": CompositorProfile(
-        layout="FULL_BLEED",
-        glow_color=BRAND_PRIMARY,
-        glow_intensity_1=45, glow_intensity_2=80, glow_intensity_3=110,
-        glow_x_factor=0.85, glow_y_factor=0.85,
-        title_size=72, subtitle_size=22,
-        title_color=BRAND_TEXT, subtitle_color=BRAND_TEXT,
-        title_uppercase=True, card_inner_pad=0, scrim_opacity=160,
-    ),
-    "market": CompositorProfile(
-        layout="SPLIT",
-        glow_color=(40, 80, 140),
-        glow_intensity_1=20, glow_intensity_2=40, glow_intensity_3=55,
-        glow_x_factor=1.0, glow_y_factor=0.5,
-        title_size=62, subtitle_size=20,
-        title_color=BRAND_TEXT, subtitle_color=(160, 160, 160),
-        title_uppercase=True, card_inner_pad=0, scrim_opacity=0,
-    ),
-    "meme": CompositorProfile(
-        layout="FULL_BLEED",
-        glow_color=BRAND_PRIMARY,
-        glow_intensity_1=35, glow_intensity_2=65, glow_intensity_3=85,
-        glow_x_factor=0.5, glow_y_factor=0.7,
-        title_size=64, subtitle_size=24,
-        title_color=BRAND_TEXT, subtitle_color=BRAND_PRIMARY,
-        title_uppercase=False, card_inner_pad=0, scrim_opacity=140,
-    ),
-    "engagement": CompositorProfile(
-        layout="CENTERED",
-        glow_color=BRAND_PRIMARY,
-        glow_intensity_1=20, glow_intensity_2=45, glow_intensity_3=60,
-        glow_x_factor=0.9, glow_y_factor=0.9,
-        title_size=62, subtitle_size=21,
-        title_color=BRAND_TEXT, subtitle_color=(170, 170, 170),
-        title_uppercase=True, card_inner_pad=0, scrim_opacity=0,
-    ),
-    "advice": CompositorProfile(
-        layout="CENTERED",
-        glow_color=BRAND_PRIMARY,
-        glow_intensity_1=15, glow_intensity_2=35, glow_intensity_3=50,
-        glow_x_factor=0.95, glow_y_factor=0.95,
-        title_size=70, subtitle_size=22,
-        title_color=BRAND_TEXT, subtitle_color=(150, 150, 150),
-        title_uppercase=True, card_inner_pad=0, scrim_opacity=0,
-    ),
-    "default": CompositorProfile(
-        layout="SPLIT",
-        glow_color=BRAND_PRIMARY,
-        glow_intensity_1=28, glow_intensity_2=55, glow_intensity_3=75,
-        glow_x_factor=1.0, glow_y_factor=1.0,
-        title_size=68, subtitle_size=21,
-        title_color=BRAND_TEXT, subtitle_color=(170, 170, 170),
-        title_uppercase=True, card_inner_pad=0, scrim_opacity=0,
-    ),
-}
+_profiles_cache: dict[str, CompositorProfile] | None = None
+_profiles_hash: str = ""
+
+
+def _get_profiles() -> dict[str, CompositorProfile]:
+    """Build PROFILES dict from brand config, cached until config changes."""
+    global _profiles_cache, _profiles_hash
+    cfg_hash = _brand_cfg.get_config().raw_hash
+    if _profiles_cache is not None and _profiles_hash == cfg_hash:
+        return _profiles_cache
+
+    PRIMARY = _c("primary", (114, 225, 255))
+    TEXT = _c("text", (255, 255, 255))
+    BG_ALT = _c("background_alt", (11, 46, 78))
+
+    _profiles_cache = {
+        "announcement": CompositorProfile(
+            layout="SPLIT",
+            glow_color=PRIMARY,
+            glow_intensity_1=28, glow_intensity_2=55, glow_intensity_3=75,
+            glow_x_factor=1.0, glow_y_factor=1.0,
+            title_size=68, subtitle_size=21,
+            title_color=TEXT, subtitle_color=(170, 170, 170),
+            title_uppercase=True, card_inner_pad=0, scrim_opacity=0,
+        ),
+        "campaign": CompositorProfile(
+            layout="FULL_BLEED",
+            glow_color=PRIMARY,
+            glow_intensity_1=45, glow_intensity_2=80, glow_intensity_3=110,
+            glow_x_factor=0.85, glow_y_factor=0.85,
+            title_size=72, subtitle_size=22,
+            title_color=TEXT, subtitle_color=TEXT,
+            title_uppercase=True, card_inner_pad=0, scrim_opacity=160,
+        ),
+        "market": CompositorProfile(
+            layout="SPLIT",
+            glow_color=BG_ALT,
+            glow_intensity_1=20, glow_intensity_2=40, glow_intensity_3=55,
+            glow_x_factor=1.0, glow_y_factor=0.5,
+            title_size=62, subtitle_size=20,
+            title_color=TEXT, subtitle_color=(160, 160, 160),
+            title_uppercase=True, card_inner_pad=0, scrim_opacity=0,
+        ),
+        "meme": CompositorProfile(
+            layout="FULL_BLEED",
+            glow_color=PRIMARY,
+            glow_intensity_1=35, glow_intensity_2=65, glow_intensity_3=85,
+            glow_x_factor=0.5, glow_y_factor=0.7,
+            title_size=64, subtitle_size=24,
+            title_color=TEXT, subtitle_color=PRIMARY,
+            title_uppercase=False, card_inner_pad=0, scrim_opacity=140,
+        ),
+        "engagement": CompositorProfile(
+            layout="CENTERED",
+            glow_color=PRIMARY,
+            glow_intensity_1=20, glow_intensity_2=45, glow_intensity_3=60,
+            glow_x_factor=0.9, glow_y_factor=0.9,
+            title_size=62, subtitle_size=21,
+            title_color=TEXT, subtitle_color=(170, 170, 170),
+            title_uppercase=True, card_inner_pad=0, scrim_opacity=0,
+        ),
+        "advice": CompositorProfile(
+            layout="CENTERED",
+            glow_color=PRIMARY,
+            glow_intensity_1=15, glow_intensity_2=35, glow_intensity_3=50,
+            glow_x_factor=0.95, glow_y_factor=0.95,
+            title_size=70, subtitle_size=22,
+            title_color=TEXT, subtitle_color=(150, 150, 150),
+            title_uppercase=True, card_inner_pad=0, scrim_opacity=0,
+        ),
+        "default": CompositorProfile(
+            layout="SPLIT",
+            glow_color=PRIMARY,
+            glow_intensity_1=28, glow_intensity_2=55, glow_intensity_3=75,
+            glow_x_factor=1.0, glow_y_factor=1.0,
+            title_size=68, subtitle_size=21,
+            title_color=TEXT, subtitle_color=(170, 170, 170),
+            title_uppercase=True, card_inner_pad=0, scrim_opacity=0,
+        ),
+    }
+    _profiles_hash = cfg_hash
+    return _profiles_cache
 
 # ---------------------------------------------------------------------------
 # Fonts
@@ -230,8 +247,9 @@ def _draw_platform_badge(
     bh     = th + py * 2
     by_    = y + (logo_height - bh) // 2
     rect   = [x, by_, x + tw + px*2, by_ + bh]
-    draw.rounded_rectangle(rect, radius=7, outline=BRAND_PRIMARY, width=2)
-    draw.text((x + px, by_ + py - tb[1]), text, fill=BRAND_PRIMARY, font=bf)
+    badge_color = _c("primary", (114, 225, 255))
+    draw.rounded_rectangle(rect, radius=7, outline=badge_color, width=2)
+    draw.text((x + px, by_ + py - tb[1]), text, fill=badge_color, font=bf)
 
 
 # ---------------------------------------------------------------------------
@@ -259,22 +277,62 @@ def _draw_tracked(
 # ---------------------------------------------------------------------------
 
 def _create_background(profile: CompositorProfile) -> Image.Image:
-    canvas = Image.new("RGBA", (CANVAS_W, CANVAS_H), BRAND_BG + (255,))
+    """Create a Frutiger Aero background with glass-morphism orbs.
+
+    Matches the foid.fun aesthetic: dark navy base, soft bubbly glass orbs
+    in aqua/lavender/periwinkle, frosted glow layers.
+    """
+    canvas = Image.new("RGBA", (CANVAS_W, CANVAS_H), _c("background", (14, 15, 43)) + (255,))
     r, g, b = profile.glow_color
+
+    # --- Primary glow (from original profile) ---
     cx = int(CANVAS_W * profile.glow_x_factor) + 140
     cy = int(CANVAS_H * profile.glow_y_factor) + 90
 
-    def _layer(size, alpha, blur):
+    def _glow(x, y, size, color, alpha, blur):
         lay = Image.new("RGBA", (CANVAS_W, CANVAS_H), (0, 0, 0, 0))
+        cr, cg, cb = color
         ImageDraw.Draw(lay).ellipse(
-            [cx-size, cy-int(size*0.75), cx+size, cy+int(size*0.75)],
-            fill=(r, g, b, alpha)
+            [x - size, y - int(size * 0.75), x + size, y + int(size * 0.75)],
+            fill=(cr, cg, cb, alpha),
         )
         return lay.filter(ImageFilter.GaussianBlur(radius=blur))
 
-    canvas = Image.alpha_composite(canvas, _layer(480, profile.glow_intensity_1, 95))
-    canvas = Image.alpha_composite(canvas, _layer(260, profile.glow_intensity_2, 65))
-    canvas = Image.alpha_composite(canvas, _layer(120, profile.glow_intensity_3, 42))
+    # Base glow — softer spread
+    canvas = Image.alpha_composite(canvas, _glow(cx, cy, 500, (r, g, b), profile.glow_intensity_1, 110))
+    canvas = Image.alpha_composite(canvas, _glow(cx, cy, 280, (r, g, b), profile.glow_intensity_2, 70))
+
+    # --- Bubbly glass orbs — scattered soft spheres ---
+    # Each orb is a radial gradient circle with a bright center and soft falloff
+    _ORB_SPECS = [
+        # (x, y, radius, color, center_alpha, edge_blur)
+        (180,  140, 110, _c("primary",  (114, 225, 255)), 22, 55),   # top-left aqua orb
+        (1050, 520,  90, _c("accent_2", (205, 183, 255)), 18, 45),   # bottom-right lavender orb
+        (900,  100,  70, _c("accent_3", (143, 170, 242)), 20, 40),   # top-right periwinkle orb
+        (350,  560,  85, _c("accent_1", (255, 179, 217)), 12, 50),   # bottom-left pink orb (subtle)
+        (640,  360, 130, _c("primary",  (114, 225, 255)), 10, 80),   # center aqua wash (very subtle)
+        (80,   400,  60, _c("accent_3", (143, 170, 242)), 16, 35),   # left-edge periwinkle
+        (1180, 260,  55, _c("accent_2", (205, 183, 255)), 14, 30),   # right-edge lavender
+    ]
+
+    for ox, oy, rad, color, alpha, blur in _ORB_SPECS:
+        # Outer glow
+        canvas = Image.alpha_composite(canvas, _glow(ox, oy, rad, color, alpha, blur))
+        # Inner bright core (smaller, brighter)
+        canvas = Image.alpha_composite(canvas, _glow(ox, oy, rad // 3, color, alpha * 2, blur // 3))
+
+    # --- Glass morphism tint overlay — faint frosted panel ---
+    frost = Image.new("RGBA", (CANVAS_W, CANVAS_H), (0, 0, 0, 0))
+    fd = ImageDraw.Draw(frost)
+    # Subtle rounded panel tint across the center
+    fd.rounded_rectangle(
+        [40, 70, CANVAS_W - 40, CANVAS_H - 30],
+        radius=28,
+        fill=(255, 255, 255, 6),
+    )
+    frost = frost.filter(ImageFilter.GaussianBlur(radius=12))
+    canvas = Image.alpha_composite(canvas, frost)
+
     return canvas
 
 
@@ -511,7 +569,8 @@ async def compose_branded_image(
     if not title and not subtitle:
         return None
 
-    profile = PROFILES.get(content_type, PROFILES["default"])
+    profiles = _get_profiles()
+    profile = profiles.get(content_type, profiles["default"])
 
     try:
         _ensure_fonts()

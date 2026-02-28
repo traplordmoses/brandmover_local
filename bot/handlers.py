@@ -15,7 +15,7 @@ from PIL import Image as _PILImage
 from telegram import Update
 from telegram.ext import ContextTypes
 
-from agent import brain, compositor, engine, feedback, guidelines, image_gen, publisher, state
+from agent import auto_state, brain, compositor, engine, feedback, guidelines, image_gen, publisher, scheduler, state
 from config import settings
 
 logger = logging.getLogger(__name__)
@@ -84,8 +84,12 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         "/feedback — Show approval/rejection stats\n"
         "/learn — Trigger preference learning from feedback history\n"
         "/style — Manage visual style profiles\n"
+        "/brand — Show active brand config\n"
         "/setup — Bootstrap guidelines from a PDF upload\n"
         "/cancel — Clear pending draft\n"
+        "/autostatus — Auto-posting scheduler status\n"
+        "/autopause — Pause/resume auto-posting\n"
+        "/autoforce <i>slot</i> — Force a specific auto-post slot\n"
         "/help — Show this message"
     )
     await update.message.reply_text(msg, parse_mode="HTML")
@@ -101,6 +105,43 @@ async def refs_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         f"<b>Reference Vault</b>\n\n<pre>{_esc(summary)}</pre>",
         parse_mode="HTML",
     )
+
+
+async def brand_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /brand — show active brand config from guidelines.md."""
+    if not _authorized(update.effective_user.id):
+        return
+
+    from agent import compositor_config
+    summary = compositor_config.get_brand_summary()
+
+    lines = [f"<b>{_esc(summary['brand_name'] or 'Brand Config')}</b>"]
+    if summary["tagline"]:
+        lines.append(f"<i>{_esc(summary['tagline'])}</i>")
+    if summary["website"]:
+        lines.append(f"Web: {_esc(summary['website'])}")
+    if summary["x_handle"]:
+        lines.append(f"X: {_esc(summary['x_handle'])}")
+
+    if summary["colors"]:
+        lines.append("\n<b>Colors</b>")
+        for role, c in summary["colors"].items():
+            lines.append(f"  {_esc(role)} — {_esc(c['name'])} <code>{_esc(c['hex'])}</code>")
+
+    if summary["fonts"]:
+        lines.append("\n<b>Fonts</b>")
+        for use, f in summary["fonts"].items():
+            lines.append(f"  {_esc(use)} — {_esc(f['family'])} {_esc(f['weight'])}")
+
+    if summary["style_keywords"]:
+        lines.append(f"\n<b>Style:</b> {_esc(', '.join(summary['style_keywords']))}")
+
+    if summary["parsed_at"]:
+        import datetime
+        ts = datetime.datetime.fromtimestamp(summary["parsed_at"]).strftime("%Y-%m-%d %H:%M")
+        lines.append(f"\n<i>Parsed {ts} from {_esc(summary['source_path'])}</i>")
+
+    await update.message.reply_text("\n".join(lines), parse_mode="HTML")
 
 
 async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -240,12 +281,46 @@ async def approve_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         except Exception as e:
             logger.warning("Failed to save mascot output: %s", e)
 
+    # Post to X
+    tweet_url = None
+    try:
+        await update.message.chat.send_action("typing")
+        tweet_url = await publisher.post_to_x(
+            pending.get("caption", ""),
+            pending.get("hashtags", []),
+            pending.get("image_url"),
+        )
+    except Exception as e:
+        logger.error("Failed to post to X: %s", e)
+        await update.message.reply_text(
+            f"Approved, but X posting failed: {_esc(str(e))}\n"
+            f"Feedback logged ({count} total entries).",
+            parse_mode="HTML",
+        )
+        state.clear_pending()
+        return
+
+    # If this draft came from the auto-post scheduler, record it so the slot
+    # is marked as fulfilled for today and duplicate detection works.
+    auto_slot = pending.get("auto_slot")
+    if auto_slot:
+        auto_state.record_post(
+            slot_name=auto_slot,
+            caption=pending.get("caption", ""),
+            tweet_url=tweet_url,
+            event_ids=pending.get("auto_event_ids"),
+        )
+        logger.info("Auto-post slot '%s' recorded via /approve", auto_slot)
+
     state.clear_pending()
+    slot_note = f"  (auto-slot: {_esc(auto_slot)})" if auto_slot else ""
     await update.message.reply_text(
-        f"Approved! (X posting disabled for now — would have posted this draft)\n"
-        f"Feedback logged ({count} total entries)."
+        f"Posted to X!{slot_note}\n"
+        f"{_esc(tweet_url)}\n\n"
+        f"Feedback logged ({count} total entries).",
+        parse_mode="HTML",
     )
-    logger.info("Draft approved (feedback #%d)", count)
+    logger.info("Draft approved and posted: %s (feedback #%d)", tweet_url, count)
 
     # Auto-summarize preferences at threshold
     if count % settings.FEEDBACK_SUMMARIZE_EVERY == 0:
@@ -453,7 +528,7 @@ async def _handle_pipeline_revision(update: Update, pending: dict, feedback_text
             content_type = draft.get("content_type", "announcement")
             image_url = await image_gen.generate_image(draft["image_prompt"], content_type=content_type)
 
-        # Save revised draft
+        # Save revised draft (carry forward auto-post metadata through revisions)
         state.save_pending(
             caption=draft["caption"],
             hashtags=draft.get("hashtags", []),
@@ -461,6 +536,8 @@ async def _handle_pipeline_revision(update: Update, pending: dict, feedback_text
             alt_text=draft["alt_text"],
             image_prompt=draft["image_prompt"],
             original_request=pending["original_request"],
+            auto_slot=pending.get("auto_slot"),
+            auto_event_ids=pending.get("auto_event_ids"),
         )
 
         await _send_draft(update, draft, image_url)
@@ -475,6 +552,8 @@ async def _handle_pipeline_revision(update: Update, pending: dict, feedback_text
             alt_text=pending.get("alt_text", ""),
             image_prompt=pending.get("image_prompt", ""),
             original_request=pending.get("original_request", ""),
+            auto_slot=pending.get("auto_slot"),
+            auto_event_ids=pending.get("auto_event_ids"),
         )
         await update.message.reply_text(
             f"Revision failed: {_esc(str(e))}\n\nOriginal draft still pending. Try again or /cancel.",
@@ -516,6 +595,7 @@ async def _handle_agent_revision(update: Update, pending: dict, feedback_text: s
 
         image_url = result.image_url or pending.get("image_url")
 
+        # Carry forward auto-post slot metadata through revisions
         state.save_pending(
             caption=result.draft["caption"],
             hashtags=result.draft.get("hashtags", []),
@@ -523,6 +603,8 @@ async def _handle_agent_revision(update: Update, pending: dict, feedback_text: s
             alt_text=result.draft.get("alt_text", ""),
             image_prompt=result.draft.get("image_prompt", ""),
             original_request=pending["original_request"],
+            auto_slot=pending.get("auto_slot"),
+            auto_event_ids=pending.get("auto_event_ids"),
         )
 
         await _send_draft(update, result.draft, image_url, resources=result.resources)
@@ -538,6 +620,8 @@ async def _handle_agent_revision(update: Update, pending: dict, feedback_text: s
             alt_text=pending.get("alt_text", ""),
             image_prompt=pending.get("image_prompt", ""),
             original_request=pending.get("original_request", ""),
+            auto_slot=pending.get("auto_slot"),
+            auto_event_ids=pending.get("auto_event_ids"),
         )
         await update.message.reply_text(
             f"Agent revision failed: {_esc(str(e))}\n\nOriginal draft still pending. Try again or /cancel.",
@@ -1168,3 +1252,210 @@ async def _send_draft(
             await update.message.reply_text(text_msg, parse_mode="HTML")
     else:
         await update.message.reply_text(text_msg, parse_mode="HTML")
+
+
+# ---------------------------------------------------------------------------
+# Auto-post draft delivery (called by scheduler, no Update object)
+# ---------------------------------------------------------------------------
+
+
+async def send_auto_draft(bot, draft: dict, image_url: str | None, slot_name: str) -> None:
+    """Send an auto-generated draft to Telegram for review.
+
+    Called by the in-process scheduler — uses the bot instance directly
+    instead of replying to a user message.
+    """
+    chat_id = settings.TELEGRAM_ALLOWED_USER_ID
+    caption = draft.get("caption", "")
+    content_type = draft.get("content_type", "default")
+
+    # Ensure title/subtitle for compositor
+    if not draft.get("title") and not draft.get("subtitle") and caption:
+        sentences = caption.split(". ", 1)
+        draft["title"] = sentences[0].rstrip(".")
+        draft["subtitle"] = sentences[1] if len(sentences) > 1 else ""
+
+    template_section = ""
+    if draft.get("title") or draft.get("subtitle"):
+        template_section = (
+            f"\n<b>--- Image Template ---</b>\n"
+            f"<b>Title:</b> {_esc(draft.get('title', ''))}\n"
+            f"<b>Subtitle:</b> {_esc(draft.get('subtitle', ''))}\n"
+        )
+
+    text_msg = (
+        f"<b>Auto-Draft Ready</b>  [slot: <code>{_esc(slot_name)}</code>]\n\n"
+        f"{_esc(caption)}\n"
+        f"{template_section}\n"
+        f"<i>Alt text:</i> {_esc(draft.get('alt_text', ''))}\n\n"
+        f"/approve to post to X\n"
+        f"/reject <i>feedback</i> to revise\n"
+        f"/cancel to discard"
+    )
+
+    if image_url:
+        composed = await compositor.compose_branded_image(draft, image_url, content_type)
+        photo = composed if composed else image_url
+
+        # Save composed for archiving on approve
+        if composed and isinstance(composed, io.BytesIO):
+            try:
+                tmp_composed = str(Path(tempfile.gettempdir()) / f"brandmover_auto_composed_{int(time.time())}.png")
+                with open(tmp_composed, "wb") as f:
+                    f.write(composed.getvalue())
+                composed.seek(0)
+                state.set_last_composed(tmp_composed, content_type)
+            except Exception as e:
+                logger.warning("Failed to save auto composed image: %s", e)
+
+        try:
+            await bot.send_photo(
+                chat_id=chat_id,
+                photo=photo,
+                caption=text_msg[:1024],
+                parse_mode="HTML",
+            )
+            if len(text_msg) > 1024:
+                await bot.send_message(chat_id=chat_id, text=text_msg, parse_mode="HTML")
+        except Exception as e:
+            logger.warning("Failed to send auto-draft image: %s — sending text", e)
+            await bot.send_message(chat_id=chat_id, text=text_msg, parse_mode="HTML")
+    else:
+        await bot.send_message(chat_id=chat_id, text=text_msg, parse_mode="HTML")
+
+    logger.info("Auto-draft sent to Telegram for slot: %s", slot_name)
+
+
+# ---------------------------------------------------------------------------
+# Auto-post control commands
+# ---------------------------------------------------------------------------
+
+
+async def autostatus_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /autostatus — show auto-posting scheduler status."""
+    if not _authorized(update.effective_user.id):
+        return
+
+    status = auto_state.get_status_summary()
+    schedule = scheduler.load_schedule()
+    slots = schedule.get("slots", {})
+    global_cfg = schedule.get("global", {})
+
+    paused_str = "PAUSED" if status["paused"] else "ACTIVE"
+    last_ts = status["last_post_timestamp"]
+    last_str = time.strftime("%H:%M UTC", time.gmtime(last_ts)) if last_ts else "never"
+
+    slot_lines = []
+    for name, cfg in slots.items():
+        enabled = cfg.get("enabled", True)
+        posted = auto_state.is_slot_posted(name)
+        icon = "\u2705" if posted else ("\u23F0" if enabled else "\u274C")
+        slot_lines.append(f"  {icon} {name} ({cfg.get('hour_utc', '?')}:00 UTC)")
+
+    recent = status.get("recent_captions", [])
+    recent_str = "\n".join(f"  - {c}" for c in recent) if recent else "  (none)"
+
+    msg = (
+        f"<b>Auto-Post Status: {paused_str}</b>\n\n"
+        f"<b>Enabled:</b> {settings.AUTO_POST_ENABLED}\n"
+        f"<b>Dry run:</b> {settings.AUTO_POST_DRY_RUN}\n"
+        f"<b>Posts today:</b> {status['posts_today']}/{global_cfg.get('max_posts_per_day', 6)}\n"
+        f"<b>Last post:</b> {last_str}\n"
+        f"<b>Min gap:</b> {global_cfg.get('min_gap_minutes', 120)} min\n\n"
+        f"<b>Slots:</b>\n" + "\n".join(slot_lines) + "\n\n"
+        f"<b>Recent:</b>\n{recent_str}"
+    )
+    await update.message.reply_text(msg, parse_mode="HTML")
+
+
+async def autopause_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /autopause — toggle auto-posting pause state."""
+    if not _authorized(update.effective_user.id):
+        return
+
+    currently_paused = auto_state.is_paused()
+    auto_state.set_paused(not currently_paused)
+
+    if currently_paused:
+        await update.message.reply_text("Auto-posting <b>resumed</b>.", parse_mode="HTML")
+    else:
+        await update.message.reply_text("Auto-posting <b>paused</b>.", parse_mode="HTML")
+
+
+async def autoforce_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /autoforce <slot> — force a specific slot to post now."""
+    if not _authorized(update.effective_user.id):
+        return
+
+    text = (update.message.text or "").strip()
+    parts = text.split()
+
+    schedule = scheduler.load_schedule()
+    slots = schedule.get("slots", {})
+
+    if len(parts) < 2:
+        slot_list = ", ".join(f"<code>{s}</code>" for s in slots.keys())
+        await update.message.reply_text(
+            f"Usage: /autoforce <i>slot_name</i>\n\n"
+            f"Available: {slot_list}",
+            parse_mode="HTML",
+        )
+        return
+
+    slot_name = parts[1]
+    if slot_name not in slots:
+        slot_list = ", ".join(f"<code>{s}</code>" for s in slots.keys())
+        await update.message.reply_text(
+            f"Unknown slot: <code>{_esc(slot_name)}</code>\n\n"
+            f"Available: {slot_list}",
+            parse_mode="HTML",
+        )
+        return
+
+    dry_run = "--dry-run" in text or settings.AUTO_POST_DRY_RUN
+
+    # Block if there's already a pending draft
+    if state.has_pending() and not dry_run:
+        await update.message.reply_text(
+            "A draft is already pending. /approve, /reject, or /cancel it first.",
+            parse_mode="HTML",
+        )
+        return
+
+    await update.message.chat.send_action("typing")
+    await update.message.reply_text(
+        f"Forcing slot <b>{_esc(slot_name)}</b>{'  (dry run)' if dry_run else ''}...\n"
+        f"Generating draft for your review...",
+        parse_mode="HTML",
+    )
+
+    from scripts.auto_post import process_slot
+
+    global_config = schedule.get("global", {})
+    slot_config = slots[slot_name]
+
+    try:
+        bot = context.bot
+        success = await process_slot(
+            slot_name, slot_config, global_config,
+            dry_run=dry_run, bot=bot,
+        )
+        if success and not dry_run:
+            # Draft was sent via send_auto_draft — no extra message needed
+            pass
+        elif success and dry_run:
+            await update.message.reply_text(
+                f"Dry run for <b>{_esc(slot_name)}</b> complete. Check logs for details.",
+                parse_mode="HTML",
+            )
+        else:
+            await update.message.reply_text(
+                f"Slot <b>{_esc(slot_name)}</b> did not produce a draft. Check logs for details.",
+                parse_mode="HTML",
+            )
+    except Exception as e:
+        logger.error("autoforce failed for %s: %s", slot_name, e)
+        await update.message.reply_text(
+            f"Force draft failed: {_esc(str(e))}",
+            parse_mode="HTML",
+        )
