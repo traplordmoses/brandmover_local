@@ -7,7 +7,7 @@ and launches the auto-post scheduler as a background task.
 import asyncio
 import logging
 
-from telegram.ext import Application, CommandHandler, MessageHandler, filters
+from telegram.ext import Application, CallbackQueryHandler, CommandHandler, MessageHandler, filters
 
 from bot import handlers
 from config import settings
@@ -47,6 +47,9 @@ def create_bot() -> Application:
     app.add_handler(CommandHandler("lora_status", handlers.lora_status_command))
     app.add_handler(CommandHandler("history", handlers.history_command))
     app.add_handler(CommandHandler("analytics", handlers.analytics_command))
+
+    # Inline button callbacks (e.g. /generate approve/reject buttons)
+    app.add_handler(CallbackQueryHandler(handlers.generate_callback, pattern=r"^gen_"))
 
     # Photo uploads (reference images)
     app.add_handler(

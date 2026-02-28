@@ -62,7 +62,7 @@ def _get_brand_terms() -> str:
     """Build brand enforcement terms from guidelines config."""
     cfg = compositor_config.get_config()
     parts: list[str] = []
-    # Style keywords (e.g. "Frutiger Aero meets Y2K terminal")
+    # Style keywords from brand guidelines
     if cfg.style_keywords:
         parts.extend(cfg.style_keywords[:6])
     # Color palette phrase
@@ -290,32 +290,38 @@ def _extract_url(output) -> str | None:
     return str(output) if output else None
 
 
-def _build_input(model_id: str, prompt: str, negative_prompt: str = "") -> dict:
+def _build_input(
+    model_id: str,
+    prompt: str,
+    negative_prompt: str = "",
+    aspect_ratio: str | None = None,
+    size: str | None = None,
+) -> dict:
     """Build model-specific input payload for Replicate."""
     base: dict = {}
 
     if model_id == _MODELS["flux"]:
         base = {
             "prompt": prompt,
-            "aspect_ratio": "16:9",
+            "aspect_ratio": aspect_ratio or "16:9",
             "output_format": "webp",
         }
     elif model_id == _MODELS["nano-banana"]:
         base = {
             "prompt": prompt,
-            "aspect_ratio": "16:9",
+            "aspect_ratio": aspect_ratio or "16:9",
             "output_format": "jpg",
             "resolution": "2K",
         }
     elif model_id == _MODELS["recraft-svg"]:
         base = {
             "prompt": prompt,
-            "size": "1820x1024",
+            "size": size or "1820x1024",
         }
     elif model_id == _MODELS["seedream"]:
         base = {
             "prompt": prompt,
-            "aspect_ratio": "16:9",
+            "aspect_ratio": aspect_ratio or "16:9",
             "size": "2K",
         }
     else:
@@ -329,7 +335,16 @@ def _build_input(model_id: str, prompt: str, negative_prompt: str = "") -> dict:
     return base
 
 
-async def generate_image(prompt: str, content_type: str = "announcement") -> str | None:
+async def generate_image(
+    prompt: str,
+    content_type: str = "announcement",
+    *,
+    model_override: str | None = None,
+    aspect_ratio: str | None = None,
+    size_override: str | None = None,
+    negative_prompt_override: str | None = None,
+    skip_enhance: bool = False,
+) -> str | None:
     """
     Generate an image using Replicate with smart model routing and prompt enhancement.
 
@@ -339,6 +354,11 @@ async def generate_image(prompt: str, content_type: str = "announcement") -> str
     Args:
         prompt: Text prompt describing the desired image.
         content_type: Content type for model selection routing.
+        model_override: Force a specific Replicate model ID (skip auto-selection).
+        aspect_ratio: Override default aspect ratio (e.g. "1:1", "16:9").
+        size_override: Override size for recraft-svg (e.g. "1024x1024").
+        negative_prompt_override: Use this negative prompt instead of auto-generated.
+        skip_enhance: If True, skip prompt enhancement (caller already enhanced).
 
     Returns:
         URL of the generated image, or None if generation fails.
@@ -347,11 +367,21 @@ async def generate_image(prompt: str, content_type: str = "announcement") -> str
         logger.warning("REPLICATE_API_TOKEN not set — skipping image generation")
         return None
 
-    model_id, reason = select_model(content_type, prompt)
+    if model_override:
+        model_id = model_override
+        reason = "caller override"
+    else:
+        model_id, reason = select_model(content_type, prompt)
     logger.info("\U0001F3A8 Image model: %s (reason: %s)", model_id, reason)
 
     # Enhance the prompt with quality boosters and brand terms
-    enhanced_prompt, negative_prompt = enhance_prompt(prompt, content_type)
+    if skip_enhance:
+        enhanced_prompt = prompt
+        negative_prompt = negative_prompt_override or ""
+    else:
+        enhanced_prompt, negative_prompt = enhance_prompt(prompt, content_type)
+        if negative_prompt_override is not None:
+            negative_prompt = negative_prompt_override
     logger.info("Original prompt (%d chars): %s", len(prompt), prompt[:120])
     logger.info("Enhanced prompt (%d chars): %s", len(enhanced_prompt), enhanced_prompt[:200])
 
@@ -371,7 +401,10 @@ async def generate_image(prompt: str, content_type: str = "announcement") -> str
     }
 
     payload = {
-        "input": _build_input(model_id, enhanced_prompt, negative_prompt),
+        "input": _build_input(
+            model_id, enhanced_prompt, negative_prompt,
+            aspect_ratio=aspect_ratio, size=size_override,
+        ),
     }
 
     try:

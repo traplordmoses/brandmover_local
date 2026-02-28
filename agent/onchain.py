@@ -1,5 +1,5 @@
 """
-FOID loreboard data fetcher — uses OpenClaw scripts for on-chain data.
+On-chain loreboard data fetcher — uses OpenClaw scripts for on-chain data.
 Fetches board state, classifies events, and formats summaries for agent prompts.
 """
 
@@ -12,6 +12,7 @@ import subprocess  # nosec B404 — mitigated by allowlist + shlex
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from agent import compositor_config
 from config import settings
 
 logger = logging.getLogger(__name__)
@@ -30,7 +31,7 @@ class LoreboardEvent:
 
 @dataclass
 class LoreboardState:
-    """Parsed state of the FOID loreboard."""
+    """Parsed state of the on-chain loreboard."""
     events: list[LoreboardEvent] = field(default_factory=list)
     raw_data: dict = field(default_factory=dict)
     is_quiet: bool = False
@@ -224,7 +225,8 @@ def format_onchain_summary(state: LoreboardState, posted_event_ids: list[str] | 
     for e in events:
         by_type.setdefault(e.event_type, []).append(e)
 
-    lines = ["Here's what's happening on the FOID loreboard:\n"]
+    brand_name = compositor_config.get_config().brand_name or "the"
+    lines = [f"Here's what's happening on the {brand_name} loreboard:\n"]
 
     type_labels = {
         "proposal": "New Proposals",

@@ -45,9 +45,26 @@ class BrandConfig:
     fonts: dict[str, FontEntry] = field(default_factory=dict)
     style_keywords: list[str] = field(default_factory=list)
     avoid_terms: list[str] = field(default_factory=list)
+    product_description: str = ""
+    voice_traits: list[str] = field(default_factory=list)
+    visual_style_prompt: str = ""
+    brand_phrases: list[str] = field(default_factory=list)
+    content_themes: list[str] = field(default_factory=list)
     raw_hash: str = ""
     parsed_at: float = 0.0
     source_path: str = ""
+    # Layout profiles — configurable via ## LAYOUT PROFILES table
+    canvas_width: int = 1280
+    canvas_height: int = 720
+    logo_position: str = "top-left"
+    logo_padding: tuple[int, int] = field(default_factory=lambda: (50, 26))
+    logo_height: int = 44
+    image_x: int = 44
+    image_y: int = 90
+    image_width: int = 570
+    image_bottom_margin: int = 38
+    # Layout mappings — content_type → profile key overrides from guidelines
+    layout_mappings: dict[str, str] = field(default_factory=dict)
     # Visual effects — configurable via ## VISUAL EFFECTS table
     glass_opacity: int = 6
     glass_blur: int = 12
@@ -161,6 +178,82 @@ def _parse_avoid_terms(text: str) -> list[str]:
     return [t.strip() for t in avoid_match.group(1).split(",") if t.strip()]
 
 
+def _parse_product(text: str) -> str:
+    """Extract product description from **Product:** line."""
+    m = re.search(r"\*\*Product:\*\*\s*(.+)", text)
+    return m.group(1).strip() if m else ""
+
+
+def _parse_voice_traits(text: str) -> list[str]:
+    """Extract bullet items under **Core personality traits:** in VOICE & TONE section."""
+    section = re.search(r"##\s*VOICE\s*&\s*TONE(.*?)(?=\n##|\Z)", text, re.DOTALL)
+    if not section:
+        return []
+    block = section.group(1)
+    traits_start = re.search(r"\*\*Core personality traits:\*\*", block)
+    if not traits_start:
+        return []
+    after = block[traits_start.end():]
+    traits: list[str] = []
+    for line in after.split("\n"):
+        line = line.strip()
+        if line.startswith("- "):
+            # Take everything after "- ", strip leading/trailing formatting
+            trait = line[2:].strip()
+            # Remove trailing " — explanation" style descriptions
+            dash_pos = trait.find(" — ")
+            if dash_pos > 0:
+                trait = trait[:dash_pos].strip()
+            traits.append(trait)
+        elif traits and line and not line.startswith("-"):
+            break  # End of bullet list
+    return traits
+
+
+def _parse_visual_style_prompt(text: str) -> str:
+    """Extract first quoted line under **Image generation prompt guidance:** in ILLUSTRATION STYLE."""
+    section = re.search(r"##\s*ILLUSTRATION STYLE(.*?)(?=\n##|\Z)", text, re.DOTALL)
+    if not section:
+        return ""
+    block = section.group(1)
+    guidance = re.search(r"\*\*Image generation prompt guidance:\*\*", block)
+    if not guidance:
+        return ""
+    after = block[guidance.end():]
+    m = re.search(r'"([^"]+)"', after)
+    return m.group(1).strip() if m else ""
+
+
+def _parse_brand_phrases(text: str) -> list[str]:
+    """Extract quoted strings under **Established phrases:** in BRAND PHRASES section."""
+    section = re.search(r"##\s*BRAND PHRASES(.*?)(?=\n##|\Z)", text, re.DOTALL)
+    if not section:
+        return []
+    block = section.group(1)
+    start = re.search(r"\*\*Established phrases:\*\*", block)
+    if not start:
+        return []
+    after = block[start.end():]
+    phrases: list[str] = []
+    for m in re.finditer(r'"([^"]+)"', after):
+        phrase = m.group(1).strip()
+        if phrase:
+            phrases.append(phrase)
+        # Stop at the next bold header
+        if re.search(r"\n\*\*", after[:m.start()]):
+            # We've gone past the established phrases section
+            break
+    return phrases
+
+
+def _parse_themes(text: str) -> list[str]:
+    """Extract comma-separated themes from **Key Brand Themes:** line."""
+    m = re.search(r"\*\*Key Brand Themes:\*\*\s*(.+)", text)
+    if not m:
+        return []
+    return [t.strip() for t in m.group(1).split(",") if t.strip()]
+
+
 _EFFECTS_ROW = re.compile(
     r"\|\s*(?P<effect>[^|]+?)\s*\|\s*(?P<value>[^|]+?)\s*\|",
 )
@@ -208,6 +301,75 @@ def _parse_visual_effects(text: str) -> dict:
     return effects
 
 
+_LAYOUT_KEY_MAP = {
+    "canvas width": "canvas_width",
+    "canvas height": "canvas_height",
+    "logo position": "logo_position",
+    "logo padding": "logo_padding",
+    "logo height": "logo_height",
+    "image x": "image_x",
+    "image y": "image_y",
+    "image width": "image_width",
+    "image bottom margin": "image_bottom_margin",
+}
+
+_LAYOUT_ROW = re.compile(
+    r"\|\s*(?P<setting>[^|]+?)\s*\|\s*(?P<value>[^|]+?)\s*\|",
+)
+
+
+def _parse_layout_profiles(text: str) -> dict:
+    """Parse optional ## LAYOUT PROFILES table section."""
+    m = re.search(r"##\s*LAYOUT PROFILES(.*?)(?=\n##|\Z)", text, re.DOTALL)
+    if not m:
+        return {}
+    section = m.group(1)
+    layout: dict = {}
+    for row in _LAYOUT_ROW.finditer(section):
+        raw_setting = row.group("setting").strip().lower()
+        raw_value = row.group("value").strip()
+        # Skip header/separator rows
+        if raw_setting in ("setting", "---", "-------") or raw_setting.startswith("-"):
+            continue
+        key = _LAYOUT_KEY_MAP.get(raw_setting)
+        if not key:
+            continue
+        if key == "logo_padding":
+            # Parse "50, 26" → tuple
+            try:
+                parts = [int(v.strip()) for v in raw_value.split(",")]
+                if len(parts) == 2:
+                    layout[key] = tuple(parts)
+            except ValueError:
+                pass
+        elif key == "logo_position":
+            layout[key] = raw_value.lower().strip()
+        else:
+            try:
+                layout[key] = int(raw_value)
+            except ValueError:
+                pass
+    return layout
+
+
+def _parse_layout_mappings(text: str) -> dict[str, str]:
+    """Parse optional ## LAYOUT MAPPINGS table section."""
+    m = re.search(r"##\s*LAYOUT MAPPINGS(.*?)(?=\n##|\Z)", text, re.DOTALL)
+    if not m:
+        return {}
+    section = m.group(1)
+    mappings: dict[str, str] = {}
+    for row in _LAYOUT_ROW.finditer(section):
+        raw_type = row.group("setting").strip().lower()
+        raw_profile = row.group("value").strip().lower()
+        # Skip header/separator rows
+        if raw_type in ("content type", "---", "-------") or raw_type.startswith("-"):
+            continue
+        if raw_type and raw_profile:
+            mappings[raw_type] = raw_profile
+    return mappings
+
+
 # ---------------------------------------------------------------------------
 # Config cache
 # ---------------------------------------------------------------------------
@@ -237,7 +399,14 @@ def get_config(path: Path | None = None) -> BrandConfig:
     identity = _parse_identity(raw)
     style_kw = _parse_style_keywords(raw)
     avoid = _parse_avoid_terms(raw)
+    product = _parse_product(raw)
+    voice = _parse_voice_traits(raw)
+    vis_prompt = _parse_visual_style_prompt(raw)
+    phrases = _parse_brand_phrases(raw)
+    themes = _parse_themes(raw)
     effects = _parse_visual_effects(raw)
+    layout = _parse_layout_profiles(raw)
+    layout_map = _parse_layout_mappings(raw)
 
     _cached_config = BrandConfig(
         brand_name=identity.get("brand_name", ""),
@@ -248,9 +417,16 @@ def get_config(path: Path | None = None) -> BrandConfig:
         fonts=fonts,
         style_keywords=style_kw,
         avoid_terms=avoid,
+        product_description=product,
+        voice_traits=voice,
+        visual_style_prompt=vis_prompt,
+        brand_phrases=phrases,
+        content_themes=themes,
+        layout_mappings=layout_map,
         raw_hash=md5,
         parsed_at=time.time(),
         source_path=str(src),
+        **layout,
         **effects,
     )
     logger.info(

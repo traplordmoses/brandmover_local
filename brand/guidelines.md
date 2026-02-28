@@ -245,6 +245,43 @@ FOID Foundation mascot: **Foid Mommy** — AI oracle, digital priestess, spiritu
 
 ---
 
+## LAYOUT PROFILES
+
+| Setting              | Value     |
+|----------------------|-----------|
+| Canvas width         | 1280      |
+| Canvas height        | 720       |
+| Logo position        | top-left  |
+| Logo padding         | 50, 26    |
+| Logo height          | 44        |
+| Image x              | 44        |
+| Image y              | 90        |
+| Image width          | 570       |
+| Image bottom margin  | 38        |
+
+---
+
+## LAYOUT MAPPINGS
+
+| Content Type       | Profile       |
+|--------------------|---------------|
+| announcement       | announcement  |
+| campaign           | campaign      |
+| market             | market        |
+| market_commentary  | market        |
+| meme               | meme          |
+| engagement         | engagement    |
+| advice             | advice        |
+| lifestyle          | default       |
+| event              | default       |
+| educational        | default       |
+| brand_asset        | default       |
+| community          | default       |
+| brand_3d           | default       |
+| default            | default       |
+
+---
+
 ## TARGET AUDIENCE
 
 - **Primary:** Crypto-native internet culture enthusiasts — people who understand both on-chain mechanics and meme culture deeply. Ages 18-35, terminally online, active in Discord/X communities.

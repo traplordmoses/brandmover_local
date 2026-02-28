@@ -12,7 +12,7 @@ import time
 from pathlib import Path
 
 from PIL import Image as _PILImage
-from telegram import Update
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import ContextTypes
 
 from agent import asset_gen, auto_state, brain, compositor, compositor_config, engine, feedback, generation_history, guidelines, image_gen, publisher, scheduler, state
@@ -1032,12 +1032,10 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         await update.message.chat.send_action("typing")
         await update.message.reply_text("Checking image against brand guidelines...")
         try:
-            from agent import ingest
-            report = await ingest.check_asset_compliance(tmp_path)
-            await update.message.reply_text(
-                f"<b>Brand compliance report:</b>\n{_esc(report)}",
-                parse_mode="HTML",
-            )
+            from agent import brand_check
+            report = await brand_check.check_brand_compliance(tmp_path)
+            formatted = brand_check.format_compliance_report(report)
+            await update.message.reply_text(formatted, parse_mode="HTML")
         except Exception as e:
             logger.error("Brand check failed: %s", e)
             await update.message.reply_text(f"Brand check failed: {_esc(str(e))}", parse_mode="HTML")
@@ -1048,6 +1046,20 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     logger.info("Reference image saved to state: %s", tmp_path)
 
     caption = (update.message.caption or "").strip()
+
+    # Caption-based /brand_check — image sent with "/brand_check" as caption
+    if caption.lower().startswith("/brand_check"):
+        await update.message.chat.send_action("typing")
+        await update.message.reply_text("Checking image against brand guidelines...")
+        try:
+            from agent import brand_check
+            report = await brand_check.check_brand_compliance(tmp_path)
+            formatted = brand_check.format_compliance_report(report)
+            await update.message.reply_text(formatted, parse_mode="HTML")
+        except Exception as e:
+            logger.error("Brand check failed: %s", e)
+            await update.message.reply_text(f"Brand check failed: {_esc(str(e))}", parse_mode="HTML")
+        return
 
     # Check if caption matches a style profile name (e.g. "3d_card" or "style 3d_card")
     if caption:
@@ -1593,7 +1605,7 @@ async def generate_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     text = (update.message.text or "").strip()
     parts = text.split(maxsplit=2)  # "/generate", "type", "description..."
 
-    asset_types = "logo, icon, mascot, background, 3d_asset, banner, social_header"
+    asset_types = ", ".join(asset_gen.SUPPORTED_ASSET_TYPES)
     if len(parts) < 3:
         await update.message.reply_text(
             f"Usage: /generate <i>type</i> <i>description</i>\n\n"
@@ -1642,25 +1654,17 @@ async def generate_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             asset_type=asset_type,
             content_type=result.get("content_type", ""),
             prompt=result.get("prompt", description),
-            model_id="auto",
+            model_id=result.get("model_id", "auto"),
             image_urls=urls,
             original_request=f"/generate {asset_type} {description}",
         )
     except Exception as e:
         logger.warning("Failed to log generation history: %s", e)
 
-    # Send each option as a separate photo
-    for i, url in enumerate(urls, 1):
-        try:
-            await update.message.reply_photo(
-                photo=url,
-                caption=f"Option {i}/{len(urls)} — {_esc(asset_type)}",
-                parse_mode="HTML",
-            )
-        except Exception as e:
-            logger.warning("Failed to send option %d: %s", i, e)
+    # Build a 2x2 grid image and send with inline keyboard
+    grid_image = await _build_asset_grid(urls)
 
-    # Save as pending for /approve N
+    # Save as pending for /approve N (and callback buttons)
     state.save_pending(
         caption=f"[{asset_type}] {description}",
         hashtags=[],
@@ -1672,10 +1676,224 @@ async def generate_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         content_type=result.get("content_type"),
     )
 
-    await update.message.reply_text(
-        f"{len(urls)} option(s) generated. Use /approve N to select one.",
-        parse_mode="HTML",
-    )
+    if grid_image:
+        # Build inline keyboard: Approve 1-N + Reject All
+        buttons = [
+            InlineKeyboardButton(f"Approve {i}", callback_data=f"gen_approve:{i}")
+            for i in range(1, len(urls) + 1)
+        ]
+        buttons.append(
+            InlineKeyboardButton("Reject All", callback_data="gen_reject")
+        )
+        # Arrange: approve buttons on first row, reject on second
+        keyboard = InlineKeyboardMarkup([
+            buttons[:-1],
+            [buttons[-1]],
+        ])
+
+        await update.message.reply_photo(
+            photo=grid_image,
+            caption=f"<b>{_esc(asset_type)}</b> — {len(urls)} options generated",
+            parse_mode="HTML",
+            reply_markup=keyboard,
+        )
+    else:
+        # Fallback: send individual photos if grid fails
+        for i, url in enumerate(urls, 1):
+            try:
+                await update.message.reply_photo(
+                    photo=url,
+                    caption=f"Option {i}/{len(urls)} — {_esc(asset_type)}",
+                    parse_mode="HTML",
+                )
+            except Exception as e:
+                logger.warning("Failed to send option %d: %s", i, e)
+
+        await update.message.reply_text(
+            f"{len(urls)} option(s) generated. Use /approve N to select one.",
+            parse_mode="HTML",
+        )
+
+
+async def _build_asset_grid(urls: list[str]) -> io.BytesIO | None:
+    """Download images and compose a labeled 2x2 grid. Returns BytesIO or None."""
+    import httpx as _httpx
+
+    if not urls:
+        return None
+
+    images: list[_PILImage.Image] = []
+    try:
+        async with _httpx.AsyncClient(timeout=20, follow_redirects=True) as client:
+            for url in urls[:4]:
+                try:
+                    resp = await client.get(url)
+                    resp.raise_for_status()
+                    img = _PILImage.open(io.BytesIO(resp.content)).convert("RGB")
+                    images.append(img)
+                except Exception as e:
+                    logger.warning("Grid download failed for %s: %s", url[:60], e)
+    except Exception as e:
+        logger.warning("Grid build failed: %s", e)
+        return None
+
+    if not images:
+        return None
+
+    # Target cell size
+    cell_w, cell_h = 640, 480
+    pad = 8
+    label_h = 32
+
+    cols = 2 if len(images) > 1 else 1
+    rows = (len(images) + cols - 1) // cols
+    grid_w = cols * cell_w + (cols + 1) * pad
+    grid_h = rows * (cell_h + label_h) + (rows + 1) * pad
+
+    grid = _PILImage.new("RGB", (grid_w, grid_h), (20, 20, 40))
+
+    try:
+        from PIL import ImageDraw, ImageFont
+        draw = ImageDraw.Draw(grid)
+
+        try:
+            font = ImageFont.load_default(size=20)
+        except TypeError:
+            font = ImageFont.load_default()
+
+        for idx, img in enumerate(images):
+            col = idx % cols
+            row = idx // cols
+            x = pad + col * (cell_w + pad)
+            y = pad + row * (cell_h + label_h + pad)
+
+            # Crop-fill to cell size
+            sr = img.width / img.height
+            tr = cell_w / cell_h
+            if sr > tr:
+                nw, nh = int(cell_h * sr), cell_h
+            else:
+                nw, nh = cell_w, int(cell_w / sr)
+            resized = img.resize((nw, nh), _PILImage.LANCZOS)
+            ox, oy = (nw - cell_w) // 2, (nh - cell_h) // 2
+            cropped = resized.crop((ox, oy, ox + cell_w, oy + cell_h))
+
+            # Draw label background
+            draw.rectangle([x, y, x + cell_w, y + label_h], fill=(40, 40, 60))
+            draw.text((x + 10, y + 6), f"Option {idx + 1}", fill=(255, 255, 255), font=font)
+
+            grid.paste(cropped, (x, y + label_h))
+    except Exception as e:
+        logger.warning("Grid label drawing failed: %s", e)
+        return None
+
+    buf = io.BytesIO()
+    grid.save(buf, format="PNG", optimize=True)
+    buf.seek(0)
+    return buf
+
+
+async def generate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle inline button callbacks for /generate asset approval/rejection."""
+    query = update.callback_query
+    if not query or not query.data:
+        return
+
+    user_id = query.from_user.id if query.from_user else 0
+    if not _authorized(user_id):
+        await query.answer("Not authorized.")
+        return
+
+    data = query.data
+
+    if data.startswith("gen_approve:"):
+        # Parse option number
+        try:
+            option_num = int(data.split(":")[1])
+        except (ValueError, IndexError):
+            await query.answer("Invalid option.")
+            return
+
+        pending = state.get_pending()
+        if not pending:
+            await query.answer("Nothing pending to approve.")
+            return
+
+        image_urls = pending.get("image_urls", [])
+        if not image_urls or option_num < 1 or option_num > len(image_urls):
+            await query.answer(f"Invalid option {option_num}.")
+            return
+
+        # Select the chosen image
+        pending["image_url"] = image_urls[option_num - 1]
+
+        # Log feedback
+        count = await feedback.async_log_feedback(
+            request=pending.get("original_request", ""),
+            draft=pending,
+            accepted=True,
+            resources_used=pending.get("resources_used", []),
+        )
+
+        # Update generation history
+        try:
+            ts = pending.get("timestamp", 0)
+            if ts:
+                await generation_history.async_update_generation_status(ts, "approved")
+        except Exception as e:
+            logger.debug("Generation history update failed: %s", e)
+
+        # Add to LoRA training set
+        if pending.get("image_url"):
+            try:
+                from agent import lora_pipeline
+                lora_count, _ = await lora_pipeline.add_training_image_from_url(
+                    pending["image_url"],
+                    pending.get("image_prompt", ""),
+                    pending.get("content_type", "brand_asset"),
+                )
+                logger.info("LoRA training image added (%d total)", lora_count)
+            except Exception as e:
+                logger.debug("LoRA training image add failed: %s", e)
+
+        state.clear_pending()
+        await query.answer(f"Option {option_num} approved!")
+        await query.edit_message_caption(
+            caption=f"Approved option {option_num}",
+            parse_mode="HTML",
+        )
+
+    elif data == "gen_reject":
+        pending = state.get_pending()
+        if not pending:
+            await query.answer("Nothing pending.")
+            return
+
+        # Log rejection
+        await feedback.async_log_feedback(
+            request=pending.get("original_request", ""),
+            draft=pending,
+            accepted=False,
+            feedback_text="Rejected via button",
+            resources_used=pending.get("resources_used", []),
+        )
+
+        try:
+            ts = pending.get("timestamp", 0)
+            if ts:
+                await generation_history.async_update_generation_status(ts, "rejected")
+        except Exception as e:
+            logger.debug("Generation history update failed: %s", e)
+
+        state.clear_pending()
+        await query.answer("All options rejected.")
+        await query.edit_message_caption(
+            caption="Rejected. Use /generate again with feedback.",
+            parse_mode="HTML",
+        )
+
+    else:
+        await query.answer("Unknown action.")
 
 
 # ---------------------------------------------------------------------------
@@ -1788,15 +2006,73 @@ async def apply_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 # ---------------------------------------------------------------------------
 
 async def brand_check_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Handle /brand_check — check if an image matches brand guidelines."""
+    """Handle /brand_check — check if an image matches brand guidelines.
+
+    Supports three flows:
+    1. Reply to an image message with /brand_check
+    2. Send image with /brand_check as caption
+    3. Send /brand_check alone, then upload an image
+    """
     if not _authorized(update.effective_user.id):
         return
 
+    # Flow 1: reply to an image
+    reply = update.message.reply_to_message
+    if reply and (reply.photo or (reply.document and (reply.document.mime_type or "").startswith("image/"))):
+        tg_file = None
+        if reply.photo:
+            tg_file = await reply.photo[-1].get_file()
+        elif reply.document:
+            tg_file = await reply.document.get_file()
+
+        if tg_file:
+            await _run_brand_check(update, tg_file)
+            return
+
+    # Flow 2: image in same message (caption-based) — handled in handle_photo
+
+    # Flow 3: no image attached, wait for next upload
     context.user_data["awaiting_brand_check"] = True
     await update.message.reply_text(
         "Send me an image and I'll check how well it matches your brand guidelines.\n\n"
-        "I'll analyze colors, style, and overall compliance.",
+        "I'll analyze colors, typography, visual style, brand elements, and layout.",
     )
+
+
+async def _run_brand_check(update: Update, tg_file) -> None:
+    """Download image, run brand compliance check, and send formatted report."""
+    timestamp = int(time.time())
+    tmp_path = str(Path(tempfile.gettempdir()) / f"brandmover_check_{timestamp}.jpg")
+
+    try:
+        await tg_file.download_to_drive(tmp_path)
+    except Exception as e:
+        logger.error("Failed to download image for brand check: %s", e)
+        await update.message.reply_text(
+            "couldn't download that image, try sending it as a photo instead of a file"
+        )
+        return
+
+    # Convert to JPEG
+    try:
+        img = _PILImage.open(tmp_path).convert("RGB")
+        img.save(tmp_path, "JPEG", quality=95)
+    except Exception as e:
+        logger.warning("Image conversion failed (using as-is): %s", e)
+
+    await update.message.chat.send_action("typing")
+    await update.message.reply_text("Checking image against brand guidelines...")
+
+    try:
+        from agent import brand_check
+        report = await brand_check.check_brand_compliance(tmp_path)
+        formatted = brand_check.format_compliance_report(report)
+        await update.message.reply_text(formatted, parse_mode="HTML")
+    except Exception as e:
+        logger.error("Brand check failed: %s", e)
+        await update.message.reply_text(
+            f"Brand check failed: {_esc(str(e))}", parse_mode="HTML"
+        )
 
 
 # ---------------------------------------------------------------------------

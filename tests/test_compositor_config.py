@@ -8,6 +8,13 @@ from agent.compositor_config import (
     _parse_style_keywords,
     _parse_avoid_terms,
     _parse_visual_effects,
+    _parse_product,
+    _parse_voice_traits,
+    _parse_visual_style_prompt,
+    _parse_brand_phrases,
+    _parse_themes,
+    _parse_layout_profiles,
+    _parse_layout_mappings,
 )
 
 
@@ -18,6 +25,19 @@ SAMPLE_GUIDELINES = """\
 **Tagline:** Build the future
 **Website:** https://testbrand.io
 **X Handle:** @testbrand
+**Product:** A platform for collaborative design — Canvas (real-time whiteboard) and Toolkit (component library).
+
+**Key Brand Themes:** Innovation, collaboration, open source, developer experience
+
+## VOICE & TONE
+
+**Core personality traits:**
+- Bold and direct — no fluff
+- Technical but approachable — speaks developer
+- Optimistic without hype — grounded enthusiasm
+
+**Writing style:**
+- Short, punchy sentences.
 
 ## COLOR PALETTE
 
@@ -38,7 +58,21 @@ SAMPLE_GUIDELINES = """\
 
 - **Futuristic 3D renders** with metallic sheen
 - **Vibrant neon glow** effects
+
+**Image generation prompt guidance:**
+- "dark background, neon blue glow, glass morphism panels, futuristic aesthetic"
+- "deep navy background, cyan neon highlights"
 - Avoid: flat clip-art, low resolution, stock photos
+
+## BRAND PHRASES & SLANG
+
+**Established phrases:**
+- "build the future, together" — primary tagline
+- "ship it." — developer ethos
+- "code is craft." — quality philosophy
+
+**Community slang:**
+- "ship" — deploy to production
 
 ## VISUAL EFFECTS
 
@@ -51,6 +85,28 @@ SAMPLE_GUIDELINES = """\
 | Orb alpha      | 20          |
 | Orb count      | 5           |
 | Noise opacity  | 3           |
+
+## LAYOUT PROFILES
+
+| Setting              | Value     |
+|----------------------|-----------|
+| Canvas width         | 1920      |
+| Canvas height        | 1080      |
+| Logo position        | top-right |
+| Logo padding         | 60, 30    |
+| Logo height          | 52        |
+| Image x              | 50        |
+| Image y              | 100       |
+| Image width          | 800       |
+| Image bottom margin  | 44        |
+
+## LAYOUT MAPPINGS
+
+| Content Type       | Profile       |
+|--------------------|---------------|
+| announcement       | campaign      |
+| meme               | engagement    |
+| lifestyle          | announcement  |
 """
 
 
@@ -109,9 +165,118 @@ def test_parse_visual_effects_missing():
     assert effects == {}
 
 
+def test_parse_product():
+    product = _parse_product(SAMPLE_GUIDELINES)
+    assert "platform for collaborative design" in product
+    assert "Canvas" in product
+    assert "Toolkit" in product
+
+
+def test_parse_voice_traits():
+    traits = _parse_voice_traits(SAMPLE_GUIDELINES)
+    assert len(traits) == 3
+    assert "Bold and direct" in traits[0]
+    assert "Technical but approachable" in traits[1]
+    assert "Optimistic without hype" in traits[2]
+
+
+def test_parse_visual_style_prompt():
+    prompt = _parse_visual_style_prompt(SAMPLE_GUIDELINES)
+    assert "dark background" in prompt
+    assert "neon blue glow" in prompt
+    assert "futuristic aesthetic" in prompt
+
+
+def test_parse_brand_phrases():
+    phrases = _parse_brand_phrases(SAMPLE_GUIDELINES)
+    assert len(phrases) >= 3
+    assert "build the future, together" in phrases
+    assert "ship it." in phrases
+    assert "code is craft." in phrases
+
+
+def test_parse_themes():
+    themes = _parse_themes(SAMPLE_GUIDELINES)
+    assert "Innovation" in themes
+    assert "collaboration" in themes
+    assert "open source" in themes
+    assert "developer experience" in themes
+
+
+def test_parse_product_missing():
+    text = "# Brand\nNo product line here."
+    assert _parse_product(text) == ""
+
+
+def test_parse_voice_traits_missing():
+    text = "# Brand\nNo voice section."
+    assert _parse_voice_traits(text) == []
+
+
+def test_parse_layout_profiles():
+    layout = _parse_layout_profiles(SAMPLE_GUIDELINES)
+    assert layout["canvas_width"] == 1920
+    assert layout["canvas_height"] == 1080
+    assert layout["logo_position"] == "top-right"
+    assert layout["logo_padding"] == (60, 30)
+    assert layout["logo_height"] == 52
+    assert layout["image_x"] == 50
+    assert layout["image_y"] == 100
+    assert layout["image_width"] == 800
+    assert layout["image_bottom_margin"] == 44
+
+
+def test_parse_layout_profiles_missing():
+    text = "# Brand\nNo layout section."
+    assert _parse_layout_profiles(text) == {}
+
+
+def test_parse_layout_profiles_partial():
+    text = """\
+## LAYOUT PROFILES
+
+| Setting        | Value |
+|----------------|-------|
+| Canvas width   | 1600  |
+| Logo height    | 48    |
+"""
+    layout = _parse_layout_profiles(text)
+    assert layout["canvas_width"] == 1600
+    assert layout["logo_height"] == 48
+    assert "canvas_height" not in layout
+    assert "logo_padding" not in layout
+
+
+def test_parse_layout_mappings():
+    mappings = _parse_layout_mappings(SAMPLE_GUIDELINES)
+    assert mappings["announcement"] == "campaign"
+    assert mappings["meme"] == "engagement"
+    assert mappings["lifestyle"] == "announcement"
+
+
+def test_parse_layout_mappings_missing():
+    text = "# Brand\nNo layout mappings."
+    assert _parse_layout_mappings(text) == {}
+
+
 def test_brand_config_defaults():
     cfg = BrandConfig()
     assert cfg.glass_opacity == 6
     assert cfg.glass_blur == 12
     assert cfg.orb_count == 7
     assert cfg.glass_inset == (40, 70, 40, 30)
+    assert cfg.product_description == ""
+    assert cfg.voice_traits == []
+    assert cfg.visual_style_prompt == ""
+    assert cfg.brand_phrases == []
+    assert cfg.content_themes == []
+    assert cfg.canvas_width == 1280
+    assert cfg.canvas_height == 720
+    assert cfg.logo_position == "top-left"
+    assert cfg.logo_padding == (50, 26)
+    assert cfg.logo_height == 44
+    assert cfg.image_x == 44
+    assert cfg.image_y == 90
+    assert cfg.image_width == 570
+    assert cfg.image_bottom_margin == 38
+    assert cfg.layout_mappings == {}

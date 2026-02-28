@@ -16,11 +16,14 @@ from PIL import Image, ImageDraw, ImageFilter, ImageFont
 
 logger = logging.getLogger(__name__)
 
-CANVAS_W, CANVAS_H = 1280, 720
-
-# Brand colors — resolved at runtime from brand/guidelines.md
+# Brand colors and layout — resolved at runtime from brand/guidelines.md
 from agent import compositor_config as _brand_cfg
 from agent.content_types import COMPOSITOR_PROFILE_MAP as _PROFILE_MAP
+
+
+def _layout():
+    """Return layout dimensions from brand config."""
+    return _brand_cfg.get_config()
 
 def _c(role: str, fallback: tuple) -> tuple:
     """Shorthand for brand color lookup with hardcoded fallback."""
@@ -282,21 +285,25 @@ def _draw_tracked(
 # ---------------------------------------------------------------------------
 
 def _create_background(profile: CompositorProfile) -> Image.Image:
-    """Create a Frutiger Aero background with glass-morphism orbs.
+    """Create a branded background with glass-morphism orbs.
 
-    Matches the foid.fun aesthetic: dark navy base, soft bubbly glass orbs
-    in aqua/lavender/periwinkle, frosted glow layers.
+    Colors and effects read from brand config. Glow geometry is relative
+    to canvas dimensions so layouts scale with config changes.
     """
     cfg = _brand_cfg.get_config()
-    canvas = Image.new("RGBA", (CANVAS_W, CANVAS_H), _c("background", (14, 15, 43)) + (255,))
+    cw, ch = cfg.canvas_width, cfg.canvas_height
+    canvas = Image.new("RGBA", (cw, ch), _c("background", (14, 15, 43)) + (255,))
     r, g, b = profile.glow_color
 
+    # Scale factors relative to the reference 1280x720 canvas
+    sx, sy = cw / 1280, ch / 720
+
     # --- Primary glow (from original profile) ---
-    cx = int(CANVAS_W * profile.glow_x_factor) + 140
-    cy = int(CANVAS_H * profile.glow_y_factor) + 90
+    cx = int(cw * profile.glow_x_factor + 140 * sx)
+    cy = int(ch * profile.glow_y_factor + 90 * sy)
 
     def _glow(x, y, size, color, alpha, blur):
-        lay = Image.new("RGBA", (CANVAS_W, CANVAS_H), (0, 0, 0, 0))
+        lay = Image.new("RGBA", (cw, ch), (0, 0, 0, 0))
         cr, cg, cb = color
         ImageDraw.Draw(lay).ellipse(
             [x - size, y - int(size * 0.75), x + size, y + int(size * 0.75)],
@@ -304,26 +311,29 @@ def _create_background(profile: CompositorProfile) -> Image.Image:
         )
         return lay.filter(ImageFilter.GaussianBlur(radius=blur))
 
-    # Base glow — softer spread
-    canvas = Image.alpha_composite(canvas, _glow(cx, cy, 500, (r, g, b), profile.glow_intensity_1, 110))
-    canvas = Image.alpha_composite(canvas, _glow(cx, cy, 280, (r, g, b), profile.glow_intensity_2, 70))
+    # Base glow — softer spread (sizes scale with canvas)
+    canvas = Image.alpha_composite(canvas, _glow(cx, cy, int(500 * sx), (r, g, b), profile.glow_intensity_1, int(110 * sx)))
+    canvas = Image.alpha_composite(canvas, _glow(cx, cy, int(280 * sx), (r, g, b), profile.glow_intensity_2, int(70 * sx)))
 
-    # --- Bubbly glass orbs — scattered soft spheres ---
-    # Each orb is a radial gradient circle with a bright center and soft falloff
-    # Alpha values are scaled relative to cfg.orb_alpha_base (default 18)
+    # --- Soft glow orbs — colors from brand palette ---
+    # Positions and radii are specified as fractions of the reference 1280x720 canvas
+    # and scaled to the actual canvas dimensions.
     _ab = cfg.orb_alpha_base
     _ORB_SPECS = [
-        # (x, y, radius, color, center_alpha, edge_blur)
-        (180,  140, 110, _c("primary",  (114, 225, 255)), _ab + 4, 55),   # top-left aqua orb
-        (1050, 520,  90, _c("accent_2", (205, 183, 255)), _ab,     45),   # bottom-right lavender orb
-        (900,  100,  70, _c("accent_3", (143, 170, 242)), _ab + 2, 40),   # top-right periwinkle orb
-        (350,  560,  85, _c("accent_1", (255, 179, 217)), max(_ab - 6, 2), 50),   # bottom-left pink orb (subtle)
-        (640,  360, 130, _c("primary",  (114, 225, 255)), max(_ab - 8, 2), 80),   # center aqua wash (very subtle)
-        (80,   400,  60, _c("accent_3", (143, 170, 242)), _ab - 2, 35),   # left-edge periwinkle
-        (1180, 260,  55, _c("accent_2", (205, 183, 255)), _ab - 4, 30),   # right-edge lavender
+        # (x_frac, y_frac, ref_radius, color, center_alpha, ref_blur)
+        (0.141, 0.194, 110, _c("primary",  (114, 225, 255)), _ab + 4, 55),   # primary orb
+        (0.820, 0.722,  90, _c("accent_2", (205, 183, 255)), _ab,     45),   # accent_2 orb
+        (0.703, 0.139,  70, _c("accent_3", (143, 170, 242)), _ab + 2, 40),   # accent_3 orb
+        (0.273, 0.778,  85, _c("accent_1", (255, 179, 217)), max(_ab - 6, 2), 50),   # accent_1 orb
+        (0.500, 0.500, 130, _c("primary",  (114, 225, 255)), max(_ab - 8, 2), 80),   # primary wash
+        (0.063, 0.556,  60, _c("accent_3", (143, 170, 242)), _ab - 2, 35),   # accent_3 edge
+        (0.922, 0.361,  55, _c("accent_2", (205, 183, 255)), _ab - 4, 30),   # accent_2 edge
     ]
 
-    for ox, oy, rad, color, alpha, blur in _ORB_SPECS[:cfg.orb_count]:
+    for xf, yf, ref_rad, color, alpha, ref_blur in _ORB_SPECS[:cfg.orb_count]:
+        ox, oy = int(xf * cw), int(yf * ch)
+        rad = int(ref_rad * sx)
+        blur = int(ref_blur * sx)
         # Outer glow
         canvas = Image.alpha_composite(canvas, _glow(ox, oy, rad, color, alpha, blur))
         # Inner bright core (smaller, brighter)
@@ -331,11 +341,10 @@ def _create_background(profile: CompositorProfile) -> Image.Image:
 
     # --- Glass morphism tint overlay — faint frosted panel ---
     gi = cfg.glass_inset  # (left, top, right, bottom)
-    frost = Image.new("RGBA", (CANVAS_W, CANVAS_H), (0, 0, 0, 0))
+    frost = Image.new("RGBA", (cw, ch), (0, 0, 0, 0))
     fd = ImageDraw.Draw(frost)
-    # Subtle rounded panel tint across the center
     fd.rounded_rectangle(
-        [gi[0], gi[1], CANVAS_W - gi[2], CANVAS_H - gi[3]],
+        [gi[0], gi[1], cw - gi[2], ch - gi[3]],
         radius=cfg.glass_radius,
         fill=(255, 255, 255, cfg.glass_opacity),
     )
@@ -423,16 +432,16 @@ def _block_h(title: str, subtitle: str, profile: CompositorProfile, max_w: int) 
     return h
 
 
-# ---------------------------------------------------------------------------
-# Constants
-# ---------------------------------------------------------------------------
-LOGO_H = 44
-LOGO_X, LOGO_Y = 50, 26
+def _logo_xy():
+    """Return (logo_x, logo_y, logo_h) from config."""
+    cfg = _layout()
+    return cfg.logo_padding[0], cfg.logo_padding[1], cfg.logo_height
 
-IMG_X = 44
-IMG_Y = 90
-IMG_W = 570
-IMG_H = CANVAS_H - IMG_Y - 38   # ~592px
+
+def _img_area():
+    """Return (img_x, img_y, img_w, img_h) from config."""
+    cfg = _layout()
+    return cfg.image_x, cfg.image_y, cfg.image_width, cfg.canvas_height - cfg.image_y - cfg.image_bottom_margin
 
 
 # ---------------------------------------------------------------------------
@@ -443,22 +452,27 @@ def _render_split(
     canvas, feature_img, title, subtitle, platform, profile
 ):
     draw = ImageDraw.Draw(canvas)
-    logo_w = _draw_brand_logo(canvas, LOGO_X, LOGO_Y, LOGO_H)
-    _draw_platform_badge(draw, LOGO_X + logo_w + 10, LOGO_Y, platform, LOGO_H)
+    cfg = _layout()
+    cw = cfg.canvas_width
+    lx, ly, lh = _logo_xy()
+    ix, iy, iw, ih = _img_area()
+
+    logo_w = _draw_brand_logo(canvas, lx, ly, lh)
+    _draw_platform_badge(draw, lx + logo_w + 10, ly, platform, lh)
 
     if feature_img:
-        _blend_image_into_canvas(canvas, feature_img, IMG_X, IMG_Y, IMG_W, IMG_H,
+        _blend_image_into_canvas(canvas, feature_img, ix, iy, iw, ih,
                                  fade_strength=1.4)
 
-    text_x    = IMG_X + IMG_W + 48
-    text_max_w = CANVAS_W - text_x - 44
+    text_x    = ix + iw + 48
+    text_max_w = cw - text_x - 44
     t  = title.upper() if profile.title_uppercase else title
     tf = _fit_font_to_width(t, "black", profile.title_size, text_max_w) if t \
          else _load_font("black", profile.title_size)
     sf = _load_font("semibold", profile.subtitle_size)
 
     bh     = _block_h(t, subtitle, profile, text_max_w)
-    text_y = IMG_Y + (IMG_H - bh) // 2
+    text_y = iy + (ih - bh) // 2
 
     if t:
         bb = tf.getbbox(t)
@@ -476,32 +490,35 @@ def _render_full_bleed(
     canvas, feature_img, title, subtitle, platform, profile
 ):
     draw = ImageDraw.Draw(canvas)
+    cfg = _layout()
+    cw, ch = cfg.canvas_width, cfg.canvas_height
+    lx, ly, lh = _logo_xy()
 
     if feature_img:
-        filled = _crop_fill(feature_img.convert("RGBA"), CANVAS_W, CANVAS_H)
+        filled = _crop_fill(feature_img.convert("RGBA"), cw, ch)
         canvas.paste(filled, (0, 0))
 
-    scrim = Image.new("RGBA", (CANVAS_W, CANVAS_H), (0, 0, 0, 0))
+    scrim = Image.new("RGBA", (cw, ch), (0, 0, 0, 0))
     sd    = ImageDraw.Draw(scrim)
     for i in range(80):
         a  = int(profile.scrim_opacity * (1 - i / 80) ** 0.6)
-        x0 = int(CANVAS_W * i / 80)
-        x1 = int(CANVAS_W * (i+1) / 80)
-        sd.rectangle([x0, 0, x1, CANVAS_H], fill=(0, 0, 0, a))
+        x0 = int(cw * i / 80)
+        x1 = int(cw * (i+1) / 80)
+        sd.rectangle([x0, 0, x1, ch], fill=(0, 0, 0, a))
     canvas.alpha_composite(scrim)
 
-    logo_w = _draw_brand_logo(canvas, LOGO_X, LOGO_Y, LOGO_H)
-    _draw_platform_badge(draw, LOGO_X + logo_w + 10, LOGO_Y, platform, LOGO_H)
+    logo_w = _draw_brand_logo(canvas, lx, ly, lh)
+    _draw_platform_badge(draw, lx + logo_w + 10, ly, platform, lh)
 
     text_x    = 56
-    text_max_w = int(CANVAS_W * 0.52)
+    text_max_w = int(cw * 0.52)
     t  = title.upper() if profile.title_uppercase else title
     tf = _fit_font_to_width(t, "black", profile.title_size, text_max_w) if t \
          else _load_font("black", profile.title_size)
     sf = _load_font("semibold", profile.subtitle_size)
 
     bh     = _block_h(t, subtitle, profile, text_max_w)
-    text_y = (CANVAS_H - bh) // 2
+    text_y = (ch - bh) // 2
 
     if t:
         bb = tf.getbbox(t)
@@ -519,18 +536,24 @@ def _render_centered(
     canvas, feature_img, title, subtitle, platform, profile
 ):
     draw = ImageDraw.Draw(canvas)
-    logo_w = _draw_brand_logo(canvas, LOGO_X, LOGO_Y, LOGO_H)
-    _draw_platform_badge(draw, LOGO_X + logo_w + 10, LOGO_Y, platform, LOGO_H)
+    cfg = _layout()
+    cw, ch = cfg.canvas_width, cfg.canvas_height
+    lx, ly, lh = _logo_xy()
 
-    iw, ih = 600, 380
-    ix = (CANVAS_W - iw) // 2
-    iy = 85
+    logo_w = _draw_brand_logo(canvas, lx, ly, lh)
+    _draw_platform_badge(draw, lx + logo_w + 10, ly, platform, lh)
+
+    # Centered image area — proportional to canvas
+    iw = int(cw * 600 / 1280)
+    ih = int(ch * 380 / 720)
+    ix = (cw - iw) // 2
+    iy = int(ch * 85 / 720)
 
     if feature_img:
         _blend_image_into_canvas(canvas, feature_img, ix, iy, iw, ih, fade_strength=1.3)
 
     text_y    = iy + ih + 28
-    text_max_w = CANVAS_W - 120
+    text_max_w = cw - 120
     t  = title.upper() if profile.title_uppercase else title
     tf = _fit_font_to_width(t, "black", profile.title_size, text_max_w) if t \
          else _load_font("black", profile.title_size)
@@ -539,14 +562,14 @@ def _render_centered(
     if t:
         bb = tf.getbbox(t)
         lw = bb[2] - bb[0]
-        _draw_tracked(draw, ((CANVAS_W - lw) // 2, text_y - bb[1]), t, tf, profile.title_color, tracking=1)
+        _draw_tracked(draw, ((cw - lw) // 2, text_y - bb[1]), t, tf, profile.title_color, tracking=1)
         text_y += (bb[3] - bb[1]) + 24
 
     if subtitle:
         for line in _wrap(subtitle, sf, text_max_w):
             bb = sf.getbbox(line)
             lw = bb[2] - bb[0]
-            draw.text(((CANVAS_W - lw) // 2, text_y - bb[1]), line,
+            draw.text(((cw - lw) // 2, text_y - bb[1]), line,
                       fill=profile.subtitle_color, font=sf)
             text_y += (bb[3] - bb[1]) + 6
 
@@ -579,7 +602,9 @@ async def compose_branded_image(
         return None
 
     profiles = _get_profiles()
-    profile_key = _PROFILE_MAP.get(content_type, "default")
+    cfg = _layout()
+    # Config layout_mappings override hardcoded COMPOSITOR_PROFILE_MAP
+    profile_key = cfg.layout_mappings.get(content_type) or _PROFILE_MAP.get(content_type, "default")
     profile = profiles.get(profile_key, profiles["default"])
 
     try:
