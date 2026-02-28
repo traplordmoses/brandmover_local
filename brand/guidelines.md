@@ -245,6 +245,20 @@ FOID Foundation mascot: **Foid Mommy** — AI oracle, digital priestess, spiritu
 
 ---
 
+## VISUAL EFFECTS
+
+| Effect         | Value          |
+|----------------|----------------|
+| Glass opacity  | 6              |
+| Glass blur     | 12             |
+| Glass radius   | 28             |
+| Glass inset    | 40, 70, 40, 30 |
+| Orb alpha      | 18             |
+| Orb count      | 7              |
+| Noise opacity  | 0              |
+
+---
+
 ## LAYOUT PROFILES
 
 | Setting              | Value     |
