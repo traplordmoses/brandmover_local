@@ -15,7 +15,7 @@ from PIL import Image as _PILImage
 from telegram import Update
 from telegram.ext import ContextTypes
 
-from agent import auto_state, brain, compositor, compositor_config, engine, feedback, guidelines, image_gen, publisher, scheduler, state
+from agent import asset_gen, auto_state, brain, compositor, compositor_config, engine, feedback, guidelines, image_gen, publisher, scheduler, state
 from config import settings
 
 logger = logging.getLogger(__name__)
@@ -90,6 +90,11 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         "/autostatus — Auto-posting scheduler status\n"
         "/autopause — Pause/resume auto-posting\n"
         "/autoforce <i>slot</i> — Force a specific auto-post slot\n"
+        "/generate <i>type description</i> — Generate a standalone asset\n"
+        "/logo — View/set brand logo\n"
+        "/ingest — Extract brand info from an image\n"
+        "/brand_check — Check an image against brand guidelines\n"
+        "/train_lora — Trigger LoRA training from approved images\n"
         "/help — Show this message"
     )
     await update.message.reply_text(msg, parse_mode="HTML")
@@ -280,6 +285,25 @@ async def approve_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                 logger.info("Saved approved mascot output: %s", save_path)
         except Exception as e:
             logger.warning("Failed to save mascot output: %s", e)
+
+    # Add to LoRA training set
+    if pending.get("image_url"):
+        try:
+            from agent import lora_pipeline
+            img_url = pending["image_url"]
+            img_prompt = pending.get("image_prompt", "")
+            ct = pending.get("content_type", composed_ct or "announcement")
+            lora_count, threshold_hit = await lora_pipeline.add_training_image_from_url(
+                img_url, img_prompt, ct,
+            )
+            logger.info("LoRA training image added (%d total)", lora_count)
+            if threshold_hit:
+                await update.message.reply_text(
+                    f"Training set reached {lora_count} images! "
+                    f"Use /train_lora to start LoRA training.",
+                )
+        except Exception as e:
+            logger.warning("Failed to add LoRA training image: %s", e)
 
     # Post to X
     tweet_url = None
@@ -926,6 +950,69 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     except Exception as e:
         logger.warning("Image conversion failed (using as-is): %s", e)
 
+    # --- Priority flag checks (logo > ingest > brand_check) ---
+    user_data = context.user_data if context else {}
+
+    if user_data.get("awaiting_logo_upload"):
+        user_data["awaiting_logo_upload"] = False
+        logo_dir = Path(settings.BRAND_FOLDER) / "assets"
+        logo_dir.mkdir(parents=True, exist_ok=True)
+        logo_dest = logo_dir / "logo.png"
+        try:
+            _PILImage.open(tmp_path).convert("RGBA").save(str(logo_dest), "PNG")
+            await update.message.reply_text(
+                f"Brand logo saved to <code>{_esc(str(logo_dest))}</code>",
+                parse_mode="HTML",
+            )
+            logger.info("Brand logo updated: %s", logo_dest)
+        except Exception as e:
+            logger.error("Failed to save logo: %s", e)
+            await update.message.reply_text(f"Failed to save logo: {_esc(str(e))}", parse_mode="HTML")
+        return
+
+    if user_data.get("awaiting_ingest_image"):
+        user_data["awaiting_ingest_image"] = False
+        await update.message.chat.send_action("typing")
+        await update.message.reply_text("Analyzing image for brand elements...")
+        try:
+            from agent import ingest
+            extracted = await ingest.extract_brand_from_image(tmp_path)
+            report = await ingest.diff_against_guidelines(extracted)
+            # Send extracted info
+            import json
+            extracted_text = json.dumps(extracted, indent=2)
+            if len(extracted_text) > 3000:
+                extracted_text = extracted_text[:3000] + "\n..."
+            await update.message.reply_text(
+                f"<b>Extracted brand elements:</b>\n<pre>{_esc(extracted_text)}</pre>",
+                parse_mode="HTML",
+            )
+            await update.message.reply_text(
+                f"<b>Compliance report:</b>\n{_esc(report)}",
+                parse_mode="HTML",
+            )
+        except Exception as e:
+            logger.error("Brand ingestion failed: %s", e)
+            await update.message.reply_text(f"Ingestion failed: {_esc(str(e))}", parse_mode="HTML")
+        return
+
+    if user_data.get("awaiting_brand_check"):
+        user_data["awaiting_brand_check"] = False
+        await update.message.chat.send_action("typing")
+        await update.message.reply_text("Checking image against brand guidelines...")
+        try:
+            from agent import ingest
+            report = await ingest.check_asset_compliance(tmp_path)
+            await update.message.reply_text(
+                f"<b>Brand compliance report:</b>\n{_esc(report)}",
+                parse_mode="HTML",
+            )
+        except Exception as e:
+            logger.error("Brand check failed: %s", e)
+            await update.message.reply_text(f"Brand check failed: {_esc(str(e))}", parse_mode="HTML")
+        return
+
+    # --- Normal flow: set as reference image ---
     state.set_reference_image(tmp_path)
     logger.info("Reference image saved to state: %s", tmp_path)
 
@@ -1461,3 +1548,202 @@ async def autoforce_command(update: Update, context: ContextTypes.DEFAULT_TYPE) 
             f"Force draft failed: {_esc(str(e))}",
             parse_mode="HTML",
         )
+
+
+# ---------------------------------------------------------------------------
+# /generate — standalone asset generation
+# ---------------------------------------------------------------------------
+
+async def generate_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /generate <type> <description> — generate a standalone branded asset."""
+    if not _authorized(update.effective_user.id):
+        return
+
+    text = (update.message.text or "").strip()
+    parts = text.split(maxsplit=2)  # "/generate", "type", "description..."
+
+    asset_types = "logo, icon, mascot, background, 3d_asset, banner, social_header"
+    if len(parts) < 3:
+        await update.message.reply_text(
+            f"Usage: /generate <i>type</i> <i>description</i>\n\n"
+            f"Types: {_esc(asset_types)}\n\n"
+            f"Example: <code>/generate logo a shield with lightning bolt</code>",
+            parse_mode="HTML",
+        )
+        return
+
+    asset_type = parts[1].lower()
+    description = parts[2]
+
+    if _rate_limited(update.effective_user.id):
+        await update.message.reply_text(
+            f"Please wait {_RATE_LIMIT_SECONDS}s between requests."
+        )
+        return
+
+    await update.message.chat.send_action("upload_photo")
+    await update.message.reply_text(
+        f"Generating <b>{_esc(asset_type)}</b> options...",
+        parse_mode="HTML",
+    )
+
+    try:
+        result = await asset_gen.generate_asset(asset_type, description)
+    except Exception as e:
+        logger.error("generate_asset failed: %s", e)
+        await update.message.reply_text(f"Generation failed: {_esc(str(e))}", parse_mode="HTML")
+        return
+
+    if result.get("error"):
+        await update.message.reply_text(
+            f"Error: {_esc(result['error'])}", parse_mode="HTML"
+        )
+        return
+
+    urls = result.get("urls", [])
+    if not urls:
+        await update.message.reply_text("No images were generated. Check logs for details.")
+        return
+
+    # Send each option as a separate photo
+    for i, url in enumerate(urls, 1):
+        try:
+            await update.message.reply_photo(
+                photo=url,
+                caption=f"Option {i}/{len(urls)} — {_esc(asset_type)}",
+                parse_mode="HTML",
+            )
+        except Exception as e:
+            logger.warning("Failed to send option %d: %s", i, e)
+
+    # Save as pending for /approve N
+    state.save_pending(
+        caption=f"[{asset_type}] {description}",
+        hashtags=[],
+        image_url=urls[0] if urls else "",
+        alt_text=description,
+        image_prompt=result.get("prompt", description),
+        original_request=f"/generate {asset_type} {description}",
+        image_urls=urls,
+    )
+
+    await update.message.reply_text(
+        f"{len(urls)} option(s) generated. Use /approve N to select one.",
+        parse_mode="HTML",
+    )
+
+
+# ---------------------------------------------------------------------------
+# /logo — view/set brand logo
+# ---------------------------------------------------------------------------
+
+async def logo_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /logo — show current logo or prepare for logo upload."""
+    if not _authorized(update.effective_user.id):
+        return
+
+    logo_path = Path(settings.BRAND_FOLDER) / "assets" / "logo.png"
+
+    if logo_path.exists():
+        try:
+            await update.message.reply_photo(
+                photo=open(logo_path, "rb"),
+                caption="Current brand logo. Send a new image to replace it.",
+            )
+        except Exception as e:
+            logger.warning("Failed to send logo: %s", e)
+            await update.message.reply_text("Logo file exists but couldn't be sent.")
+    else:
+        await update.message.reply_text("No logo set yet.")
+
+    context.user_data["awaiting_logo_upload"] = True
+    await update.message.reply_text(
+        "Send me an image to set as the brand logo.",
+    )
+
+
+# ---------------------------------------------------------------------------
+# /ingest — extract brand info from an image via Claude Vision
+# ---------------------------------------------------------------------------
+
+async def ingest_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /ingest — prepare to extract brand info from an uploaded image."""
+    if not _authorized(update.effective_user.id):
+        return
+
+    context.user_data["awaiting_ingest_image"] = True
+    await update.message.reply_text(
+        "Send me a brand asset (logo, screenshot, marketing material) and I'll "
+        "extract colors, fonts, and style keywords from it using AI vision.\n\n"
+        "The extracted info will be compared against your current brand guidelines.",
+    )
+
+
+# ---------------------------------------------------------------------------
+# /brand_check — check an image against brand guidelines
+# ---------------------------------------------------------------------------
+
+async def brand_check_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /brand_check — check if an image matches brand guidelines."""
+    if not _authorized(update.effective_user.id):
+        return
+
+    context.user_data["awaiting_brand_check"] = True
+    await update.message.reply_text(
+        "Send me an image and I'll check how well it matches your brand guidelines.\n\n"
+        "I'll analyze colors, style, and overall compliance.",
+    )
+
+
+# ---------------------------------------------------------------------------
+# /train_lora — trigger LoRA training from approved images
+# ---------------------------------------------------------------------------
+
+async def train_lora_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /train_lora — trigger LoRA training on Replicate."""
+    if not _authorized(update.effective_user.id):
+        return
+
+    from agent import lora_pipeline
+
+    stats = lora_pipeline.get_training_stats()
+    total = stats["total_images"]
+    threshold = stats["threshold"]
+
+    if total < threshold:
+        await update.message.reply_text(
+            f"Not enough training images yet.\n\n"
+            f"Images: <b>{total}</b> / {threshold} required\n"
+            f"Keep approving drafts — each /approve adds to the training set.",
+            parse_mode="HTML",
+        )
+        return
+
+    await update.message.chat.send_action("typing")
+    await update.message.reply_text("Starting LoRA training on Replicate...")
+
+    try:
+        result = await lora_pipeline.trigger_training()
+    except Exception as e:
+        logger.error("train_lora failed: %s", e)
+        await update.message.reply_text(
+            f"Training failed: {_esc(str(e))}", parse_mode="HTML"
+        )
+        return
+
+    if result.get("error"):
+        await update.message.reply_text(
+            f"Training error: {_esc(result['error'])}", parse_mode="HTML"
+        )
+        return
+
+    await update.message.reply_text(
+        f"LoRA training started!\n\n"
+        f"Version: <b>{_esc(result.get('version', '?'))}</b>\n"
+        f"Prediction ID: <code>{_esc(result.get('prediction_id', '?'))}</code>\n"
+        f"Images: {result.get('image_count', '?')}\n"
+        f"Trigger word: <code>{_esc(result.get('trigger_word', 'BRAND3D'))}</code>\n\n"
+        f"Training takes ~20-40 minutes. Download weights when complete from "
+        f"the Replicate dashboard.",
+        parse_mode="HTML",
+    )

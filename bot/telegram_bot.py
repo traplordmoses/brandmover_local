@@ -42,6 +42,11 @@ def create_bot() -> Application:
     app.add_handler(CommandHandler("autostatus", handlers.autostatus_command))
     app.add_handler(CommandHandler("autopause", handlers.autopause_command))
     app.add_handler(CommandHandler("autoforce", handlers.autoforce_command))
+    app.add_handler(CommandHandler("generate", handlers.generate_command))
+    app.add_handler(CommandHandler("logo", handlers.logo_command))
+    app.add_handler(CommandHandler("ingest", handlers.ingest_command))
+    app.add_handler(CommandHandler("brand_check", handlers.brand_check_command))
+    app.add_handler(CommandHandler("train_lora", handlers.train_lora_command))
 
     # Photo uploads (reference images)
     app.add_handler(

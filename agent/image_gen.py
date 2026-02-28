@@ -14,6 +14,7 @@ from pathlib import Path
 
 import httpx
 
+from agent import compositor_config
 from config import settings
 
 logger = logging.getLogger(__name__)
@@ -38,75 +39,85 @@ _TEXT_OVERLAY_KEYWORDS = re.compile(
 # Prompt enhancement — SPLICE-based enrichment
 # ---------------------------------------------------------------------------
 
-# Quality boosters by content type (Lighting + Image Type + Enhancers)
-# All profiles carry Frutiger Aero DNA: bubbly glass orbs, frosted panels,
-# glossy translucent spheres, dark navy depth — matching foid.fun aesthetic.
-_QUALITY_PROFILES = {
-    "announcement": (
-        "Frutiger Aero style, bubbly translucent glass orbs floating in scene, "
-        "glossy frosted glass panels, soft aqua and lavender glow, "
-        "dark navy midnight background, volumetric light through glass spheres, "
-        "3D render, rounded bubbly shapes, ultra-detailed, 8K resolution"
-    ),
-    "lifestyle": (
-        "Frutiger Aero aesthetic, bubbly glass morphism scene, "
-        "frosted translucent spheres and floating orbs, "
-        "soft aqua and candy pink volumetric glow, dark navy background, "
-        "glossy reflective surfaces, polished 3D render feel, "
-        "shallow depth of field on background only"
-    ),
-    "event": (
-        "Frutiger Aero + Y2K terminal aesthetic, atmospheric bubbly glow, "
-        "floating translucent glass orbs, neon aqua and periwinkle accents, "
-        "dark navy environment with volumetric haze, "
-        "glossy rounded shapes, dynamic composition, high detail"
-    ),
-    "educational": (
-        "Frutiger Aero style, clean bubbly composition, "
-        "frosted glass panels with rounded corners, translucent orbs, "
-        "soft aqua highlights on dark navy background, "
-        "minimalist glass morphism UI, sharp focus"
-    ),
-    "brand_asset": (
-        "Frutiger Aero aesthetic, glossy bubbly translucent surfaces, "
-        "glass morphism with soft rounded shapes, floating glass orbs, "
-        "dark navy background, aqua and lavender gradient accents, "
-        "clean vector-ready edges, professional, premium feel"
-    ),
-    "community": (
-        "Frutiger Aero + Y2K aesthetic, vibrant bubbly glass orbs, "
-        "neon aqua and candy pink glow, glossy translucent materials, "
-        "floating rounded shapes, dark navy background with volumetric glow, "
-        "3D CGI render, smooth shading, polished finish"
-    ),
-    "market_commentary": (
-        "Frutiger Aero style, holographic glass morphism HUD panels, "
-        "bubbly translucent orbs with data visualization aesthetic, "
-        "dark navy background, aqua and periwinkle glow, "
-        "Y2K terminal style, volumetric light, sharp focus"
-    ),
+# Per-content-type modifiers — combined with brand style keywords at runtime.
+_CONTENT_TYPE_MODIFIERS = {
+    "announcement": "volumetric light, 3D render, ultra-detailed, 8K resolution",
+    "lifestyle": "glossy reflective surfaces, polished 3D render feel, shallow depth of field on background only",
+    "event": "atmospheric glow, dynamic composition, high detail",
+    "educational": "clean composition, minimalist UI, sharp focus",
+    "brand_asset": "clean vector-ready edges, professional, premium feel",
+    "community": "3D CGI render, smooth shading, polished finish",
+    "market_commentary": "holographic HUD panels, data visualization aesthetic, volumetric light, sharp focus",
 }
 
-# Brand enforcement terms — Frutiger Aero bubbly glass aesthetic (foid.fun).
-# Applied when the agent doesn't already specify brand aesthetics in the prompt.
-_BRAND_TERMS = (
-    "Frutiger Aero aesthetic, bubbly translucent glass orbs, frosted glass panels, "
-    "glossy rounded shapes, soft aqua #72e1ff and lavender #cdb7ff glow, "
-    "dark navy #0e0f2b background, floating glass spheres, "
-    "Y2K terminal feel, premium polished render"
+# Base negative terms — always included regardless of brand config.
+_BASE_NEGATIVES = (
+    "blurry, low quality, low resolution, grainy, washed out, "
+    "text artifacts, distorted, deformed, extra limbs, "
+    "generic stock photo, clip art, childish, amateur"
 )
+
+
+def _get_brand_terms() -> str:
+    """Build brand enforcement terms from guidelines config."""
+    cfg = compositor_config.get_config()
+    parts: list[str] = []
+    # Style keywords (e.g. "Frutiger Aero meets Y2K terminal")
+    if cfg.style_keywords:
+        parts.extend(cfg.style_keywords[:6])
+    # Color palette phrase
+    color_phrases = []
+    for role in ("primary", "accent_1", "accent_2"):
+        entry = cfg.colors.get(role)
+        if entry:
+            color_phrases.append(f"{entry.name.lower()} {entry.hex}")
+    if color_phrases:
+        parts.append("palette: " + ", ".join(color_phrases))
+    # Background color
+    bg = cfg.colors.get("background")
+    if bg:
+        parts.append(f"{bg.name.lower()} {bg.hex} background")
+    if not parts:
+        return "high quality, professional, polished render"
+    return ", ".join(parts)
+
+
+def _get_quality_profile(content_type: str) -> str:
+    """Build quality profile from brand style keywords + per-type modifiers."""
+    cfg = compositor_config.get_config()
+    ct = content_type.lower()
+    parts: list[str] = []
+    # Brand style keywords
+    if cfg.style_keywords:
+        parts.extend(cfg.style_keywords[:4])
+    # Color context
+    for role in ("primary", "accent_1"):
+        entry = cfg.colors.get(role)
+        if entry:
+            parts.append(f"{entry.name.lower()} glow")
+    bg = cfg.colors.get("background")
+    if bg:
+        parts.append(f"{bg.name.lower()} background")
+    # Per-type modifiers
+    modifier = _CONTENT_TYPE_MODIFIERS.get(ct, _CONTENT_TYPE_MODIFIERS["announcement"])
+    parts.append(modifier)
+    if not parts:
+        return "high quality, professional, detailed, 8K resolution"
+    return ", ".join(parts)
+
+
+def _get_negative_prompt() -> str:
+    """Build negative prompt from brand avoid_terms + base negatives."""
+    cfg = compositor_config.get_config()
+    if cfg.avoid_terms:
+        return ", ".join(cfg.avoid_terms) + ", " + _BASE_NEGATIVES
+    return _BASE_NEGATIVES
+
 
 # Terms to check — if present, skip adding brand enforcement
 _BRAND_INDICATORS = re.compile(
     r"brand.*(color|style|aesthetic)|on.?brand|color scheme|#[0-9A-Fa-f]{6}",
     re.IGNORECASE,
-)
-
-# Negative prompt — what to exclude from generation
-_NEGATIVE_PROMPT = (
-    "blurry, low quality, low resolution, grainy, washed out, "
-    "text artifacts, distorted, deformed, extra limbs, "
-    "generic stock photo, clip art, childish, amateur"
 )
 
 # Mascot-specific negative prompt
@@ -205,7 +216,7 @@ def enhance_prompt(raw_prompt: str, content_type: str) -> tuple[str, str]:
 
     # --- Build enhanced prompt ---
     # Add content-type quality profile (strip contradictions if locked)
-    quality = _QUALITY_PROFILES.get(ct, _QUALITY_PROFILES["announcement"])
+    quality = _get_quality_profile(ct)
     if locked:
         quality = _strip_contradictions(quality, locked)
 
@@ -215,7 +226,7 @@ def enhance_prompt(raw_prompt: str, content_type: str) -> tuple[str, str]:
 
     # Add brand terms if not already present (strip contradictions if locked)
     if not _BRAND_INDICATORS.search(prompt):
-        brand = _BRAND_TERMS
+        brand = _get_brand_terms()
         if locked:
             brand = _strip_contradictions(brand, locked)
         if brand:
@@ -233,7 +244,7 @@ def enhance_prompt(raw_prompt: str, content_type: str) -> tuple[str, str]:
         locked or "none",
     )
 
-    return enhanced, _NEGATIVE_PROMPT
+    return enhanced, _get_negative_prompt()
 
 
 def select_model(content_type: str, prompt: str) -> tuple[str, str]:

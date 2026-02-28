@@ -44,6 +44,7 @@ class BrandConfig:
     colors: dict[str, ColorEntry] = field(default_factory=dict)
     fonts: dict[str, FontEntry] = field(default_factory=dict)
     style_keywords: list[str] = field(default_factory=list)
+    avoid_terms: list[str] = field(default_factory=list)
     raw_hash: str = ""
     parsed_at: float = 0.0
     source_path: str = ""
@@ -140,6 +141,18 @@ def _parse_style_keywords(text: str) -> list[str]:
     return keywords
 
 
+def _parse_avoid_terms(text: str) -> list[str]:
+    """Extract comma-separated terms from 'Avoid:' line in ILLUSTRATION STYLE section."""
+    m = re.search(r"##\s*ILLUSTRATION STYLE(.*?)(?=\n##|\Z)", text, re.DOTALL)
+    if not m:
+        return []
+    section = m.group(1)
+    avoid_match = re.search(r"[-*]*\s*Avoid:\s*(.+)", section)
+    if not avoid_match:
+        return []
+    return [t.strip() for t in avoid_match.group(1).split(",") if t.strip()]
+
+
 # ---------------------------------------------------------------------------
 # Config cache
 # ---------------------------------------------------------------------------
@@ -168,6 +181,7 @@ def get_config(path: Path | None = None) -> BrandConfig:
     fonts = _parse_fonts(raw)
     identity = _parse_identity(raw)
     style_kw = _parse_style_keywords(raw)
+    avoid = _parse_avoid_terms(raw)
 
     _cached_config = BrandConfig(
         brand_name=identity.get("brand_name", ""),
@@ -177,6 +191,7 @@ def get_config(path: Path | None = None) -> BrandConfig:
         colors=colors,
         fonts=fonts,
         style_keywords=style_kw,
+        avoid_terms=avoid,
         raw_hash=md5,
         parsed_at=time.time(),
         source_path=str(src),
@@ -318,6 +333,7 @@ def get_brand_summary() -> dict:
             for use, f in cfg.fonts.items()
         },
         "style_keywords": cfg.style_keywords,
+        "avoid_terms": cfg.avoid_terms,
         "parsed_at": cfg.parsed_at,
         "source_path": cfg.source_path,
     }
