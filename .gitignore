@@ -35,3 +35,10 @@ brand/assets/*.jpg
 
 # Eval baselines (generated per-brand)
 eval/baselines/*.json
+
+# Runtime state
+auto_post_state.json
+.cache/
+
+# Brand archive (old proprietary assets)
+brand/archive/
