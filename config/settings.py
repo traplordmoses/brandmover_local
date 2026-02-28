@@ -57,3 +57,15 @@ OPENCLAW_SCRIPTS_DIR: str = os.getenv(
     "OPENCLAW_SCRIPTS_DIR",
     str(Path.home() / ".openclaw" / "skills" / "brand-mover" / "scripts"),
 )
+
+# --- Auto Post ---
+AUTO_POST_ENABLED: bool = os.getenv("AUTO_POST_ENABLED", "false").lower() in ("true", "1", "yes")
+AUTO_POST_SCHEDULE_FILE: str = os.getenv(
+    "AUTO_POST_SCHEDULE_FILE",
+    str(_project_root / "config" / "schedule.json"),
+)
+AUTO_POST_STATE_FILE: str = os.getenv(
+    "AUTO_POST_STATE_FILE",
+    str(_project_root / "auto_post_state.json"),
+)
+AUTO_POST_DRY_RUN: bool = os.getenv("AUTO_POST_DRY_RUN", "false").lower() in ("true", "1", "yes")

@@ -1,0 +1,37 @@
+{
+  "slots": {
+    "engagement_morning": {
+      "type": "engagement",
+      "hour_utc": 9,
+      "jitter_minutes": 30,
+      "enabled": true,
+      "description": "Community question, culture commentary, or philosophical musing"
+    },
+    "onchain_midday": {
+      "type": "onchain_review",
+      "hour_utc": 12,
+      "jitter_minutes": 30,
+      "enabled": true,
+      "description": "Loreboard activity commentary — proposals, votes, canonizations"
+    },
+    "onchain_afternoon": {
+      "type": "onchain_review",
+      "hour_utc": 17,
+      "jitter_minutes": 30,
+      "enabled": true,
+      "description": "Second on-chain review or thought-mode fallback if quiet"
+    },
+    "brand_meme": {
+      "type": "brand_meme",
+      "hour_utc": 21,
+      "jitter_minutes": 45,
+      "enabled": true,
+      "description": "AI-generated branded image + caption"
+    }
+  },
+  "global": {
+    "min_gap_minutes": 120,
+    "max_posts_per_day": 6,
+    "notify_telegram": true
+  }
+}

@@ -51,6 +51,8 @@ def save_pending(
     image_prompt: str,
     original_request: str,
     image_urls: list[str] | None = None,
+    auto_slot: str | None = None,
+    auto_event_ids: list[str] | None = None,
 ) -> None:
     """
     Save a draft as pending approval.
@@ -63,6 +65,8 @@ def save_pending(
         image_prompt: The prompt used for image generation.
         original_request: The user's original message.
         image_urls: Optional list of all generated image option URLs.
+        auto_slot: If set, this draft came from the auto-post scheduler (slot name).
+        auto_event_ids: On-chain event IDs referenced by this auto-post draft.
     """
     pending = {
         "caption": caption,
@@ -75,6 +79,10 @@ def save_pending(
     }
     if image_urls:
         pending["image_urls"] = image_urls
+    if auto_slot:
+        pending["auto_slot"] = auto_slot
+    if auto_event_ids:
+        pending["auto_event_ids"] = auto_event_ids
     s = _read_state()
     s["pending"] = pending
     _write_state(s)
