@@ -96,6 +96,9 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         "/brand_check — Check an image against brand guidelines\n"
         "/train_lora — Trigger LoRA training from approved images\n"
         "/lora_status — Show LoRA training status and versions\n"
+        "/lora_versions — List all trained LoRA versions\n"
+        "/lora_switch <i>N</i> — Switch active LoRA to version N\n"
+        "/lora_rollback — Roll back to previous LoRA version\n"
         "/history — Show generation history and stats\n"
         "/analytics — Show approval rates by content type and model\n"
         "/apply — Apply extracted brand info to guidelines\n"
@@ -2148,6 +2151,7 @@ async def lora_status_command(update: Update, context: ContextTypes.DEFAULT_TYPE
     total = stats["total_images"]
     threshold = stats["threshold"]
     versions = stats["versions"]
+    lora_manifest = stats.get("lora_manifest", {})
 
     lora = lora_pipeline.get_active_lora()
 
@@ -2155,16 +2159,20 @@ async def lora_status_command(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     if lora:
         lines.append(f"Active LoRA: <b>{_esc(lora.get('version', '?'))}</b>")
-        lines.append(f"Model URL: <code>{_esc(lora.get('model_url', '?'))}</code>")
         lines.append(f"Trigger word: <code>{_esc(lora.get('trigger_word', 'BRAND3D'))}</code>")
         lines.append(f"Weights: <code>{_esc(lora.get('weights_path', 'N/A'))}</code>")
     else:
         lines.append("Active LoRA: <i>none</i>")
 
-    lines.append(f"\nTraining images: <b>{total}</b> / {threshold}")
+    lora_versions = lora_manifest.get("versions", [])
+    lines.append(f"\nTotal versions: <b>{len(lora_versions)}</b>")
+    lines.append(f"Training images: <b>{total}</b> / {threshold}")
 
-    if versions:
-        lines.append("\n<b>Version history:</b>")
+    if lora_versions:
+        lines.append(f"\n<b>Trained versions:</b>")
+        lines.append(lora_pipeline.format_versions_list(lora_manifest))
+    elif versions:
+        lines.append("\n<b>Training history:</b>")
         for v in versions[-5:]:
             status_icon = {"completed": "\u2705", "training": "\u23F3", "failed": "\u274C"}.get(v.get("status", ""), "\u2753")
             lines.append(
@@ -2173,7 +2181,116 @@ async def lora_status_command(update: Update, context: ContextTypes.DEFAULT_TYPE
                 f"({v.get('image_count', '?')} images)"
             )
 
+    lines.append("\nUse /lora_versions for details, /lora_switch N to change.")
+
     await update.message.reply_text("\n".join(lines), parse_mode="HTML")
+
+
+# ---------------------------------------------------------------------------
+# /lora_versions — list all trained LoRA versions
+# ---------------------------------------------------------------------------
+
+async def lora_versions_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /lora_versions — list all trained LoRA versions."""
+    if not _authorized(update.effective_user.id):
+        return
+
+    from agent import lora_pipeline
+
+    manifest = lora_pipeline.get_lora_manifest()
+    versions = manifest.get("versions", [])
+
+    if not versions:
+        await update.message.reply_text(
+            "No LoRA versions trained yet.\n"
+            "Use /train_lora to start training.",
+        )
+        return
+
+    formatted = lora_pipeline.format_versions_list(manifest)
+    await update.message.reply_text(
+        f"<b>LoRA Versions</b>\n\n{formatted}\n\n"
+        f"Use /lora_switch <i>N</i> to switch, /lora_rollback to revert.",
+        parse_mode="HTML",
+    )
+
+
+# ---------------------------------------------------------------------------
+# /lora_switch <version> — switch active LoRA version
+# ---------------------------------------------------------------------------
+
+async def lora_switch_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /lora_switch <N> — switch the active LoRA to version N."""
+    if not _authorized(update.effective_user.id):
+        return
+
+    from agent import lora_pipeline
+
+    args = (update.message.text or "").split(maxsplit=1)
+    if len(args) < 2 or not args[1].strip():
+        await update.message.reply_text(
+            "Usage: /lora_switch <i>N</i>\n\n"
+            "Example: <code>/lora_switch 2</code>",
+            parse_mode="HTML",
+        )
+        return
+
+    version_str = args[1].strip().lstrip("v")
+    try:
+        version_num = int(version_str)
+    except ValueError:
+        await update.message.reply_text(
+            f"Invalid version number: {_esc(args[1].strip())}\n"
+            f"Use /lora_versions to see available versions.",
+            parse_mode="HTML",
+        )
+        return
+
+    result = lora_pipeline.switch_active_version(version_num)
+
+    if isinstance(result, str):
+        # Error message
+        await update.message.reply_text(
+            f"Switch failed: {_esc(result)}",
+            parse_mode="HTML",
+        )
+    else:
+        await update.message.reply_text(
+            f"Switched active LoRA to <b>v{version_num}</b>\n\n"
+            f"Trigger word: <code>{_esc(result.get('trigger_word', 'BRAND3D'))}</code>\n"
+            f"Training images: {result.get('image_count', '?')}\n"
+            f"Weights copied to brand3d.safetensors",
+            parse_mode="HTML",
+        )
+
+
+# ---------------------------------------------------------------------------
+# /lora_rollback — switch to previous LoRA version
+# ---------------------------------------------------------------------------
+
+async def lora_rollback_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /lora_rollback — roll back to previous LoRA version."""
+    if not _authorized(update.effective_user.id):
+        return
+
+    from agent import lora_pipeline
+
+    result = lora_pipeline.rollback_version()
+
+    if isinstance(result, str):
+        await update.message.reply_text(
+            f"Rollback failed: {_esc(result)}",
+            parse_mode="HTML",
+        )
+    else:
+        vn = result.get("version_number", "?")
+        await update.message.reply_text(
+            f"Rolled back to <b>v{vn}</b>\n\n"
+            f"Trigger word: <code>{_esc(result.get('trigger_word', 'BRAND3D'))}</code>\n"
+            f"Training images: {result.get('image_count', '?')}\n"
+            f"Weights copied to brand3d.safetensors",
+            parse_mode="HTML",
+        )
 
 
 # ---------------------------------------------------------------------------

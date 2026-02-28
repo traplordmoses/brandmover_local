@@ -45,6 +45,9 @@ def create_bot() -> Application:
     app.add_handler(CommandHandler("brand_check", handlers.brand_check_command))
     app.add_handler(CommandHandler("train_lora", handlers.train_lora_command))
     app.add_handler(CommandHandler("lora_status", handlers.lora_status_command))
+    app.add_handler(CommandHandler("lora_versions", handlers.lora_versions_command))
+    app.add_handler(CommandHandler("lora_switch", handlers.lora_switch_command))
+    app.add_handler(CommandHandler("lora_rollback", handlers.lora_rollback_command))
     app.add_handler(CommandHandler("history", handlers.history_command))
     app.add_handler(CommandHandler("analytics", handlers.analytics_command))
 

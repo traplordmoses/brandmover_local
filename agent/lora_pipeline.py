@@ -125,16 +125,193 @@ async def add_training_image_from_url(
 def get_training_stats() -> dict:
     """Return training set stats for display."""
     manifest = _load_manifest()
+    lora_manifest = _load_lora_manifest()
     return {
         "total_images": len(manifest["images"]),
         "threshold": manifest.get("threshold", _DEFAULT_THRESHOLD),
         "versions": manifest.get("versions", []),
+        "lora_manifest": lora_manifest,
     }
 
 
 _LORA_DIR = Path(settings.BRAND_FOLDER) / "loras"
+_LORA_MANIFEST_PATH = _LORA_DIR / "manifest.json"
+_ACTIVE_WEIGHTS = _LORA_DIR / "brand3d.safetensors"
 _POLL_INTERVAL = 30  # seconds
 _POLL_TIMEOUT = 90 * 60  # 90 minutes
+
+
+# ---------------------------------------------------------------------------
+# LoRA version manifest (brand/loras/manifest.json)
+# ---------------------------------------------------------------------------
+
+def _load_lora_manifest() -> dict:
+    """Load the LoRA versions manifest from brand/loras/manifest.json."""
+    _LORA_DIR.mkdir(parents=True, exist_ok=True)
+    if _LORA_MANIFEST_PATH.exists():
+        try:
+            return json.loads(_LORA_MANIFEST_PATH.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            pass
+    return {"versions": [], "active_version": None}
+
+
+def _save_lora_manifest(manifest: dict) -> None:
+    _LORA_DIR.mkdir(parents=True, exist_ok=True)
+    _LORA_MANIFEST_PATH.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+
+
+def get_lora_manifest() -> dict:
+    """Public accessor for the LoRA versions manifest."""
+    return _load_lora_manifest()
+
+
+def _next_version_number(manifest: dict) -> int:
+    """Determine the next version number from the manifest."""
+    versions = manifest.get("versions", [])
+    if not versions:
+        return 1
+    return max(v.get("version_number", 0) for v in versions) + 1
+
+
+def _record_version(
+    version_number: int,
+    prediction_id: str,
+    image_count: int,
+    content_types: list[str],
+    trigger_word: str,
+    file_path: str,
+    weights_url: str = "",
+    status: str = "active",
+) -> dict:
+    """Add a completed version to the lora manifest and set it as active."""
+    manifest = _load_lora_manifest()
+
+    # Deactivate the currently active version
+    for v in manifest.get("versions", []):
+        if v.get("status") == "active":
+            v["status"] = "inactive"
+
+    version_record = {
+        "version_number": version_number,
+        "version_name": f"v{version_number}",
+        "prediction_id": prediction_id,
+        "training_date": int(time.time()),
+        "image_count": image_count,
+        "content_types": content_types,
+        "file_path": file_path,
+        "weights_url": weights_url,
+        "trigger_word": trigger_word,
+        "status": status,
+    }
+    manifest.setdefault("versions", []).append(version_record)
+    manifest["active_version"] = version_number
+
+    _save_lora_manifest(manifest)
+    logger.info("LoRA version v%d recorded as active", version_number)
+    return version_record
+
+
+def switch_active_version(version_number: int) -> dict | str:
+    """Switch the active LoRA to a specific version.
+
+    Copies the version's weights file to brand3d.safetensors and updates
+    the manifest.
+
+    Returns the version record on success, or an error string on failure.
+    """
+    manifest = _load_lora_manifest()
+    versions = manifest.get("versions", [])
+
+    target = None
+    for v in versions:
+        if v.get("version_number") == version_number:
+            target = v
+            break
+
+    if target is None:
+        available = [v.get("version_number") for v in versions]
+        return f"Version {version_number} not found. Available: {available}"
+
+    # Check that the weights file exists
+    weights_path = Path(target["file_path"])
+    if not weights_path.exists():
+        return f"Weights file not found: {weights_path}"
+
+    # Copy weights to active path
+    shutil.copy2(str(weights_path), str(_ACTIVE_WEIGHTS))
+
+    # Update statuses in manifest
+    for v in versions:
+        if v.get("status") == "active":
+            v["status"] = "inactive"
+    target["status"] = "active"
+    manifest["active_version"] = version_number
+
+    _save_lora_manifest(manifest)
+    logger.info("Switched active LoRA to v%d", version_number)
+    return target
+
+
+def rollback_version() -> dict | str:
+    """Roll back to the previous LoRA version (N-1).
+
+    Returns the version record on success, or an error string on failure.
+    """
+    manifest = _load_lora_manifest()
+    active = manifest.get("active_version")
+    versions = manifest.get("versions", [])
+
+    if not versions:
+        return "No LoRA versions available."
+
+    if active is None:
+        return "No active version to roll back from."
+
+    # Find the previous version
+    prev_version = active - 1
+    if prev_version < 1:
+        return "Already at version 1 — no earlier version to roll back to."
+
+    return switch_active_version(prev_version)
+
+
+def format_versions_list(manifest: dict) -> str:
+    """Format the LoRA versions manifest into a readable list."""
+    versions = manifest.get("versions", [])
+    active = manifest.get("active_version")
+
+    if not versions:
+        return "No LoRA versions trained yet."
+
+    lines: list[str] = []
+    for v in versions:
+        vn = v.get("version_number", "?")
+        status = v.get("status", "unknown")
+        image_count = v.get("image_count", "?")
+        date_ts = v.get("training_date", 0)
+
+        # Format date
+        if date_ts:
+            import datetime
+            dt = datetime.datetime.fromtimestamp(date_ts)
+            date_str = dt.strftime("%Y-%m-%d %H:%M")
+        else:
+            date_str = "unknown"
+
+        # Active indicator
+        active_marker = " (active)" if vn == active else ""
+        status_icon = {
+            "active": "\u2705",
+            "inactive": "\u2796",
+        }.get(status, "\u2753")
+
+        lines.append(
+            f"  {status_icon} v{vn}{active_marker} — "
+            f"{date_str}, {image_count} images"
+        )
+
+    return "\n".join(lines)
 
 
 async def poll_training(prediction_id: str) -> dict:
@@ -165,18 +342,24 @@ async def poll_training(prediction_id: str) -> dict:
     return {"status": "timeout", "error": "Polling timed out after 90 minutes"}
 
 
-async def download_weights(output_url: str) -> Path:
+async def download_weights(
+    output_url: str,
+    prediction_id: str = "",
+    image_count: int = 0,
+    content_types: list[str] | None = None,
+    trigger_word: str = _DEFAULT_TRIGGER_WORD,
+) -> Path:
     """Download trained LoRA weights to brand/loras/.
 
-    Saves as brand3d.safetensors (active) + versioned copy brand3d_v{N}.safetensors.
+    Saves as brand3d_v{N}.safetensors and copies to brand3d.safetensors (active).
+    Records the version in brand/loras/manifest.json.
     """
     _LORA_DIR.mkdir(parents=True, exist_ok=True)
 
-    # Determine version number from existing files
-    existing = sorted(_LORA_DIR.glob("brand3d_v*.safetensors"))
-    version_num = len(existing) + 1
+    # Determine version number from lora manifest
+    lora_manifest = _load_lora_manifest()
+    version_num = _next_version_number(lora_manifest)
 
-    active_path = _LORA_DIR / "brand3d.safetensors"
     versioned_path = _LORA_DIR / f"brand3d_v{version_num}.safetensors"
 
     async with httpx.AsyncClient(timeout=300, follow_redirects=True) as client:
@@ -185,21 +368,47 @@ async def download_weights(output_url: str) -> Path:
         data = resp.content
 
     versioned_path.write_bytes(data)
-    shutil.copy2(str(versioned_path), str(active_path))
+    shutil.copy2(str(versioned_path), str(_ACTIVE_WEIGHTS))
+
+    # Record in lora manifest
+    _record_version(
+        version_number=version_num,
+        prediction_id=prediction_id,
+        image_count=image_count,
+        content_types=content_types or [],
+        trigger_word=trigger_word,
+        file_path=str(versioned_path),
+        weights_url=output_url,
+    )
 
     logger.info(
         "LoRA weights downloaded: %s (%.1f MB) + active copy %s",
-        versioned_path, len(data) / 1024 / 1024, active_path,
+        versioned_path, len(data) / 1024 / 1024, _ACTIVE_WEIGHTS,
     )
-    return active_path
+    return _ACTIVE_WEIGHTS
 
 
 def get_active_lora() -> dict | None:
-    """Return the latest completed LoRA version info, or None.
+    """Return the active LoRA version info, or None.
+
+    Checks brand/loras/manifest.json first (versioned), then falls back to
+    the training manifest for backwards compatibility.
 
     Returns: {"version": str, "model_url": str, "trigger_word": str,
               "weights_path": str} or None.
     """
+    # Check lora manifest (versioned system)
+    lora_manifest = _load_lora_manifest()
+    for v in lora_manifest.get("versions", []):
+        if v.get("status") == "active":
+            return {
+                "version": v.get("version_name", f"v{v.get('version_number', '?')}"),
+                "model_url": v.get("weights_url", ""),
+                "trigger_word": v.get("trigger_word", _DEFAULT_TRIGGER_WORD),
+                "weights_path": v.get("file_path", ""),
+            }
+
+    # Fallback: check training manifest (pre-versioning)
     manifest = _load_manifest()
     versions = manifest.get("versions", [])
     for v in reversed(versions):
@@ -241,7 +450,21 @@ async def _background_poll(
                         output_url = str(output[0])
 
                     if output_url:
-                        weights_path = await download_weights(output_url)
+                        # Collect content types from training images
+                        train_manifest = _load_manifest()
+                        ct_set = set()
+                        for img in train_manifest.get("images", []):
+                            ct = img.get("content_type", "")
+                            if ct:
+                                ct_set.add(ct)
+
+                        weights_path = await download_weights(
+                            output_url,
+                            prediction_id=prediction_id,
+                            image_count=v.get("image_count", 0),
+                            content_types=sorted(ct_set),
+                            trigger_word=v.get("trigger_word", _DEFAULT_TRIGGER_WORD),
+                        )
                         v["weights_url"] = output_url
                         v["weights_path"] = str(weights_path)
                 break
