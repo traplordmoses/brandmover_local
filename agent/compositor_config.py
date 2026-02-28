@@ -216,6 +216,91 @@ def get_font_family(use: str) -> str:
     return entry.family if entry else ""
 
 
+# ---------------------------------------------------------------------------
+# Font map — config-driven font resolution
+# ---------------------------------------------------------------------------
+
+_KNOWN_FONTS: dict[str, dict] = {
+    "Poppins": {
+        "type": "static",
+        "base_url": "https://github.com/google/fonts/raw/main/ofl/poppins/",
+        # Files: Poppins-Black.ttf, Poppins-ExtraBold.ttf, etc.
+    },
+    "Orbitron": {
+        "type": "variable",
+        "url": "https://github.com/google/fonts/raw/main/ofl/orbitron/Orbitron%5Bwght%5D.ttf",
+        "local_file": "Orbitron-Variable.ttf",
+    },
+    "Inter": {
+        "type": "variable",
+        "url": "https://github.com/google/fonts/raw/main/ofl/inter/Inter%5Bopsz%2Cwght%5D.ttf",
+        "local_file": "Inter-Variable.ttf",
+    },
+    "VT323": {
+        "type": "static",
+        "base_url": "https://github.com/google/fonts/raw/main/ofl/vt323/",
+        # Only VT323-Regular.ttf exists
+    },
+}
+
+_WEIGHT_SUFFIXES = {
+    "black":    "Black",
+    "extrabold": "ExtraBold",
+    "bold":     "Bold",
+    "semibold": "SemiBold",
+    "regular":  "Regular",
+}
+
+_DISPLAY_STYLES = {"black", "extrabold", "bold"}
+_BODY_STYLES    = {"semibold", "regular"}
+
+
+def get_font_map() -> dict[str, dict]:
+    """Map compositor style keys to font filenames and download URLs.
+
+    Styles black/extrabold/bold → display font family.
+    Styles semibold/regular     → body font family.
+    Falls back to Poppins if the guideline font isn't in _KNOWN_FONTS.
+
+    For variable fonts, all styles share a single downloaded file.
+    For static fonts, each style maps to {Family}-{Weight}.ttf.
+    """
+    cfg = get_config()
+    display_entry = cfg.fonts.get("display")
+    body_entry    = cfg.fonts.get("body") or cfg.fonts.get("body_text")
+
+    display_family = display_entry.family if display_entry else "Poppins"
+    body_family    = body_entry.family if body_entry else "Poppins"
+
+    # Fall back to Poppins if the font isn't in our known registry
+    if display_family not in _KNOWN_FONTS:
+        logger.warning("Font %r not in known registry, falling back to Poppins", display_family)
+        display_family = "Poppins"
+    if body_family not in _KNOWN_FONTS:
+        logger.warning("Font %r not in known registry, falling back to Poppins", body_family)
+        body_family = "Poppins"
+
+    font_map: dict[str, dict] = {}
+    for style, suffix in _WEIGHT_SUFFIXES.items():
+        family = display_family if style in _DISPLAY_STYLES else body_family
+        info = _KNOWN_FONTS[family]
+
+        if info["type"] == "variable":
+            font_map[style] = {
+                "family":   family,
+                "filename": info["local_file"],
+                "url":      info["url"],
+            }
+        else:
+            filename = f"{family}-{suffix}.ttf"
+            font_map[style] = {
+                "family":   family,
+                "filename": filename,
+                "url":      info["base_url"] + filename,
+            }
+    return font_map
+
+
 def get_brand_summary() -> dict:
     """Return a dict suitable for the /brand command display."""
     cfg = get_config()

@@ -15,7 +15,7 @@ from PIL import Image as _PILImage
 from telegram import Update
 from telegram.ext import ContextTypes
 
-from agent import auto_state, brain, compositor, engine, feedback, guidelines, image_gen, publisher, scheduler, state
+from agent import auto_state, brain, compositor, compositor_config, engine, feedback, guidelines, image_gen, publisher, scheduler, state
 from config import settings
 
 logger = logging.getLogger(__name__)
@@ -853,6 +853,8 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             )
 
         guidelines_path.write_text(guidelines_md, encoding="utf-8")
+        compositor_config.invalidate_cache()
+        compositor.clear_font_cache()
 
         # Also save PDF to references
         refs_dir = brand_path / "references"

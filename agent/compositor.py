@@ -134,27 +134,29 @@ def _get_profiles() -> dict[str, CompositorProfile]:
 # Fonts
 # ---------------------------------------------------------------------------
 _FONT_DIR = Path(__file__).resolve().parent.parent / "brand" / "assets" / "fonts"
-_GOOGLE_FONTS_BASE = "https://github.com/google/fonts/raw/main/ofl/poppins/"
-_FONT_FILES = {
-    "black":    "Poppins-Black.ttf",
-    "extrabold":"Poppins-ExtraBold.ttf",
-    "bold":     "Poppins-Bold.ttf",
-    "semibold": "Poppins-SemiBold.ttf",
-    "regular":  "Poppins-Regular.ttf",
-}
 _SYSTEM_FONT = "/System/Library/Fonts/Avenir Next.ttc"
 _font_cache: dict[str, ImageFont.FreeTypeFont] = {}
 
 
+def clear_font_cache() -> None:
+    """Clear cached font objects. Called after brand change via /setup."""
+    _font_cache.clear()
+
+
 def _ensure_fonts() -> None:
     _FONT_DIR.mkdir(parents=True, exist_ok=True)
-    for key, filename in _FONT_FILES.items():
+    font_map = _brand_cfg.get_font_map()
+    seen: set[str] = set()
+    for style, info in font_map.items():
+        filename = info["filename"]
+        if filename in seen:
+            continue
+        seen.add(filename)
         path = _FONT_DIR / filename
         if path.exists():
             continue
-        url = _GOOGLE_FONTS_BASE + filename
         try:
-            resp = httpx.get(url, follow_redirects=True, timeout=15)
+            resp = httpx.get(info["url"], follow_redirects=True, timeout=15)
             resp.raise_for_status()
             path.write_bytes(resp.content)
         except Exception as e:
@@ -166,7 +168,9 @@ def _load_font(style: str, size: int) -> ImageFont.FreeTypeFont:
     if key in _font_cache:
         return _font_cache[key]
     font = None
-    p = _FONT_DIR / _FONT_FILES.get(style, _FONT_FILES["regular"])
+    font_map = _brand_cfg.get_font_map()
+    info = font_map.get(style, font_map["regular"])
+    p = _FONT_DIR / info["filename"]
     if p.exists():
         try:
             font = ImageFont.truetype(str(p), size)
