@@ -14,7 +14,7 @@ from pathlib import Path
 
 import httpx
 
-from agent import compositor_config
+from agent import compositor_config, lora_pipeline
 from config import settings
 
 logger = logging.getLogger(__name__)
@@ -355,6 +355,13 @@ async def generate_image(prompt: str, content_type: str = "announcement") -> str
     logger.info("Original prompt (%d chars): %s", len(prompt), prompt[:120])
     logger.info("Enhanced prompt (%d chars): %s", len(enhanced_prompt), enhanced_prompt[:200])
 
+    # LoRA injection — route through trained model if active and using base flux
+    lora = lora_pipeline.get_active_lora()
+    if lora and lora.get("model_url") and model_id == _MODELS["flux"]:
+        model_id = lora["model_url"]
+        enhanced_prompt += f", {lora['trigger_word']}"
+        logger.info("LoRA active: routing through %s with trigger '%s'", model_id[:60], lora["trigger_word"])
+
     api_url = f"{_REPLICATE_BASE_URL}/{model_id}/predictions"
 
     headers = {
@@ -382,14 +389,20 @@ async def generate_image(prompt: str, content_type: str = "announcement") -> str
                     logger.info("Image generated: %s", image_url[:120])
                     return image_url
 
-            # Otherwise poll for completion
+            # Otherwise poll for completion with exponential backoff
             poll_url = data.get("urls", {}).get("get")
             if not poll_url:
                 logger.error("No poll URL in Replicate response")
                 return None
 
-            for _ in range(60):  # Poll up to 60 times (2 min)
-                await asyncio.sleep(2)
+            poll_delay = 1.0
+            max_delay = 10.0
+            total_waited = 0.0
+            max_wait = 180.0  # 3 minutes
+
+            while total_waited < max_wait:
+                await asyncio.sleep(poll_delay)
+                total_waited += poll_delay
                 poll_resp = await client.get(poll_url, headers=headers)
                 poll_resp.raise_for_status()
                 poll_data = poll_resp.json()
@@ -404,7 +417,9 @@ async def generate_image(prompt: str, content_type: str = "announcement") -> str
                     logger.error("Image generation %s: %s", status, poll_data.get("error"))
                     return None
 
-            logger.error("Image generation timed out after polling")
+                poll_delay = min(poll_delay * 1.5, max_delay)
+
+            logger.error("Image generation timed out after %.0fs polling", total_waited)
             return None
 
     except Exception as e:
@@ -476,8 +491,14 @@ async def generate_img2img(
                 logger.error("No poll URL in Replicate img2img response")
                 return None
 
-            for _ in range(60):
-                await asyncio.sleep(2)
+            poll_delay = 1.0
+            max_delay = 10.0
+            total_waited = 0.0
+            max_wait = 180.0
+
+            while total_waited < max_wait:
+                await asyncio.sleep(poll_delay)
+                total_waited += poll_delay
                 poll_resp = await client.get(poll_url, headers=headers)
                 poll_resp.raise_for_status()
                 poll_data = poll_resp.json()
@@ -492,7 +513,9 @@ async def generate_img2img(
                     logger.error("img2img %s: %s", status, poll_data.get("error"))
                     return None
 
-            logger.error("img2img timed out after polling")
+                poll_delay = min(poll_delay * 1.5, max_delay)
+
+            logger.error("img2img timed out after %.0fs polling", total_waited)
             return None
 
     except Exception as e:

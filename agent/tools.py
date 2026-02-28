@@ -16,7 +16,7 @@ from pathlib import Path
 
 from PIL import Image as _PILImage, ImageOps as _PILImageOps
 
-from agent import feedback, figma, guidelines, image_gen, state as _state
+from agent import content_types, feedback, figma, guidelines, image_gen, lora_pipeline, state as _state
 from agent.resource_log import ResourceTracker
 from config import settings
 
@@ -109,7 +109,7 @@ TOOL_DEFINITIONS = [
                 },
                 "content_type": {
                     "type": "string",
-                    "enum": ["announcement", "lifestyle", "event", "educational", "brand_asset", "community", "market_commentary", "brand_3d"],
+                    "enum": list(content_types.AGENT_SELECTABLE_TYPES),
                     "description": "Content type for smart model routing. Determines which image model is used.",
                     "default": "announcement",
                 },
@@ -259,8 +259,8 @@ async def _handle_generate_image(
     # LoRA trigger (BRAND3D) appended as suffix when available (never prepended)
     if content_type == "brand_3d":
         master_prompt = _state.get_3d_master_prompt()
-        lora_path = Path(settings.BRAND_FOLDER) / "loras" / "brand3d.safetensors"
-        lora_ready = lora_path.exists()
+        active_lora = lora_pipeline.get_active_lora()
+        lora_ready = active_lora is not None
 
         # --- Step 1: Build final prompt (master prompt splice always) ---
         if master_prompt:
@@ -277,8 +277,9 @@ async def _handle_generate_image(
 
         # Append LoRA trigger as SUFFIX (not prefix) to avoid rendering as text
         if lora_ready:
-            final_prompt = f"{final_prompt}\n\nBRAND3D"
-            logger.info("brand_3d: LoRA ready — appended BRAND3D trigger as suffix")
+            trigger = active_lora.get("trigger_word", "BRAND3D")
+            final_prompt = f"{final_prompt}\n\n{trigger}"
+            logger.info("brand_3d: LoRA ready — appended %s trigger as suffix", trigger)
 
         # Enforce pure black background (overrides any ambient light leakage)
         final_prompt += "\n\nCRITICAL: background must be pure #000000 black, no gradients, no warm tones, no brown, no ambient light, no floor reflection, no vignette."

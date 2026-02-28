@@ -20,6 +20,7 @@ CANVAS_W, CANVAS_H = 1280, 720
 
 # Brand colors — resolved at runtime from brand/guidelines.md
 from agent import compositor_config as _brand_cfg
+from agent.content_types import COMPOSITOR_PROFILE_MAP as _PROFILE_MAP
 
 def _c(role: str, fallback: tuple) -> tuple:
     """Shorthand for brand color lookup with hardcoded fallback."""
@@ -286,6 +287,7 @@ def _create_background(profile: CompositorProfile) -> Image.Image:
     Matches the foid.fun aesthetic: dark navy base, soft bubbly glass orbs
     in aqua/lavender/periwinkle, frosted glow layers.
     """
+    cfg = _brand_cfg.get_config()
     canvas = Image.new("RGBA", (CANVAS_W, CANVAS_H), _c("background", (14, 15, 43)) + (255,))
     r, g, b = profile.glow_color
 
@@ -308,33 +310,36 @@ def _create_background(profile: CompositorProfile) -> Image.Image:
 
     # --- Bubbly glass orbs — scattered soft spheres ---
     # Each orb is a radial gradient circle with a bright center and soft falloff
+    # Alpha values are scaled relative to cfg.orb_alpha_base (default 18)
+    _ab = cfg.orb_alpha_base
     _ORB_SPECS = [
         # (x, y, radius, color, center_alpha, edge_blur)
-        (180,  140, 110, _c("primary",  (114, 225, 255)), 22, 55),   # top-left aqua orb
-        (1050, 520,  90, _c("accent_2", (205, 183, 255)), 18, 45),   # bottom-right lavender orb
-        (900,  100,  70, _c("accent_3", (143, 170, 242)), 20, 40),   # top-right periwinkle orb
-        (350,  560,  85, _c("accent_1", (255, 179, 217)), 12, 50),   # bottom-left pink orb (subtle)
-        (640,  360, 130, _c("primary",  (114, 225, 255)), 10, 80),   # center aqua wash (very subtle)
-        (80,   400,  60, _c("accent_3", (143, 170, 242)), 16, 35),   # left-edge periwinkle
-        (1180, 260,  55, _c("accent_2", (205, 183, 255)), 14, 30),   # right-edge lavender
+        (180,  140, 110, _c("primary",  (114, 225, 255)), _ab + 4, 55),   # top-left aqua orb
+        (1050, 520,  90, _c("accent_2", (205, 183, 255)), _ab,     45),   # bottom-right lavender orb
+        (900,  100,  70, _c("accent_3", (143, 170, 242)), _ab + 2, 40),   # top-right periwinkle orb
+        (350,  560,  85, _c("accent_1", (255, 179, 217)), max(_ab - 6, 2), 50),   # bottom-left pink orb (subtle)
+        (640,  360, 130, _c("primary",  (114, 225, 255)), max(_ab - 8, 2), 80),   # center aqua wash (very subtle)
+        (80,   400,  60, _c("accent_3", (143, 170, 242)), _ab - 2, 35),   # left-edge periwinkle
+        (1180, 260,  55, _c("accent_2", (205, 183, 255)), _ab - 4, 30),   # right-edge lavender
     ]
 
-    for ox, oy, rad, color, alpha, blur in _ORB_SPECS:
+    for ox, oy, rad, color, alpha, blur in _ORB_SPECS[:cfg.orb_count]:
         # Outer glow
         canvas = Image.alpha_composite(canvas, _glow(ox, oy, rad, color, alpha, blur))
         # Inner bright core (smaller, brighter)
         canvas = Image.alpha_composite(canvas, _glow(ox, oy, rad // 3, color, alpha * 2, blur // 3))
 
     # --- Glass morphism tint overlay — faint frosted panel ---
+    gi = cfg.glass_inset  # (left, top, right, bottom)
     frost = Image.new("RGBA", (CANVAS_W, CANVAS_H), (0, 0, 0, 0))
     fd = ImageDraw.Draw(frost)
     # Subtle rounded panel tint across the center
     fd.rounded_rectangle(
-        [40, 70, CANVAS_W - 40, CANVAS_H - 30],
-        radius=28,
-        fill=(255, 255, 255, 6),
+        [gi[0], gi[1], CANVAS_W - gi[2], CANVAS_H - gi[3]],
+        radius=cfg.glass_radius,
+        fill=(255, 255, 255, cfg.glass_opacity),
     )
-    frost = frost.filter(ImageFilter.GaussianBlur(radius=12))
+    frost = frost.filter(ImageFilter.GaussianBlur(radius=cfg.glass_blur))
     canvas = Image.alpha_composite(canvas, frost)
 
     return canvas
@@ -574,7 +579,8 @@ async def compose_branded_image(
         return None
 
     profiles = _get_profiles()
-    profile = profiles.get(content_type, profiles["default"])
+    profile_key = _PROFILE_MAP.get(content_type, "default")
+    profile = profiles.get(profile_key, profiles["default"])
 
     try:
         _ensure_fonts()

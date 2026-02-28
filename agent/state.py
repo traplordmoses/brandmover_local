@@ -3,6 +3,7 @@ Simple JSON-file state management for pending approvals.
 One pending draft at a time. Stored in state.json at project root.
 """
 
+import asyncio
 import json
 import logging
 import shutil
@@ -13,7 +14,15 @@ from config import settings
 
 logger = logging.getLogger(__name__)
 
-_STATE_FILE = Path(__file__).resolve().parent.parent / "state.json"
+_project_root = Path(__file__).resolve().parent.parent
+_STATE_DIR = _project_root / "state"
+_STATE_FILE = _STATE_DIR / "state.json"
+
+# Migrate from old location if needed
+_OLD_STATE_FILE = _project_root / "state.json"
+if _OLD_STATE_FILE.exists() and not _STATE_FILE.exists():
+    _STATE_DIR.mkdir(parents=True, exist_ok=True)
+    shutil.move(str(_OLD_STATE_FILE), str(_STATE_FILE))
 
 
 def _read_state() -> dict:
@@ -53,6 +62,7 @@ def save_pending(
     image_urls: list[str] | None = None,
     auto_slot: str | None = None,
     auto_event_ids: list[str] | None = None,
+    content_type: str | None = None,
 ) -> None:
     """
     Save a draft as pending approval.
@@ -67,6 +77,7 @@ def save_pending(
         image_urls: Optional list of all generated image option URLs.
         auto_slot: If set, this draft came from the auto-post scheduler (slot name).
         auto_event_ids: On-chain event IDs referenced by this auto-post draft.
+        content_type: Content type for LoRA training filtering.
     """
     pending = {
         "caption": caption,
@@ -83,10 +94,23 @@ def save_pending(
         pending["auto_slot"] = auto_slot
     if auto_event_ids:
         pending["auto_event_ids"] = auto_event_ids
+    if content_type:
+        pending["content_type"] = content_type
     s = _read_state()
+
+    # Archive the current pending draft (if any) before overwriting
+    old_pending = s.get("pending")
+    if old_pending:
+        history = s.setdefault("draft_history", [])
+        old_pending["archived_at"] = time.time()
+        history.append(old_pending)
+        # Keep last 20 revisions
+        s["draft_history"] = history[-20:]
+
     s["pending"] = pending
     _write_state(s)
-    logger.info("Saved pending draft for: %s", original_request[:80])
+    revision = len(s.get("draft_history", [])) + 1
+    logger.info("Saved pending draft (rev %d) for: %s", revision, original_request[:80])
 
 
 def clear_pending() -> None:
@@ -95,6 +119,26 @@ def clear_pending() -> None:
     s.pop("pending", None)
     _write_state(s)
     logger.info("Cleared pending state")
+
+
+def get_draft_history() -> list[dict]:
+    """Return the list of previous draft revisions (most recent last)."""
+    return _read_state().get("draft_history", [])
+
+
+def get_draft_revision_count() -> int:
+    """Return the current revision number (1 = first draft, 2+ = revised)."""
+    s = _read_state()
+    if not s.get("pending"):
+        return 0
+    return len(s.get("draft_history", [])) + 1
+
+
+def clear_draft_history() -> None:
+    """Clear all draft history (e.g., after approval or at end of session)."""
+    s = _read_state()
+    s.pop("draft_history", None)
+    _write_state(s)
 
 
 def set_reference_image(path: str) -> None:
@@ -306,3 +350,17 @@ def list_profiles() -> list[dict]:
             "active_for": active_for,
         })
     return result
+
+
+# ---------------------------------------------------------------------------
+# Async wrappers — non-blocking versions for use in bot handlers
+# ---------------------------------------------------------------------------
+
+async def async_save_pending(*args, **kwargs) -> None:
+    await asyncio.to_thread(save_pending, *args, **kwargs)
+
+async def async_clear_pending() -> None:
+    await asyncio.to_thread(clear_pending)
+
+async def async_get_pending() -> dict | None:
+    return await asyncio.to_thread(get_pending)

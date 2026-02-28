@@ -15,9 +15,7 @@ venv/
 
 # Runtime / generated
 bot.log
-state.json
-feedback.json
-learned_preferences.md
+state/
 *.bak
 
 # Eval runtime output
@@ -36,8 +34,7 @@ brand/assets/*.jpg
 # Eval baselines (generated per-brand)
 eval/baselines/*.json
 
-# Runtime state
-auto_post_state.json
+# Runtime cache
 .cache/
 
 # Brand archive (old proprietary assets)

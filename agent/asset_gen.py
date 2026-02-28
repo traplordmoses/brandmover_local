@@ -6,6 +6,7 @@ Supports: logo, icon, mascot, background, 3d_asset, banner, social_header.
 
 import asyncio
 import logging
+from pathlib import Path
 
 from agent import compositor_config, image_gen
 from agent.tools import _staggered_generate, _handle_generate_image
@@ -23,8 +24,8 @@ _ASSET_ROUTING = {
     "social_header": ("announcement", 4),
 }
 
-# Per-type prompt frames prepended to the user description
-_ASSET_FRAMES = {
+# Per-type prompt frames — inline fallbacks
+_ASSET_FRAMES_DEFAULT = {
     "logo": "brand logo design, clean scalable vector, centered composition",
     "icon": "app icon design, clean scalable vector, simple bold shapes",
     "mascot": "character mascot design, friendly, expressive, full body",
@@ -33,36 +34,67 @@ _ASSET_FRAMES = {
     "social_header": "social media header image, wide format, professional",
 }
 
+_PROMPTS_DIR = Path(__file__).resolve().parent.parent / "brand" / "prompts"
+
+
+def _load_asset_frame(asset_type: str) -> str | None:
+    """Load an external prompt template from brand/prompts/{asset_type}.txt.
+
+    Returns the file content if it exists, otherwise None (use inline default).
+    """
+    template_path = _PROMPTS_DIR / f"{asset_type}.txt"
+    if template_path.exists():
+        try:
+            return template_path.read_text(encoding="utf-8").strip()
+        except OSError:
+            pass
+    return None
+
 
 def _build_asset_prompt(asset_type: str, description: str) -> str:
     """Combine user description with asset-type frame and brand context."""
     cfg = compositor_config.get_config()
 
-    parts: list[str] = []
-
-    # Asset-type frame
-    frame = _ASSET_FRAMES.get(asset_type, "")
-    if frame:
-        parts.append(frame)
-
-    # User description
-    parts.append(description.strip())
-
-    # Brand style keywords (up to 4)
-    if cfg.style_keywords:
-        parts.extend(cfg.style_keywords[:4])
-
-    # Brand color palette phrase
+    # Build substitution values for file templates
+    style_keywords = ", ".join(cfg.style_keywords[:4]) if cfg.style_keywords else ""
     color_phrases = []
     for role in ("primary", "accent_1", "accent_2"):
         entry = cfg.colors.get(role)
         if entry:
             color_phrases.append(f"{entry.name.lower()} {entry.hex}")
+    colors = ", ".join(color_phrases) if color_phrases else ""
+    bg = cfg.colors.get("background")
+    background = f"{bg.name.lower()} {bg.hex}" if bg else ""
+
+    # Try external template first
+    file_template = _load_asset_frame(asset_type)
+    if file_template:
+        try:
+            return file_template.format(
+                description=description.strip(),
+                style_keywords=style_keywords,
+                colors=colors,
+                background=background,
+            )
+        except KeyError:
+            # Template has unrecognized placeholders — fall through to default
+            pass
+
+    # Inline fallback
+    parts: list[str] = []
+
+    frame = _ASSET_FRAMES_DEFAULT.get(asset_type, "")
+    if frame:
+        parts.append(frame)
+
+    parts.append(description.strip())
+
+    if cfg.style_keywords:
+        parts.extend(cfg.style_keywords[:4])
+
     if color_phrases:
         parts.append("color palette: " + ", ".join(color_phrases))
 
-    # Background color
-    bg = cfg.colors.get("background")
     if bg:
         parts.append(f"{bg.name.lower()} {bg.hex} background")
 

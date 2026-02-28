@@ -215,8 +215,55 @@ async def extract_brand_from_pdf(pdf_path: str | Path) -> str:
     return guidelines_md
 
 
+# ---------------------------------------------------------------------------
+# Brand context cache — avoids re-reading all files on every generation
+# ---------------------------------------------------------------------------
+
+_context_cache: str | None = None
+_context_cache_mtimes: dict[str, float] = {}
+
+
+def _collect_mtimes() -> dict[str, float]:
+    """Collect modification times for all files that make up the brand context."""
+    mtimes: dict[str, float] = {}
+    guidelines_path = Path(settings.BRAND_FOLDER) / "guidelines.md"
+    if guidelines_path.exists():
+        mtimes[str(guidelines_path)] = guidelines_path.stat().st_mtime
+
+    articles_dir = Path(settings.BRAND_FOLDER) / "examples" / "articles"
+    if articles_dir.exists():
+        for f in sorted(articles_dir.glob("*.txt")):
+            mtimes[str(f)] = f.stat().st_mtime
+
+    refs_dir = Path(settings.REFERENCES_FOLDER)
+    if refs_dir.exists():
+        for root, _dirs, files in os.walk(refs_dir):
+            for fname in files:
+                fpath = Path(root) / fname
+                if fpath.suffix.lower() in (".pdf", ".md", ".txt") and not fname.startswith("."):
+                    mtimes[str(fpath)] = fpath.stat().st_mtime
+    return mtimes
+
+
+def invalidate_brand_context() -> None:
+    """Force re-build on next get_brand_context() call."""
+    global _context_cache, _context_cache_mtimes
+    _context_cache = None
+    _context_cache_mtimes = {}
+
+
 def get_brand_context() -> str:
-    """Combine brand name, guidelines, example articles, and reference materials into a single context string."""
+    """Combine brand name, guidelines, example articles, and reference materials.
+
+    Caches the result and only re-reads when file modification times change.
+    """
+    global _context_cache, _context_cache_mtimes
+
+    current_mtimes = _collect_mtimes()
+    if _context_cache is not None and current_mtimes == _context_cache_mtimes:
+        logger.debug("Brand context cache hit (%d chars)", len(_context_cache))
+        return _context_cache
+
     parts = [f"Brand Name: {settings.BRAND_NAME}"]
 
     guidelines = load_guidelines()
@@ -236,5 +283,7 @@ def get_brand_context() -> str:
             parts.append(f"[{ref['name']}]\n{ref['text']}")
 
     context = "\n\n".join(parts)
-    logger.info("Built brand context: %d total characters", len(context))
+    _context_cache = context
+    _context_cache_mtimes = current_mtimes
+    logger.info("Built brand context: %d total characters (cache refreshed)", len(context))
     return context

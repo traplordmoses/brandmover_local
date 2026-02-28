@@ -15,7 +15,7 @@ from PIL import Image as _PILImage
 from telegram import Update
 from telegram.ext import ContextTypes
 
-from agent import asset_gen, auto_state, brain, compositor, compositor_config, engine, feedback, guidelines, image_gen, publisher, scheduler, state
+from agent import asset_gen, auto_state, brain, compositor, compositor_config, engine, feedback, generation_history, guidelines, image_gen, publisher, scheduler, state
 from config import settings
 
 logger = logging.getLogger(__name__)
@@ -95,6 +95,10 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         "/ingest — Extract brand info from an image\n"
         "/brand_check — Check an image against brand guidelines\n"
         "/train_lora — Trigger LoRA training from approved images\n"
+        "/lora_status — Show LoRA training status and versions\n"
+        "/history — Show generation history and stats\n"
+        "/analytics — Show approval rates by content type and model\n"
+        "/apply — Apply extracted brand info to guidelines\n"
         "/help — Show this message"
     )
     await update.message.reply_text(msg, parse_mode="HTML")
@@ -161,8 +165,10 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
     age = int(time.time() - pending.get("timestamp", 0))
     minutes = age // 60
+    revision = state.get_draft_revision_count()
+    rev_tag = f" (revision {revision})" if revision > 1 else ""
     msg = (
-        f"<b>Pending Draft</b>\n\n"
+        f"<b>Pending Draft{_esc(rev_tag)}</b>\n\n"
         f"<b>Request:</b> {_esc(pending['original_request'])}\n\n"
         f"<b>Caption:</b>\n{_esc(pending['caption'])}\n\n"
         f"<b>Image:</b> {'Yes' if pending.get('image_url') else 'No'}\n"
@@ -182,6 +188,7 @@ async def cancel_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         return
 
     state.clear_pending()
+    state.clear_draft_history()
     await update.message.reply_text("Draft cancelled. Send a new request whenever you're ready.")
 
 
@@ -219,12 +226,20 @@ async def approve_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     await update.message.chat.send_action("typing")
 
     # Log feedback
-    count = feedback.log_feedback(
+    count = await feedback.async_log_feedback(
         request=pending.get("original_request", ""),
         draft=pending,
         accepted=True,
         resources_used=pending.get("resources_used", []),
     )
+
+    # Update generation history status
+    try:
+        ts = pending.get("timestamp", 0)
+        if ts:
+            await generation_history.async_update_generation_status(ts,"approved")
+    except Exception as e:
+        logger.debug("Generation history update failed: %s", e)
 
     # Save approved composed image to brand/references/ for style consistency
     composed_path, composed_ct = state.get_last_composed()
@@ -322,6 +337,7 @@ async def approve_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             parse_mode="HTML",
         )
         state.clear_pending()
+        state.clear_draft_history()
         return
 
     # If this draft came from the auto-post scheduler, record it so the slot
@@ -337,6 +353,7 @@ async def approve_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         logger.info("Auto-post slot '%s' recorded via /approve", auto_slot)
 
     state.clear_pending()
+    state.clear_draft_history()
     slot_note = f"  (auto-slot: {_esc(auto_slot)})" if auto_slot else ""
     await update.message.reply_text(
         f"Posted to X!{slot_note}\n"
@@ -507,7 +524,7 @@ async def reject_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     await update.message.chat.send_action("typing")
 
     # Log the rejection
-    count = feedback.log_feedback(
+    count = await feedback.async_log_feedback(
         request=pending.get("original_request", ""),
         draft=pending,
         accepted=False,
@@ -515,6 +532,14 @@ async def reject_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         resources_used=pending.get("resources_used", []),
     )
     logger.info("Draft rejected (feedback #%d): %s", count, feedback_text[:100])
+
+    # Update generation history status
+    try:
+        ts = pending.get("timestamp", 0)
+        if ts:
+            await generation_history.async_update_generation_status(ts,"rejected")
+    except Exception as e:
+        logger.debug("Generation history update failed: %s", e)
 
     # Auto-summarize at threshold
     if count % settings.FEEDBACK_SUMMARIZE_EVERY == 0:
@@ -879,6 +904,7 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         guidelines_path.write_text(guidelines_md, encoding="utf-8")
         compositor_config.invalidate_cache()
         compositor.clear_font_cache()
+        guidelines.invalidate_brand_context()
 
         # Also save PDF to references
         refs_dir = brand_path / "references"
@@ -990,6 +1016,11 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             await update.message.reply_text(
                 f"<b>Compliance report:</b>\n{_esc(report)}",
                 parse_mode="HTML",
+            )
+            # Store extracted data for /apply
+            context.user_data["last_ingest_extracted"] = extracted
+            await update.message.reply_text(
+                "Reply /apply to update guidelines with the extracted info.",
             )
         except Exception as e:
             logger.error("Brand ingestion failed: %s", e)
@@ -1605,6 +1636,19 @@ async def generate_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         await update.message.reply_text("No images were generated. Check logs for details.")
         return
 
+    # Log to generation history
+    try:
+        await generation_history.async_log_generation(
+            asset_type=asset_type,
+            content_type=result.get("content_type", ""),
+            prompt=result.get("prompt", description),
+            model_id="auto",
+            image_urls=urls,
+            original_request=f"/generate {asset_type} {description}",
+        )
+    except Exception as e:
+        logger.warning("Failed to log generation history: %s", e)
+
     # Send each option as a separate photo
     for i, url in enumerate(urls, 1):
         try:
@@ -1625,6 +1669,7 @@ async def generate_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         image_prompt=result.get("prompt", description),
         original_request=f"/generate {asset_type} {description}",
         image_urls=urls,
+        content_type=result.get("content_type"),
     )
 
     await update.message.reply_text(
@@ -1680,6 +1725,65 @@ async def ingest_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
 
 # ---------------------------------------------------------------------------
+# /apply — apply extracted brand info to guidelines
+# ---------------------------------------------------------------------------
+
+async def apply_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /apply — merge last ingest extraction into guidelines.md."""
+    if not _authorized(update.effective_user.id):
+        return
+
+    extracted = context.user_data.get("last_ingest_extracted")
+    if not extracted:
+        await update.message.reply_text(
+            "No extracted data to apply. Use /ingest first and send a brand image.",
+        )
+        return
+
+    await update.message.chat.send_action("typing")
+    await update.message.reply_text("Merging extracted data into guidelines...")
+
+    try:
+        from agent import ingest
+        import shutil
+
+        guidelines_path = Path(settings.BRAND_FOLDER) / "guidelines.md"
+
+        # Backup current guidelines
+        if guidelines_path.exists():
+            backup_path = guidelines_path.with_suffix(".md.bak")
+            shutil.copy2(guidelines_path, backup_path)
+            logger.info("Guidelines backed up to %s", backup_path)
+
+        # Generate merged content
+        new_content = await ingest.apply_extracted_to_guidelines(extracted)
+        guidelines_path.write_text(new_content, encoding="utf-8")
+
+        # Invalidate caches
+        compositor_config.invalidate_cache()
+        compositor.clear_font_cache()
+        guidelines.invalidate_brand_context()
+
+        # Clear stored extracted data
+        context.user_data.pop("last_ingest_extracted", None)
+
+        await update.message.reply_text(
+            f"Guidelines updated ({len(new_content)} chars).\n"
+            f"Backup saved to <code>guidelines.md.bak</code>\n"
+            f"Config cache invalidated.",
+            parse_mode="HTML",
+        )
+        logger.info("Guidelines updated from /apply (%d chars)", len(new_content))
+
+    except Exception as e:
+        logger.error("Apply command failed: %s", e)
+        await update.message.reply_text(
+            f"Failed to apply: {_esc(str(e))}",
+            parse_mode="HTML",
+        )
+
+
+# ---------------------------------------------------------------------------
 # /brand_check — check an image against brand guidelines
 # ---------------------------------------------------------------------------
 
@@ -1723,7 +1827,10 @@ async def train_lora_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
     await update.message.reply_text("Starting LoRA training on Replicate...")
 
     try:
-        result = await lora_pipeline.trigger_training()
+        result = await lora_pipeline.trigger_training(
+            bot=context.bot,
+            chat_id=update.effective_user.id,
+        )
     except Exception as e:
         logger.error("train_lora failed: %s", e)
         await update.message.reply_text(
@@ -1743,7 +1850,124 @@ async def train_lora_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
         f"Prediction ID: <code>{_esc(result.get('prediction_id', '?'))}</code>\n"
         f"Images: {result.get('image_count', '?')}\n"
         f"Trigger word: <code>{_esc(result.get('trigger_word', 'BRAND3D'))}</code>\n\n"
-        f"Training takes ~20-40 minutes. Download weights when complete from "
-        f"the Replicate dashboard.",
+        f"Polling in background — I'll notify you when training completes "
+        f"and auto-download the weights.\n"
+        f"Use /lora_status to check progress.",
         parse_mode="HTML",
     )
+
+
+# ---------------------------------------------------------------------------
+# /lora_status — show LoRA training status
+# ---------------------------------------------------------------------------
+
+async def lora_status_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /lora_status — show LoRA training status and version history."""
+    if not _authorized(update.effective_user.id):
+        return
+
+    from agent import lora_pipeline
+
+    stats = lora_pipeline.get_training_stats()
+    total = stats["total_images"]
+    threshold = stats["threshold"]
+    versions = stats["versions"]
+
+    lora = lora_pipeline.get_active_lora()
+
+    lines = ["<b>LoRA Training Status</b>\n"]
+
+    if lora:
+        lines.append(f"Active LoRA: <b>{_esc(lora.get('version', '?'))}</b>")
+        lines.append(f"Model URL: <code>{_esc(lora.get('model_url', '?'))}</code>")
+        lines.append(f"Trigger word: <code>{_esc(lora.get('trigger_word', 'BRAND3D'))}</code>")
+        lines.append(f"Weights: <code>{_esc(lora.get('weights_path', 'N/A'))}</code>")
+    else:
+        lines.append("Active LoRA: <i>none</i>")
+
+    lines.append(f"\nTraining images: <b>{total}</b> / {threshold}")
+
+    if versions:
+        lines.append("\n<b>Version history:</b>")
+        for v in versions[-5:]:
+            status_icon = {"completed": "\u2705", "training": "\u23F3", "failed": "\u274C"}.get(v.get("status", ""), "\u2753")
+            lines.append(
+                f"  {status_icon} {_esc(v.get('version', '?'))} — "
+                f"{_esc(v.get('status', '?'))} "
+                f"({v.get('image_count', '?')} images)"
+            )
+
+    await update.message.reply_text("\n".join(lines), parse_mode="HTML")
+
+
+# ---------------------------------------------------------------------------
+# /history — generation history stats
+# ---------------------------------------------------------------------------
+
+async def history_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /history — show generation stats and recent entries."""
+    if not _authorized(update.effective_user.id):
+        return
+
+    stats = generation_history.get_generation_stats()
+    recent = generation_history.get_recent_generations(5)
+
+    lines = [f"<b>Generation History</b> ({stats['total']} total)\n"]
+
+    if stats["by_status"]:
+        status_parts = [f"{k}: {v}" for k, v in sorted(stats["by_status"].items())]
+        lines.append(f"<b>By status:</b> {', '.join(status_parts)}")
+
+    if stats["by_type"]:
+        type_parts = [f"{k}: {v}" for k, v in sorted(stats["by_type"].items())]
+        lines.append(f"<b>By type:</b> {', '.join(type_parts)}")
+
+    if stats["by_model"]:
+        model_parts = [f"{k}: {v}" for k, v in sorted(stats["by_model"].items())]
+        lines.append(f"<b>By model:</b> {', '.join(model_parts)}")
+
+    total_cost = stats.get("estimated_total_cost_usd", 0)
+    if total_cost > 0:
+        lines.append(f"<b>Est. total cost:</b> ${total_cost:.2f}")
+
+    if recent:
+        lines.append("\n<b>Recent:</b>")
+        for e in recent:
+            import datetime
+            ts = datetime.datetime.fromtimestamp(e.get("timestamp", 0)).strftime("%m/%d %H:%M")
+            status = e.get("status", "?")
+            at = e.get("asset_type", e.get("content_type", "?"))
+            req = e.get("original_request", "")[:50]
+            lines.append(f"  [{status}] {ts} {at} — {_esc(req)}")
+
+    if not stats["total"]:
+        lines.append("No generations recorded yet.")
+
+    await update.message.reply_text("\n".join(lines), parse_mode="HTML")
+
+
+async def analytics_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /analytics — show approval rates by content type and model."""
+    if not _authorized(update.effective_user.id):
+        return
+
+    data = generation_history.get_approval_analytics()
+    lines = ["<b>Approval Rate Analytics</b>\n"]
+
+    ct_data = data.get("by_content_type", {})
+    if ct_data:
+        lines.append("<b>By content type:</b>")
+        for ct, stats in ct_data.items():
+            total = stats["approved"] + stats["rejected"]
+            lines.append(f"  {ct}: {stats['rate']:.0f}% ({stats['approved']}/{total})")
+    else:
+        lines.append("No reviewed drafts yet.")
+
+    model_data = data.get("by_model", {})
+    if model_data:
+        lines.append("\n<b>By model:</b>")
+        for model, stats in model_data.items():
+            total = stats["approved"] + stats["rejected"]
+            lines.append(f"  {model}: {stats['rate']:.0f}% ({stats['approved']}/{total})")
+
+    await update.message.reply_text("\n".join(lines), parse_mode="HTML")

@@ -138,6 +138,49 @@ async def diff_against_guidelines(extracted: dict) -> str:
     return response.content[0].text.strip()
 
 
+async def apply_extracted_to_guidelines(extracted: dict) -> str:
+    """Merge extracted brand elements into the current guidelines.md.
+
+    Reads the current guidelines, sends both to Claude Sonnet with merge
+    instructions, and returns the full updated markdown content.
+    """
+    guidelines_path = Path(settings.BRAND_FOLDER) / "guidelines.md"
+    current_content = ""
+    if guidelines_path.exists():
+        current_content = guidelines_path.read_text(encoding="utf-8")
+
+    client = anthropic.AsyncAnthropic(api_key=settings.ANTHROPIC_API_KEY)
+
+    response = await client.messages.create(
+        model="claude-sonnet-4-20250514",
+        max_tokens=4000,
+        messages=[
+            {
+                "role": "user",
+                "content": (
+                    "You are a brand guidelines editor. Merge the extracted brand elements "
+                    "into the existing guidelines markdown. Preserve the existing structure "
+                    "and sections. Add new information, update colors/fonts if the extracted "
+                    "data provides better or additional values. Do NOT remove existing content "
+                    "unless it directly conflicts with the extracted data.\n\n"
+                    f"CURRENT GUIDELINES:\n```markdown\n{current_content}\n```\n\n"
+                    f"EXTRACTED FROM IMAGE:\n{json.dumps(extracted, indent=2)}\n\n"
+                    "Return ONLY the complete updated markdown content, no code fences."
+                ),
+            }
+        ],
+    )
+
+    result = response.content[0].text.strip()
+    # Strip markdown code fences if the model wrapped it
+    if result.startswith("```"):
+        result = result.split("\n", 1)[1] if "\n" in result else result[3:]
+    if result.endswith("```"):
+        result = result[:-3].rstrip()
+
+    return result
+
+
 async def check_asset_compliance(image_path: str) -> str:
     """Convenience: extract brand elements from an image and compare against guidelines."""
     extracted = await extract_brand_from_image(image_path)

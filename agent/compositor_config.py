@@ -48,6 +48,14 @@ class BrandConfig:
     raw_hash: str = ""
     parsed_at: float = 0.0
     source_path: str = ""
+    # Visual effects — configurable via ## VISUAL EFFECTS table
+    glass_opacity: int = 6
+    glass_blur: int = 12
+    glass_radius: int = 28
+    glass_inset: tuple[int, int, int, int] = field(default_factory=lambda: (40, 70, 40, 30))
+    orb_alpha_base: int = 18
+    orb_count: int = 7
+    noise_opacity: int = 0
 
 
 # ---------------------------------------------------------------------------
@@ -153,6 +161,53 @@ def _parse_avoid_terms(text: str) -> list[str]:
     return [t.strip() for t in avoid_match.group(1).split(",") if t.strip()]
 
 
+_EFFECTS_ROW = re.compile(
+    r"\|\s*(?P<effect>[^|]+?)\s*\|\s*(?P<value>[^|]+?)\s*\|",
+)
+
+_EFFECTS_KEY_MAP = {
+    "glass opacity": "glass_opacity",
+    "glass blur": "glass_blur",
+    "glass radius": "glass_radius",
+    "glass inset": "glass_inset",
+    "orb alpha": "orb_alpha_base",
+    "orb count": "orb_count",
+    "noise opacity": "noise_opacity",
+}
+
+
+def _parse_visual_effects(text: str) -> dict:
+    """Parse optional ## VISUAL EFFECTS table section."""
+    m = re.search(r"##\s*VISUAL EFFECTS(.*?)(?=\n##|\Z)", text, re.DOTALL)
+    if not m:
+        return {}
+    section = m.group(1)
+    effects: dict = {}
+    for row in _EFFECTS_ROW.finditer(section):
+        raw_effect = row.group("effect").strip().lower()
+        raw_value = row.group("value").strip()
+        # Skip header/separator rows
+        if raw_effect in ("effect", "---", "-------") or raw_effect.startswith("-"):
+            continue
+        key = _EFFECTS_KEY_MAP.get(raw_effect)
+        if not key:
+            continue
+        if key == "glass_inset":
+            # Parse "40, 70, 40, 30" → tuple
+            try:
+                parts = [int(v.strip()) for v in raw_value.split(",")]
+                if len(parts) == 4:
+                    effects[key] = tuple(parts)
+            except ValueError:
+                pass
+        else:
+            try:
+                effects[key] = int(raw_value)
+            except ValueError:
+                pass
+    return effects
+
+
 # ---------------------------------------------------------------------------
 # Config cache
 # ---------------------------------------------------------------------------
@@ -182,6 +237,7 @@ def get_config(path: Path | None = None) -> BrandConfig:
     identity = _parse_identity(raw)
     style_kw = _parse_style_keywords(raw)
     avoid = _parse_avoid_terms(raw)
+    effects = _parse_visual_effects(raw)
 
     _cached_config = BrandConfig(
         brand_name=identity.get("brand_name", ""),
@@ -195,6 +251,7 @@ def get_config(path: Path | None = None) -> BrandConfig:
         raw_hash=md5,
         parsed_at=time.time(),
         source_path=str(src),
+        **effects,
     )
     logger.info(
         "Parsed brand config: %d colors, %d fonts, brand=%s",

@@ -17,11 +17,7 @@ logger = logging.getLogger(__name__)
 
 def create_bot() -> Application:
     """Build and configure the Telegram bot Application."""
-    if not settings.TELEGRAM_BOT_TOKEN:
-        raise RuntimeError("TELEGRAM_BOT_TOKEN is not set in .env")
-
-    if not settings.TELEGRAM_ALLOWED_USER_ID:
-        raise RuntimeError("TELEGRAM_ALLOWED_USER_ID is not set in .env")
+    settings.validate(exit_on_error=True)
 
     app = Application.builder().token(settings.TELEGRAM_BOT_TOKEN).build()
 
@@ -45,8 +41,12 @@ def create_bot() -> Application:
     app.add_handler(CommandHandler("generate", handlers.generate_command))
     app.add_handler(CommandHandler("logo", handlers.logo_command))
     app.add_handler(CommandHandler("ingest", handlers.ingest_command))
+    app.add_handler(CommandHandler("apply", handlers.apply_command))
     app.add_handler(CommandHandler("brand_check", handlers.brand_check_command))
     app.add_handler(CommandHandler("train_lora", handlers.train_lora_command))
+    app.add_handler(CommandHandler("lora_status", handlers.lora_status_command))
+    app.add_handler(CommandHandler("history", handlers.history_command))
+    app.add_handler(CommandHandler("analytics", handlers.analytics_command))
 
     # Photo uploads (reference images)
     app.add_handler(

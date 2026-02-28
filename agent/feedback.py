@@ -6,6 +6,7 @@ Storage:
 - learned_preferences.md: LLM-generated summary of patterns (overwritten each time)
 """
 
+import asyncio
 import json
 import logging
 import time
@@ -18,8 +19,19 @@ from config import settings
 logger = logging.getLogger(__name__)
 
 _project_root = Path(__file__).resolve().parent.parent
-_FEEDBACK_FILE = _project_root / "feedback.json"
-_PREFERENCES_FILE = _project_root / "learned_preferences.md"
+_STATE_DIR = _project_root / "state"
+_FEEDBACK_FILE = _STATE_DIR / "feedback.json"
+_PREFERENCES_FILE = _STATE_DIR / "learned_preferences.md"
+
+# Migrate from old locations if needed
+for _old, _new in [
+    (_project_root / "feedback.json", _FEEDBACK_FILE),
+    (_project_root / "learned_preferences.md", _PREFERENCES_FILE),
+]:
+    if _old.exists() and not _new.exists():
+        _STATE_DIR.mkdir(parents=True, exist_ok=True)
+        import shutil as _shutil
+        _shutil.move(str(_old), str(_new))
 
 
 def _read_feedback() -> list[dict]:
@@ -160,3 +172,11 @@ async def summarize_preferences() -> str:
     _PREFERENCES_FILE.write_text(summary, encoding="utf-8")
     logger.info("Updated learned_preferences.md (%d chars)", len(summary))
     return summary
+
+
+# ---------------------------------------------------------------------------
+# Async wrappers — non-blocking versions for use in bot handlers
+# ---------------------------------------------------------------------------
+
+async def async_log_feedback(*args, **kwargs) -> int:
+    return await asyncio.to_thread(log_feedback, *args, **kwargs)

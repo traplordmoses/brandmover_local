@@ -16,6 +16,13 @@ logger = logging.getLogger(__name__)
 
 _STATE_FILE = Path(settings.AUTO_POST_STATE_FILE)
 
+# Migrate from old location if needed
+_OLD_AUTO_STATE = Path(__file__).resolve().parent.parent / "auto_post_state.json"
+if _OLD_AUTO_STATE.exists() and not _STATE_FILE.exists():
+    _STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
+    import shutil as _shutil
+    _shutil.move(str(_OLD_AUTO_STATE), str(_STATE_FILE))
+
 # ---------------------------------------------------------------------------
 # File I/O
 # ---------------------------------------------------------------------------
