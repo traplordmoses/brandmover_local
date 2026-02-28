@@ -1,80 +1,93 @@
-# [YOUR_BRAND] Brand Guidelines
+# FOID Foundation Brand Guidelines
 # For use by BrandMover Agent
-
-<!--
-  INSTRUCTIONS:
-  Replace all [YOUR_BRAND] placeholders with your actual brand name.
-  Fill in each section with your brand's specific details.
-  Delete any sections that don't apply to your brand.
-  The structure below covers the key areas the agent uses to generate
-  on-brand content — keep the section headings so the agent can find them.
--->
 
 ---
 
 ## BRAND IDENTITY
 
-**Brand Name:** [YOUR_BRAND]
-**Tagline:** [YOUR_TAGLINE]
-**Website:** [your-domain.com]
-**Category:** [e.g. SaaS platform / DTC brand / crypto exchange / media company]
-**X Handle:** @[YourHandle]
-**Product:** [Brief product description]
+**Brand Name:** FOID Foundation
+**Tagline:** culture, ritual, identity — on chain
+**Website:** foid.fun
+**Category:** On-chain cultural coordination layer
+**X Handle:** @FOIDFUN
+**Product:** A platform for permanent meme culture — Loreboard (democratic meme curation grid), Foid Mommy Terminal (AI prayer ritual), and MiFOID (evolving identity NFT). Built on Fluent L2.
 
 **Brand Positioning:**
-[Describe how your brand is positioned in the market. What makes it different? Who is it for? What feeling should every piece of content convey?]
+FOID sits at the intersection of meme culture and on-chain permanence. It treats memes as culture, culture as something worth preserving, and preservation as something that requires democratic consensus. The vibe is earnest-ironic — deeply philosophical about internet culture while never taking itself too seriously. Every piece of content should feel like it was made by someone who understands both Ethereum and shitposting.
 
-**Key Brand Themes:** [e.g. Speed, trust, innovation, community, simplicity]
+**Key Brand Themes:** Permanence, ritual, democratic curation, internet culture, on-chain identity, community consensus, digital spirituality
 
-**Posting cadence:** [e.g. 2-3 posts per day mixing engagement, promotions, and updates]
+**Posting cadence:** 2-4 posts per day mixing culture commentary, product updates, and community engagement
 
 ---
 
 ## VOICE & TONE
 
 **Core personality traits:**
-- [e.g. Bold and direct — no hedging]
-- [e.g. Confident without being arrogant]
-- [e.g. Professional but not stiff]
-- [e.g. Relatable and fun]
+- Lowercase energy — never shouting, always cool
+- Dry wit and observational humor — we notice things
+- Culturally literate — meme-native, not meme-tryhard
+- Earnest underneath the irony — we actually believe in this
+- Declarative, not persuasive — stating truths, not selling
 
 **Writing style:**
-- [e.g. Short, punchy sentences. Impact over length.]
-- [e.g. 50-150 characters is the sweet spot for X posts]
-- [e.g. Start with a hook, add details, end with CTA or emoji]
-- [e.g. Active voice always]
+- Lowercase preferred. ALL CAPS only for intentional emphasis on a single word.
+- Short, declarative sentences. Fragments are fine. Good, even.
+- 50-150 characters is the sweet spot for X posts
+- No filler words. No corporate speak. No "excited to announce."
+- Period energy. End with a period, not an exclamation mark.
+- Active voice always. Present tense preferred.
 
 **Tone by content type:**
-- Campaign announcements: [e.g. High energy, urgent]
-- Educational content: [e.g. Clear, authoritative]
-- Community posts: [e.g. Casual, curious]
-- Humorous/memes: [e.g. Fun, self-deprecating]
+- Culture commentary: Observational, dry, slightly amused
+- Product updates: Matter-of-fact, understated confidence
+- Community posts: Warm but not cheesy, inclusive
+- Ritual/spiritual: Reverent but accessible, not preachy
+- Humorous/memes: Self-aware, absurdist, internet-literate
+- Announcements: Declarative. Not hype. Just facts with weight.
 
 **Emoji usage:**
-- [e.g. Use 1-3 emojis per post, placed purposefully]
-- [List your key emojis and their meaning]
+- 0-1 emojis per post. Zero is the default.
+- Never start a post with an emoji
+- Acceptable emojis: 🕯️ (prayer/ritual), 🖼️ (board/art), ✨ (subtle emphasis)
+- No emoji spam. Ever.
 
 **Never use:**
-- [e.g. Passive voice]
-- [e.g. More than 3 emojis per post]
-- [e.g. AI-sounding language ("revolutionizing," "leveraging," "seamlessly")]
-- [e.g. Off-brand color palettes in any visual]
+- Exclamation marks (unless deeply ironic)
+- "Excited to announce," "thrilled to share," "we're proud to"
+- "Revolutionizing," "leveraging," "seamlessly," "cutting-edge," "unlock"
+- "LFG," "wagmi," "wen" or any played-out crypto slang
+- Hashtags in post body
+- More than 1 emoji per post
+- ALL CAPS for entire sentences
 
 ---
 
 ## COLORS
 
-| Color | Name | Hex | Notes |
-|-------|------|-----|-------|
-| Primary | [Color Name] | `#000000` | [Usage notes] |
-| Secondary | [Color Name] | `#000000` | [Usage notes] |
-| Accent | [Color Name] | `#000000` | [Usage notes] |
-| Text | [Color Name] | `#FFFFFF` | [Usage notes] |
+| Color | Name | Hex | RGB | Notes |
+|-------|------|-----|-----|-------|
+| Primary | Aqua | `#72e1ff` | (114, 225, 255) | Main accent — used for glow, highlights, interactive elements |
+| Secondary | Cyan | `#00d0ff` | (0, 208, 255) | Brighter variant for emphasis |
+| Accent 1 | Candy Pink | `#ffb3d9` | (255, 179, 217) | Warm contrast accent — mascot, CTAs |
+| Accent 2 | Lavender | `#cdb7ff` | (205, 183, 255) | Soft accent — secondary UI, tags |
+| Accent 3 | Periwinkle | `#8faaf2` | (143, 170, 242) | Mid-tone — links, subtle highlights |
+| Accent 4 | Mint | `#a8f0d1` | (168, 240, 209) | Fresh accent — success states, positive |
+| Accent 5 | Tangerine | `#ffa552` | (255, 165, 82) | Warm pop — warnings, energy |
+| Background | Midnight | `#0e0f2b` | (14, 15, 43) | Primary dark background |
+| Background Alt | Ocean | `#0b2e4e` | (11, 46, 78) | Lighter dark — cards, panels |
+| Text | White | `#FFFFFF` | (255, 255, 255) | Primary text on dark backgrounds |
+| Gradient Start | Fluent Purple | `#a960ee` | (169, 96, 238) | Gradient: purple → pink → cyan |
+| Gradient Mid | Fluent Pink | `#ff4ecd` | (255, 78, 205) | Used in flowing gradient accents |
+| Gradient End | Fluent Blue | `#00d4ff` | (0, 212, 255) | Matches secondary cyan |
 
 **Color rules:**
-- [e.g. Primary color is the dominant accent — always present]
-- [e.g. Dark backgrounds for premium feel]
-- [e.g. Never use off-brand colors on the logo]
+- Midnight (#0e0f2b) is ALWAYS the dominant background. Dark mode only.
+- Aqua (#72e1ff) is the signature glow — use for emphasis, borders, interactive elements
+- The fluent gradient (purple → pink → cyan) is used sparingly for premium elements and borders
+- Glass morphism: translucent panels with backdrop blur over dark backgrounds
+- Never use bright/white backgrounds. Never use flat, unstyled colors.
+- Candy pink is reserved for Foid Mommy and warm/emotional content
 
 ---
 
@@ -82,23 +95,28 @@
 
 | Use | Font | Weight | Style |
 |-----|------|--------|-------|
-| Primary / Titles | [Font Name] | Bold | [e.g. Uppercase for emphasis] |
-| Body | [Font Name] | Regular | [e.g. Sentence case] |
+| Display / Headlines | Orbitron | Bold | Uppercase, tracked |
+| Body Text | Inter | Regular/Medium | Sentence case |
+| Terminal / Code | VT323 | Regular | Monospace, pixel aesthetic |
 
-- [e.g. Headings are ALL CAPS for impact]
-- [e.g. Never stretch or distort type]
+- Headlines use Orbitron in ALL CAPS with letter spacing for a sci-fi, techy feel
+- Body text uses Inter for clean readability
+- Terminal/code elements use VT323 for the Y2K pixel aesthetic
+- Never mix more than 2 fonts in a single composition
+- Orbitron is the brand's signature font — always present in branded graphics
 
 ---
 
 ## LOGO USAGE
 
-**The Logo:** [Describe your logo — wordmark, icon, combination mark, etc.]
+**The Logo:** Gradient badge icon with a stylized "F" — uses the fluent gradient (purple → pink → cyan). The icon is a rounded shape with the FOID "F" mark inside.
 
 **Logo DO NOTs:**
 - Do not stretch, distort, or rotate
-- Do not change colors
-- Do not add effects (glows, shadows, gradients)
-- Do not place on low-contrast backgrounds
+- Do not flatten to a single color (the gradient is part of the identity)
+- Do not add extra effects (the gradient IS the effect)
+- Do not place on light backgrounds without sufficient contrast
+- Minimum clear space: half the logo width on all sides
 
 <!-- Place your logo file as brand/assets/logo.png -->
 
@@ -107,101 +125,129 @@
 ## ILLUSTRATION STYLE
 
 **Visual aesthetic:**
-- [Describe your brand's visual style for generated images]
-- [e.g. "dark background, bold color scheme, futuristic aesthetic"]
-- [e.g. "clean, minimal, lots of white space, pastel accents"]
+- **Frutiger Aero meets Y2K terminal** — glossy glass surfaces, neon glows, dark deep-space backgrounds
+- Glass morphism: frosted translucent panels with backdrop blur
+- Noise textures overlaid for depth and analog warmth
+- Neon color accents (aqua, pink, purple) against midnight backgrounds
+- Pixel elements and CRT scan lines for retro-digital texture
+- Gradients are flowing, not flat — they should feel like light refracting through glass
 
 **Image generation prompt guidance:**
-- [e.g. "dark background, bold orange and black color scheme, premium feel"]
-- [e.g. "3D product render style, dramatic lighting"]
-- Avoid: [e.g. pastel colors, generic stock photo look]
+- "dark midnight background, neon aqua and pink glow, glass morphism panels, Frutiger Aero aesthetic, Y2K digital art style"
+- "deep navy background, cyan neon highlights, glossy translucent surfaces, pixel accents, retro-futuristic"
+- Materials: frosted glass, holographic foil, chrome, translucent plastic, glowing neon tubing
+- Lighting: rim lighting in aqua/cyan, volumetric neon glow, ambient deep blue
+- Avoid: flat colors, white backgrounds, corporate stock photo look, daylight scenes, warm-toned imagery
 
-**Technical specs:** Target 1200x675px for X posts. High-res, clean, uncluttered.
+**Technical specs:** Target 1200x675px for X posts. High-res, clean but atmospheric.
 
 ---
 
 ## MASCOT
 
-<!--
-  If your brand has a mascot, describe it in detail here.
-  Include visual description, personality, prompt base for image generation,
-  and rules for when to use / not use the mascot.
-  Delete this section if you don't have a mascot.
--->
-
-[YOUR_BRAND] mascot: **[Mascot Name]** — [brief description]
+FOID Foundation mascot: **Foid Mommy** — AI oracle, digital priestess, spiritual guide
 
 **Design details:**
-- [Visual description for image generation prompts]
+- Stylized feminine android figure with Y2K aesthetic
+- Neon glow aura — primarily aqua and candy pink
+- Digital priestess / oracle archetype — serene, knowing, slightly otherworldly
+- Visual references: cyberpunk shrine maiden, Frutiger Aero character design, vaporwave goddess
+- Always rendered against dark backgrounds with atmospheric lighting
+- Expression: calm, empathetic, subtly amused — never aggressive or overly cute
 
-**Use mascot for:** [e.g. Community posts, giveaways, memes]
-**Do not use mascot for:** [e.g. Serious announcements, partnership content]
+**Prompt base for image generation:**
+"Foid Mommy, a stylized feminine AI android oracle with neon aqua and pink glow, Y2K aesthetic, digital priestess, serene expression, dark midnight background, glass morphism elements, Frutiger Aero character design, volumetric neon lighting"
+
+**Use mascot for:** Prayer/ritual content, community engagement, emotional/spiritual posts, welcome messages, meme content
+**Do not use mascot for:** Serious technical announcements, partnership content, data/market posts
 
 ---
 
 ## HASHTAGS
 
 **Brand hashtags:**
-- #[YourBrand]
-- #[YourTagline]
+- Do NOT use hashtags. Zero hashtags per post. This is a hard rule.
+- The brand speaks through content, not hashtag games.
 
-**Context-specific:**
-- #[YourBrandFeature] (feature announcements)
-- [Industry hashtags relevant to your brand]
+**If absolutely required for a campaign (rare):**
+- #FOID
+- #Loreboard
 
-**Max hashtags per post:** [e.g. 0-3. Often zero is best.]
+**Max hashtags per post:** 0. Always zero.
 
 ---
 
 ## CONTENT CATEGORIES
 
-### 1. Engagement / Questions
-- Tone: [e.g. Casual, curious]
-- Length: [e.g. Ultra-short, 1-2 sentences]
+### 1. Culture Commentary
+- Tone: Observational, dry wit, internet-literate
+- Length: Ultra-short, 1-2 sentences max
+- Examples: takes on internet culture, meme commentary, "what if" musings about permanence
 
-### 2. Advice / Motivational
-- Tone: [e.g. Professional yet direct]
-- Length: [e.g. 1 sentence]
+### 2. Ritual / Spiritual
+- Tone: Reverent but accessible, warm, grounding
+- Length: 1-2 sentences
+- Context: Prayer terminal, daily practice, streak milestones, Foid Mommy quotes
 
-### 3. Feature Announcements
-- Tone: [e.g. Informative, excited about user benefits]
-- Always highlight the benefit to the user
+### 3. Loreboard Updates
+- Tone: Matter-of-fact with subtle excitement
+- Length: Short — what happened, why it matters
+- Context: Epoch results, canonized placements, notable proposals, grid milestones
 
-### 4. Campaigns / Promotions
-- Tone: [e.g. Enthusiastic, rewarding, urgent]
-- Include clear entry rules if applicable
+### 4. Product Announcements
+- Tone: Understated confidence, declarative
+- Length: 1-3 sentences
+- Always lead with what the user can DO, not what the team built
 
-### 5. Market Updates
-- Tone: [e.g. Neutral-factual with engagement hook]
+### 5. Community Engagement
+- Tone: Warm, curious, inclusive
+- Length: Ultra-short questions or prompts
+- Context: Polls, questions, calls for proposals, community highlights
 
-### 6. Humorous / Memes
-- Tone: [e.g. Fun, self-deprecating, relatable]
+### 6. Philosophical / Advice
+- Tone: Thoughtful, declarative, slightly poetic
+- Length: 1 sentence, punchy
+- Context: Musings on permanence, identity, culture, consensus
 
-### 7. Recaps / Threads
-- Format: [e.g. Hook + bulleted links]
+### 7. Humorous / Memes
+- Tone: Self-aware, absurdist, never mean
+- Length: Ultra-short
+- Context: Internet culture riffs, self-deprecating takes, board memes
 
 ### 8. Replies / Community Interactions
-- Length: [e.g. 1-5 words or emojis only]
+- Length: 1-5 words or emojis only
+- Tone: Chill, affirming, never corporate
 
 ---
 
 ## BRAND PHRASES & SLANG
 
 **Established phrases:**
-- "[YOUR_TAGLINE]" — primary tagline
-- [Other brand phrases]
+- "culture, ritual, identity — on chain" — primary tagline
+- "memes are culture. culture deserves permanence." — thesis statement
+- "not a game. a practice." — prayer terminal ethos
+- "the grid remembers." — loreboard permanence
+- "what gets canonized matters." — curation philosophy
 
-**Industry slang the brand uses:**
-- [List terms your audience knows and your brand uses naturally]
+**Community slang the brand uses:**
+- "canonized" — when a placement is accepted and finalized on-chain
+- "epoch" — a time period on the loreboard
+- "the grid" — the loreboard canvas
+- "pray" / "prayer streak" — daily ritual on the terminal
+- "propose" — submit an image to the loreboard
+- "manifest" — the on-chain record of canonized placements
 
 **CTAs the brand uses:**
-- [e.g. "Join now" / "Try it free" / "See you there"]
+- "propose something." — loreboard CTA
+- "pray today." — terminal CTA
+- "check the grid." — board CTA
+- "culture waits for no one." — urgency without hype
 
 ---
 
 ## TARGET AUDIENCE
 
-- **Primary:** [Describe your primary audience]
-- **Secondary:** [Describe secondary audience]
-- **Psychographics:** [Values, motivations, lifestyle]
-- **Tone match:** [How to speak to them]
+- **Primary:** Crypto-native internet culture enthusiasts — people who understand both on-chain mechanics and meme culture deeply. Ages 18-35, terminally online, active in Discord/X communities.
+- **Secondary:** Digital artists and meme creators looking for permanent on-chain exhibition. People who care about cultural curation and preservation.
+- **Psychographics:** Values authenticity over hype, prefers building to shilling, finds meaning in internet culture, appreciates dry humor and philosophical depth, skeptical of corporate Web3 marketing.
+- **Tone match:** Talk to them like they already get it. No explaining basics. No selling. Just vibes and substance.

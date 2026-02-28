@@ -39,49 +39,61 @@ _TEXT_OVERLAY_KEYWORDS = re.compile(
 # ---------------------------------------------------------------------------
 
 # Quality boosters by content type (Lighting + Image Type + Enhancers)
+# All profiles carry Frutiger Aero DNA: bubbly glass orbs, frosted panels,
+# glossy translucent spheres, dark navy depth — matching foid.fun aesthetic.
 _QUALITY_PROFILES = {
     "announcement": (
-        "dramatic rim lighting, volumetric light rays, "
-        "product visualization render, sharp focus, "
-        "8K resolution, ultra-detailed, professional"
+        "Frutiger Aero style, bubbly translucent glass orbs floating in scene, "
+        "glossy frosted glass panels, soft aqua and lavender glow, "
+        "dark navy midnight background, volumetric light through glass spheres, "
+        "3D render, rounded bubbly shapes, ultra-detailed, 8K resolution"
     ),
     "lifestyle": (
-        "cinematic golden hour lighting, shallow depth of field, "
-        "photorealistic photography, bokeh background, "
-        "high detail, natural skin tones"
+        "Frutiger Aero aesthetic, bubbly glass morphism scene, "
+        "frosted translucent spheres and floating orbs, "
+        "soft aqua and candy pink volumetric glow, dark navy background, "
+        "glossy reflective surfaces, polished 3D render feel, "
+        "shallow depth of field on background only"
     ),
     "event": (
-        "cinematic wide-angle shot, atmospheric stage lighting, "
-        "photojournalistic style, vivid colors, "
-        "high detail, dynamic composition"
+        "Frutiger Aero + Y2K terminal aesthetic, atmospheric bubbly glow, "
+        "floating translucent glass orbs, neon aqua and periwinkle accents, "
+        "dark navy environment with volumetric haze, "
+        "glossy rounded shapes, dynamic composition, high detail"
     ),
     "educational": (
-        "clean studio lighting, soft diffused shadows, "
-        "technical illustration, sharp focus, "
-        "minimalist composition, high contrast"
+        "Frutiger Aero style, clean bubbly composition, "
+        "frosted glass panels with rounded corners, translucent orbs, "
+        "soft aqua highlights on dark navy background, "
+        "minimalist glass morphism UI, sharp focus"
     ),
     "brand_asset": (
-        "flat studio lighting, clean edges, "
-        "vector-ready design, scalable, "
-        "professional graphic design, minimal"
+        "Frutiger Aero aesthetic, glossy bubbly translucent surfaces, "
+        "glass morphism with soft rounded shapes, floating glass orbs, "
+        "dark navy background, aqua and lavender gradient accents, "
+        "clean vector-ready edges, professional, premium feel"
     ),
     "community": (
-        "vibrant studio lighting, playful atmosphere, "
-        "3D CGI render, smooth shading, "
-        "high detail, polished finish"
+        "Frutiger Aero + Y2K aesthetic, vibrant bubbly glass orbs, "
+        "neon aqua and candy pink glow, glossy translucent materials, "
+        "floating rounded shapes, dark navy background with volumetric glow, "
+        "3D CGI render, smooth shading, polished finish"
     ),
     "market_commentary": (
-        "futuristic neon glow, data-driven aesthetic, "
-        "HUD visualization style, high contrast, "
-        "sharp focus, cinematic color grading"
+        "Frutiger Aero style, holographic glass morphism HUD panels, "
+        "bubbly translucent orbs with data visualization aesthetic, "
+        "dark navy background, aqua and periwinkle glow, "
+        "Y2K terminal style, volumetric light, sharp focus"
     ),
 }
 
-# Brand enforcement terms — loaded from guidelines context at runtime.
-# This fallback is used when the agent doesn't specify brand aesthetics in the prompt.
+# Brand enforcement terms — Frutiger Aero bubbly glass aesthetic (foid.fun).
+# Applied when the agent doesn't already specify brand aesthetics in the prompt.
 _BRAND_TERMS = (
-    "on-brand color scheme, high contrast, professional aesthetic, "
-    "clean composition, premium feel"
+    "Frutiger Aero aesthetic, bubbly translucent glass orbs, frosted glass panels, "
+    "glossy rounded shapes, soft aqua #72e1ff and lavender #cdb7ff glow, "
+    "dark navy #0e0f2b background, floating glass spheres, "
+    "Y2K terminal feel, premium polished render"
 )
 
 # Terms to check — if present, skip adding brand enforcement
