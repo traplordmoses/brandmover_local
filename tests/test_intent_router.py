@@ -79,6 +79,10 @@ class TestShortMessageTable:
         for msg in ("hi", "hello", "hey", "gm", "good morning"):
             assert _SHORT_MESSAGE_TABLE[msg] == "greeting", f"Failed for: {msg}"
 
+    def test_upload_variants(self):
+        for msg in ("upload", "ingest", "send images", "send pictures", "add images"):
+            assert _SHORT_MESSAGE_TABLE[msg] == "upload_assets", f"Failed for: {msg}"
+
     def test_utility_variants(self):
         assert _SHORT_MESSAGE_TABLE["help"] == "show_help"
         assert _SHORT_MESSAGE_TABLE["status"] == "show_status"
@@ -240,6 +244,28 @@ class TestHaikuClassification:
         assert result.confidence == 0.85
         assert result.parameters.get("topic") == "brand vision"
         assert result.routed_via == "haiku"
+
+    def test_upload_assets_classification(self):
+        """Upload-related messages should classify as upload_assets."""
+        async def _run():
+            with patch("agent.intent_router.anthropic.AsyncAnthropic") as mock_cls:
+                mock_client = AsyncMock()
+                mock_client.messages.create = AsyncMock(
+                    return_value=_mock_haiku_response("upload_assets", 0.9)
+                )
+                mock_cls.return_value = mock_client
+                return await classify_intent(
+                    "can i give you my brand assets?", _ctx()
+                )
+
+        result = asyncio.run(_run())
+        assert result.intent == "upload_assets"
+        assert result.routed_via == "haiku"
+
+    def test_upload_table_lookup(self):
+        result = asyncio.run(classify_intent("upload", _ctx()))
+        assert result.intent == "upload_assets"
+        assert result.routed_via == "table"
 
     def test_haiku_context_aware_approve_without_draft(self):
         """Haiku returns approve but no draft pending → remap to casual_chat."""
@@ -404,4 +430,5 @@ class TestKnownIntents:
     def test_known_intents_tuple(self):
         assert len(KNOWN_INTENTS) == 16
         assert "approve" in KNOWN_INTENTS
+        assert "upload_assets" in KNOWN_INTENTS
         assert "unknown" in KNOWN_INTENTS

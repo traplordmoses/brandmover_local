@@ -101,6 +101,9 @@ _SHORT_MESSAGE_TABLE: dict[str, str] = {
     # Upload
     "upload": "upload_assets",
     "ingest": "upload_assets",
+    "send images": "upload_assets",
+    "send pictures": "upload_assets",
+    "add images": "upload_assets",
     # Utility
     "help": "show_help",
     "status": "show_status",
@@ -210,9 +213,9 @@ Available intents:
 - show_help: User wants help or command list
 - show_analytics: User wants analytics/stats
 - show_history: User wants generation history
-- upload_assets: User wants to upload, share, or update brand assets, logos, images, or files
+- upload_assets: User wants to upload, share, send, or update brand assets, logos, images, pictures, renders, files, or creative work. Questions like "can I give you..." or "I want to send you..." about files/images are upload_assets, NOT casual_chat.
 - brand_check: User wants to check brand compliance
-- casual_chat: User is making conversation, not a command
+- casual_chat: User is making small talk, not requesting any action
 - greeting: User is saying hello
 - unknown: Cannot determine intent
 
