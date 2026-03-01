@@ -1,4 +1,4 @@
-"""Tests for agent.template_generator — layout analysis, rendering, adjustment, and registration."""
+"""Tests for agent.template_generator — AI-based template generation via flux-kontext-pro."""
 
 import asyncio
 import json
@@ -9,21 +9,22 @@ import pytest
 from PIL import Image
 
 from agent.template_generator import (
-    LayoutZone,
-    LayoutAnalysis,
+    TemplateDesign,
     _parse_json_response,
-    _build_regions,
     _compute_aspect_ratio,
-    analyze_layout,
-    adjust_layout,
-    render_template,
-    layout_to_dict,
-    layout_from_dict,
-    analyze_and_render,
-    render_and_save,
-    register_layout,
+    analyze_reference,
+    build_generation_prompt,
+    generate_template_image,
+    download_image,
+    design_to_dict,
+    design_from_dict,
+    adjust_design,
+    register_design,
+    analyze_and_generate,
+    save_generated_image,
     generate_template_from_reference,
 )
+from agent.template_memory import TemplateRegion
 from bot.handlers import _is_template_from_ref_intent
 
 
@@ -42,66 +43,55 @@ def templates_dir(tmp_path):
 
 
 def _create_test_image(path, width=1280, height=720, color="navy"):
-    img = Image.new("RGBA", (width, height), color)
+    img = Image.new("RGB", (width, height), color)
     img.save(str(path), "PNG")
     return str(path)
 
 
-def _mock_layout_response():
+def _mock_analysis_response():
     return json.dumps({
+        "layout_description": "Split-panel layout with image on left, text on right, header bar across top",
+        "visual_style": "glass-morphism with neon accents on dark background",
         "canvas_width": 1280,
         "canvas_height": 720,
-        "layout_pattern": "split-panel with image left and text right",
-        "zones": [
-            {
-                "type": "background",
-                "x": 0, "y": 0, "width": 1280, "height": 720,
-                "description": "Dark background",
-                "style_notes": "solid dark color",
-            },
-            {
-                "type": "image",
-                "x": 40, "y": 80, "width": 580, "height": 560,
-                "description": "Main image area",
-                "style_notes": "rounded corners",
-            },
-            {
-                "type": "text_primary",
-                "x": 660, "y": 200, "width": 560, "height": 80,
-                "description": "Headline text",
-                "style_notes": "white uppercase bold",
-            },
-            {
-                "type": "text_secondary",
-                "x": 660, "y": 300, "width": 560, "height": 50,
-                "description": "Subtitle",
-                "style_notes": "gray smaller text",
-            },
-            {
-                "type": "logo",
-                "x": 40, "y": 20, "width": 80, "height": 50,
-                "description": "Brand logo top left",
-                "style_notes": "small logo",
-            },
+        "regions": [
+            {"type": "image", "x": 40, "y": 80, "width": 580, "height": 560, "description": "Main image area"},
+            {"type": "text", "x": 660, "y": 200, "width": 560, "height": 80, "description": "Headline text"},
+            {"type": "text", "x": 660, "y": 300, "width": 560, "height": 50, "description": "Subtitle"},
+            {"type": "logo", "x": 40, "y": 20, "width": 80, "height": 50, "description": "Brand logo top left"},
         ],
     })
 
 
-def _sample_layout():
-    return LayoutAnalysis(
+def _sample_design(image_path: str = "/tmp/ref.png") -> TemplateDesign:
+    return TemplateDesign(
+        layout_description="Split-panel with image left and text right",
+        visual_style="glass-morphism dark",
+        generation_prompt="Recreate this layout as a branded template...",
+        reference_image_path=image_path,
+        generated_image_url="https://example.com/generated.png",
         canvas_width=1280,
         canvas_height=720,
-        layout_pattern="split-panel",
-        zones=[
-            LayoutZone(type="background", x=0, y=0, width=1280, height=720,
-                       description="bg", style_notes="dark"),
-            LayoutZone(type="image", x=40, y=80, width=580, height=560,
-                       description="Main image", style_notes="rounded"),
-            LayoutZone(type="text_primary", x=660, y=200, width=560, height=80,
-                       description="Headline", style_notes="bold"),
-            LayoutZone(type="logo", x=40, y=20, width=80, height=50,
-                       description="Logo", style_notes=""),
+        regions=[
+            TemplateRegion(type="image", x=40, y=80, width=580, height=560, description="Main image"),
+            TemplateRegion(type="text", x=660, y=200, width=560, height=80, description="Headline"),
+            TemplateRegion(type="logo", x=40, y=20, width=80, height=50, description="Logo"),
         ],
+    )
+
+
+def _mock_brand_config():
+    """Return a mock BrandConfig for prompt building."""
+    color_entry = MagicMock()
+    color_entry.hex = "#FF69B4"
+    font_entry = MagicMock()
+    font_entry.family = "Orbitron"
+    return MagicMock(
+        brand_name="FOID",
+        tagline="The future of identity",
+        colors={"primary": color_entry},
+        fonts={"display": font_entry},
+        style_keywords=["futuristic", "neon"],
     )
 
 
@@ -128,97 +118,82 @@ class TestParseJsonResponse:
 
 
 # ---------------------------------------------------------------------------
-# layout_to_dict / layout_from_dict — serialization round-trip
+# design_to_dict / design_from_dict — serialization round-trip
 # ---------------------------------------------------------------------------
 
-class TestLayoutSerialization:
+class TestDesignSerialization:
     def test_round_trip(self):
-        layout = _sample_layout()
-        d = layout_to_dict(layout)
-        restored = layout_from_dict(d)
+        design = _sample_design()
+        d = design_to_dict(design)
+        restored = design_from_dict(d)
 
+        assert restored.layout_description == "Split-panel with image left and text right"
+        assert restored.visual_style == "glass-morphism dark"
+        assert restored.generation_prompt == "Recreate this layout as a branded template..."
+        assert restored.reference_image_path == "/tmp/ref.png"
+        assert restored.generated_image_url == "https://example.com/generated.png"
         assert restored.canvas_width == 1280
         assert restored.canvas_height == 720
-        assert restored.layout_pattern == "split-panel"
-        assert len(restored.zones) == 4
-        assert restored.zones[1].type == "image"
-        assert restored.zones[1].x == 40
-        assert restored.zones[1].width == 580
+        assert len(restored.regions) == 3
+        assert restored.regions[0].type == "image"
+        assert restored.regions[0].x == 40
 
     def test_dict_is_json_safe(self):
-        layout = _sample_layout()
-        d = layout_to_dict(layout)
-        # Should not raise
+        design = _sample_design()
+        d = design_to_dict(design)
         serialized = json.dumps(d)
         assert isinstance(serialized, str)
 
     def test_from_empty_dict(self):
-        layout = layout_from_dict({})
-        assert layout.canvas_width == 1280
-        assert layout.zones == []
+        design = design_from_dict({})
+        assert design.canvas_width == 1280
+        assert design.layout_description == ""
+        assert design.regions == []
 
 
 # ---------------------------------------------------------------------------
-# _build_regions / _compute_aspect_ratio
+# _compute_aspect_ratio
 # ---------------------------------------------------------------------------
 
-class TestHelpers:
-    def test_build_regions_maps_types(self):
-        layout = _sample_layout()
-        regions = _build_regions(layout)
-        types = [r.type for r in regions]
-        assert "image" in types
-        assert "text" in types   # text_primary → text
-        assert "logo" in types
-        # background should NOT be in regions
-        assert "background" not in types
-
-    def test_build_regions_preserves_coords(self):
-        layout = _sample_layout()
-        regions = _build_regions(layout)
-        img_region = [r for r in regions if r.type == "image"][0]
-        assert img_region.x == 40
-        assert img_region.y == 80
-        assert img_region.width == 580
-        assert img_region.height == 560
-
-    def test_compute_aspect_ratio(self):
+class TestComputeAspectRatio:
+    def test_standard_ratios(self):
         assert _compute_aspect_ratio(1920, 1080) == "16:9"
         assert _compute_aspect_ratio(1080, 1920) == "9:16"
         assert _compute_aspect_ratio(1080, 1080) == "1:1"
         assert _compute_aspect_ratio(800, 600) == "4:3"
+
+    def test_custom_ratio(self):
         assert _compute_aspect_ratio(500, 300) == "500:300"
+
+    def test_zero_dimensions(self):
         assert _compute_aspect_ratio(0, 0) == ""
 
 
 # ---------------------------------------------------------------------------
-# analyze_layout (mocked Claude)
+# analyze_reference (mocked Claude)
 # ---------------------------------------------------------------------------
 
-class TestAnalyzeLayout:
-    def test_parses_layout(self, tmp_path):
+class TestAnalyzeReference:
+    def test_parses_analysis(self, tmp_path):
         img_path = _create_test_image(tmp_path / "ref.png")
 
         mock_response = MagicMock()
-        mock_response.content = [MagicMock(text=_mock_layout_response())]
+        mock_response.content = [MagicMock(text=_mock_analysis_response())]
 
         async def _run():
             with patch("agent.template_generator.anthropic.AsyncAnthropic") as mock_cls:
                 mock_client = AsyncMock()
                 mock_client.messages.create = AsyncMock(return_value=mock_response)
                 mock_cls.return_value = mock_client
-                return await analyze_layout(img_path)
+                return await analyze_reference(img_path)
 
         result = asyncio.run(_run())
         assert result.canvas_width == 1280
         assert result.canvas_height == 720
-        assert len(result.zones) == 5
-        assert result.layout_pattern == "split-panel with image left and text right"
-
-        zone_types = [z.type for z in result.zones]
-        assert "background" in zone_types
-        assert "image" in zone_types
-        assert "text_primary" in zone_types
+        assert "Split-panel" in result.layout_description
+        assert "glass-morphism" in result.visual_style
+        assert len(result.regions) == 4
+        assert result.reference_image_path == img_path
 
     def test_handles_bad_response(self, tmp_path):
         img_path = _create_test_image(tmp_path / "ref.png")
@@ -231,43 +206,158 @@ class TestAnalyzeLayout:
                 mock_client = AsyncMock()
                 mock_client.messages.create = AsyncMock(return_value=mock_response)
                 mock_cls.return_value = mock_client
-                return await analyze_layout(img_path)
+                return await analyze_reference(img_path)
 
         result = asyncio.run(_run())
-        assert result.zones == []
-        assert result.canvas_width == 1280  # defaults
+        assert result.layout_description == ""
+        assert result.regions == []
+        assert result.reference_image_path == img_path
 
 
 # ---------------------------------------------------------------------------
-# adjust_layout (mocked Claude)
+# build_generation_prompt
 # ---------------------------------------------------------------------------
 
-class TestAdjustLayout:
-    def test_applies_adjustment(self):
-        layout = _sample_layout()
+class TestBuildGenerationPrompt:
+    def test_includes_brand_identity(self):
+        design = _sample_design()
+        with patch("agent.template_generator._cc.get_config", return_value=_mock_brand_config()):
+            prompt = build_generation_prompt(design)
 
-        adjusted_data = layout_to_dict(layout)
-        # Simulate Claude making the image zone larger
-        adjusted_data["zones"][1]["width"] = 700
-        adjusted_data["zones"][1]["height"] = 600
+        assert "FOID" in prompt
+        assert "#FF69B4" in prompt
+        assert "Orbitron" in prompt
+        assert "futuristic" in prompt
+        assert "Split-panel" in prompt
+        assert "TEMPLATE" in prompt
+        assert design.generation_prompt == prompt
 
-        mock_response = MagicMock()
-        mock_response.content = [MagicMock(text=json.dumps(adjusted_data))]
+    def test_handles_empty_brand_config(self):
+        design = _sample_design()
+        empty_cfg = MagicMock(
+            brand_name="",
+            tagline="",
+            colors={},
+            fonts={},
+            style_keywords=[],
+        )
+        with patch("agent.template_generator._cc.get_config", return_value=empty_cfg):
+            prompt = build_generation_prompt(design)
+
+        assert "the brand" in prompt
+        assert "modern palette" in prompt.lower() or "dark modern palette" in prompt
+
+
+# ---------------------------------------------------------------------------
+# generate_template_image (mocked Replicate)
+# ---------------------------------------------------------------------------
+
+class TestGenerateTemplateImage:
+    def test_calls_img2img(self):
+        design = _sample_design()
 
         async def _run():
-            with patch("agent.template_generator.anthropic.AsyncAnthropic") as mock_cls:
+            with patch("agent.template_generator.generate_img2img", new_callable=AsyncMock) as mock_gen:
+                mock_gen.return_value = "https://replicate.com/output/abc.png"
+                url = await generate_template_image(design)
+                mock_gen.assert_called_once_with(
+                    prompt=design.generation_prompt,
+                    input_image_path=design.reference_image_path,
+                    strength=0.75,
+                )
+                return url
+
+        result = asyncio.run(_run())
+        assert result == "https://replicate.com/output/abc.png"
+
+    def test_returns_none_on_failure(self):
+        design = _sample_design()
+
+        async def _run():
+            with patch("agent.template_generator.generate_img2img", new_callable=AsyncMock) as mock_gen:
+                mock_gen.return_value = None
+                return await generate_template_image(design)
+
+        result = asyncio.run(_run())
+        assert result is None
+
+
+# ---------------------------------------------------------------------------
+# download_image
+# ---------------------------------------------------------------------------
+
+class TestDownloadImage:
+    def test_downloads_successfully(self, tmp_path):
+        # Create a test image to serve as response content
+        img = Image.new("RGB", (100, 100), "red")
+        import io
+        buf = io.BytesIO()
+        img.save(buf, "PNG")
+        image_bytes = buf.getvalue()
+
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.content = image_bytes
+        mock_resp.raise_for_status = MagicMock()
+
+        async def _run():
+            with patch("agent.template_generator.httpx.AsyncClient") as mock_client_cls:
+                mock_client = AsyncMock()
+                mock_client.get = AsyncMock(return_value=mock_resp)
+                mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+                mock_client.__aexit__ = AsyncMock(return_value=False)
+                mock_client_cls.return_value = mock_client
+                return await download_image("https://example.com/img.png")
+
+        result = asyncio.run(_run())
+        assert result is not None
+        assert result.size == (100, 100)
+
+    def test_returns_none_on_error(self):
+        async def _run():
+            with patch("agent.template_generator.httpx.AsyncClient") as mock_client_cls:
+                mock_client = AsyncMock()
+                mock_client.get = AsyncMock(side_effect=Exception("network error"))
+                mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+                mock_client.__aexit__ = AsyncMock(return_value=False)
+                mock_client_cls.return_value = mock_client
+                return await download_image("https://example.com/fail.png")
+
+        result = asyncio.run(_run())
+        assert result is None
+
+
+# ---------------------------------------------------------------------------
+# adjust_design (mocked Claude + Replicate)
+# ---------------------------------------------------------------------------
+
+class TestAdjustDesign:
+    def test_modifies_prompt_and_regenerates(self):
+        design = _sample_design()
+
+        adjusted_response = json.dumps({
+            "generation_prompt": "Updated prompt with more vibrant colors...",
+            "layout_description": "Updated layout description",
+        })
+        mock_response = MagicMock()
+        mock_response.content = [MagicMock(text=adjusted_response)]
+
+        async def _run():
+            with patch("agent.template_generator.anthropic.AsyncAnthropic") as mock_cls, \
+                 patch("agent.template_generator.generate_template_image", new_callable=AsyncMock) as mock_gen:
                 mock_client = AsyncMock()
                 mock_client.messages.create = AsyncMock(return_value=mock_response)
                 mock_cls.return_value = mock_client
-                return await adjust_layout(layout, "make the image area larger")
+                mock_gen.return_value = "https://replicate.com/output/new.png"
+                return await adjust_design(design, "make the colors more vibrant")
 
         result = asyncio.run(_run())
-        img_zone = [z for z in result.zones if z.type == "image"][0]
-        assert img_zone.width == 700
-        assert img_zone.height == 600
+        assert result.generation_prompt == "Updated prompt with more vibrant colors..."
+        assert result.layout_description == "Updated layout description"
 
     def test_returns_original_on_bad_response(self):
-        layout = _sample_layout()
+        design = _sample_design()
+        original_prompt = design.generation_prompt
 
         mock_response = MagicMock()
         mock_response.content = [MagicMock(text="invalid json")]
@@ -277,168 +367,161 @@ class TestAdjustLayout:
                 mock_client = AsyncMock()
                 mock_client.messages.create = AsyncMock(return_value=mock_response)
                 mock_cls.return_value = mock_client
-                return await adjust_layout(layout, "something")
+                return await adjust_design(design, "something")
 
         result = asyncio.run(_run())
-        # Should return original unchanged
-        assert len(result.zones) == len(layout.zones)
-        assert result.canvas_width == layout.canvas_width
+        assert result.generation_prompt == original_prompt
 
-    def test_returns_original_on_empty_zones(self):
-        layout = _sample_layout()
+    def test_returns_original_on_empty_prompt(self):
+        design = _sample_design()
+        original_prompt = design.generation_prompt
 
         mock_response = MagicMock()
-        mock_response.content = [MagicMock(text='{"zones": []}')]
+        mock_response.content = [MagicMock(text='{"generation_prompt": "", "layout_description": ""}')]
 
         async def _run():
             with patch("agent.template_generator.anthropic.AsyncAnthropic") as mock_cls:
                 mock_client = AsyncMock()
                 mock_client.messages.create = AsyncMock(return_value=mock_response)
                 mock_cls.return_value = mock_client
-                return await adjust_layout(layout, "remove everything")
+                return await adjust_design(design, "remove everything")
 
         result = asyncio.run(_run())
-        assert len(result.zones) == len(layout.zones)  # Preserved
+        assert result.generation_prompt == original_prompt
 
 
 # ---------------------------------------------------------------------------
-# render_template — PIL rendering
+# register_design
 # ---------------------------------------------------------------------------
 
-class TestRenderTemplate:
-    def test_renders_correct_size(self):
-        layout = LayoutAnalysis(
-            canvas_width=1280,
-            canvas_height=720,
-            zones=[
-                LayoutZone(type="background", x=0, y=0, width=1280, height=720),
-            ],
-        )
-        with patch("agent.template_generator._cc.get_config") as mock_cfg:
-            mock_cfg.return_value = MagicMock(
-                brand_name="TestBrand",
-                tagline="test tagline",
-                colors={},
-                fonts={},
-            )
-            with patch("agent.template_generator._brand_color", return_value=(10, 10, 26)):
-                img = render_template(layout)
-        assert img.size == (1280, 720)
-
-    def test_renders_all_zone_types(self):
-        from PIL import ImageFont
-        default_font = ImageFont.load_default()
-
-        layout = LayoutAnalysis(
-            canvas_width=800,
-            canvas_height=600,
-            zones=[
-                LayoutZone(type="background", x=0, y=0, width=800, height=600),
-                LayoutZone(type="image", x=20, y=60, width=300, height=400),
-                LayoutZone(type="header", x=0, y=0, width=800, height=50),
-                LayoutZone(type="footer", x=0, y=550, width=800, height=50),
-                LayoutZone(type="text_primary", x=350, y=100, width=400, height=60),
-                LayoutZone(type="text_secondary", x=350, y=180, width=400, height=40),
-                LayoutZone(type="logo", x=20, y=10, width=60, height=40),
-                LayoutZone(type="badge", x=350, y=60, width=100, height=30),
-                LayoutZone(type="accent", x=340, y=160, width=420, height=4, style_notes="line"),
-            ],
-        )
-        with patch("agent.template_generator._cc.get_config") as mock_cfg:
-            mock_cfg.return_value = MagicMock(
-                brand_name="TestBrand",
-                tagline="test tagline",
-                colors={},
-                fonts={},
-            )
-            with patch("agent.template_generator._brand_color", return_value=(100, 100, 200)):
-                with patch("agent.template_generator._brand_font", return_value=default_font):
-                    with patch("agent.template_generator._load_logo", return_value=None):
-                        img = render_template(layout)
-        assert img.size == (800, 600)
-        assert img.mode == "RGBA"
-
-    def test_empty_zones(self):
-        layout = LayoutAnalysis(canvas_width=400, canvas_height=300, zones=[])
-        with patch("agent.template_generator._cc.get_config") as mock_cfg:
-            mock_cfg.return_value = MagicMock(
-                brand_name="", tagline="", colors={}, fonts={},
-            )
-            with patch("agent.template_generator._brand_color", return_value=(10, 10, 26)):
-                img = render_template(layout)
-        assert img.size == (400, 300)
-
-
-# ---------------------------------------------------------------------------
-# analyze_and_render (phase 1 — no registration)
-# ---------------------------------------------------------------------------
-
-class TestAnalyzeAndRender:
-    def test_returns_layout_and_image(self, tmp_path):
-        from PIL import ImageFont
-        default_font = ImageFont.load_default()
-
-        img_path = _create_test_image(tmp_path / "ref.png")
-        mock_response = MagicMock()
-        mock_response.content = [MagicMock(text=_mock_layout_response())]
-
-        async def _run():
-            with patch("agent.template_generator.anthropic.AsyncAnthropic") as mock_cls, \
-                 patch("agent.template_generator._brand_color", return_value=(10, 10, 26)), \
-                 patch("agent.template_generator._brand_font", return_value=default_font), \
-                 patch("agent.template_generator._load_logo", return_value=None):
-                mock_client = AsyncMock()
-                mock_client.messages.create = AsyncMock(return_value=mock_response)
-                mock_cls.return_value = mock_client
-                return await analyze_and_render(img_path)
-
-        layout, img = asyncio.run(_run())
-        assert isinstance(layout, LayoutAnalysis)
-        assert len(layout.zones) == 5
-        assert img.size == (1280, 720)
-
-
-# ---------------------------------------------------------------------------
-# render_and_save
-# ---------------------------------------------------------------------------
-
-class TestRenderAndSave:
-    def test_saves_to_disk(self, templates_dir):
-        layout = _sample_layout()
-        with patch("agent.template_generator._brand_color", return_value=(10, 10, 26)), \
-             patch("agent.template_generator._cc.get_config") as mock_cfg, \
-             patch("agent.template_generator._load_logo", return_value=None):
-            mock_cfg.return_value = MagicMock(
-                brand_name="Test", tagline="tag", colors={}, fonts={},
-            )
-            img, path = render_and_save(layout)
-        assert img.size == (1280, 720)
-        assert Path(path).exists()
-        assert Path(path).suffix == ".png"
-
-
-# ---------------------------------------------------------------------------
-# register_layout (phase 2 — saves to manifest)
-# ---------------------------------------------------------------------------
-
-class TestRegisterLayout:
+class TestRegisterDesign:
     def test_registers_in_memory(self, templates_dir, tmp_path):
-        layout = _sample_layout()
+        design = _sample_design()
         img_path = _create_test_image(tmp_path / "tpl.png")
 
-        template = register_layout(layout, img_path, name="My Template")
+        template = register_design(design, img_path, name="My Template")
         assert template.name == "My Template"
         assert template.width == 1280
         assert template.height == 720
         assert template.aspect_ratio == "16:9"
-        assert len(template.regions) >= 1
+        assert len(template.regions) == 3
 
-        # Verify persisted
         from agent.template_memory import TemplateMemory
         memory = TemplateMemory()
         templates = memory.list_templates()
         assert len(templates) == 1
         assert templates[0].name == "My Template"
+
+    def test_auto_name(self, templates_dir, tmp_path):
+        design = _sample_design()
+        img_path = _create_test_image(tmp_path / "tpl.png")
+
+        template = register_design(design, img_path)
+        assert template.name.startswith("Generated ")
+
+
+# ---------------------------------------------------------------------------
+# analyze_and_generate (full phase 1)
+# ---------------------------------------------------------------------------
+
+class TestAnalyzeAndGenerate:
+    def test_returns_design_and_image(self, tmp_path):
+        import io as _io
+        img_path = _create_test_image(tmp_path / "ref.png")
+
+        mock_response = MagicMock()
+        mock_response.content = [MagicMock(text=_mock_analysis_response())]
+
+        # Create a fake downloaded image
+        fake_img = Image.new("RGB", (1280, 720), "blue")
+        buf = _io.BytesIO()
+        fake_img.save(buf, "PNG")
+        image_bytes = buf.getvalue()
+
+        async def _run():
+            with patch("agent.template_generator.anthropic.AsyncAnthropic") as mock_cls, \
+                 patch("agent.template_generator._cc.get_config", return_value=_mock_brand_config()), \
+                 patch("agent.template_generator.generate_img2img", new_callable=AsyncMock) as mock_gen, \
+                 patch("agent.template_generator.download_image", new_callable=AsyncMock) as mock_dl:
+                mock_client = AsyncMock()
+                mock_client.messages.create = AsyncMock(return_value=mock_response)
+                mock_cls.return_value = mock_client
+                mock_gen.return_value = "https://replicate.com/output/tpl.png"
+                mock_dl.return_value = fake_img
+                return await analyze_and_generate(img_path)
+
+        design, img = asyncio.run(_run())
+        assert isinstance(design, TemplateDesign)
+        assert "Split-panel" in design.layout_description
+        assert design.generation_prompt  # Should be built
+        assert img.size == (1280, 720)
+
+    def test_raises_on_empty_description(self, tmp_path):
+        img_path = _create_test_image(tmp_path / "blank.png")
+
+        mock_response = MagicMock()
+        mock_response.content = [MagicMock(text='{"layout_description": "", "regions": [], "canvas_width": 800, "canvas_height": 600}')]
+
+        async def _run():
+            with patch("agent.template_generator.anthropic.AsyncAnthropic") as mock_cls:
+                mock_client = AsyncMock()
+                mock_client.messages.create = AsyncMock(return_value=mock_response)
+                mock_cls.return_value = mock_client
+                return await analyze_and_generate(img_path)
+
+        with pytest.raises(ValueError, match="Could not analyze"):
+            asyncio.run(_run())
+
+    def test_raises_on_generation_failure(self, tmp_path):
+        img_path = _create_test_image(tmp_path / "ref.png")
+
+        mock_response = MagicMock()
+        mock_response.content = [MagicMock(text=_mock_analysis_response())]
+
+        async def _run():
+            with patch("agent.template_generator.anthropic.AsyncAnthropic") as mock_cls, \
+                 patch("agent.template_generator._cc.get_config", return_value=_mock_brand_config()), \
+                 patch("agent.template_generator.generate_img2img", new_callable=AsyncMock) as mock_gen:
+                mock_client = AsyncMock()
+                mock_client.messages.create = AsyncMock(return_value=mock_response)
+                mock_cls.return_value = mock_client
+                mock_gen.return_value = None
+                return await analyze_and_generate(img_path)
+
+        with pytest.raises(ValueError, match="generation failed"):
+            asyncio.run(_run())
+
+
+# ---------------------------------------------------------------------------
+# save_generated_image
+# ---------------------------------------------------------------------------
+
+class TestSaveGeneratedImage:
+    def test_saves_to_disk(self, templates_dir):
+        import io as _io
+        design = _sample_design()
+
+        fake_img = Image.new("RGB", (1280, 720), "green")
+
+        async def _run():
+            with patch("agent.template_generator.download_image", new_callable=AsyncMock) as mock_dl:
+                mock_dl.return_value = fake_img
+                return await save_generated_image(design)
+
+        path = asyncio.run(_run())
+        assert Path(path).exists()
+        assert Path(path).suffix == ".png"
+
+    def test_raises_on_download_failure(self, templates_dir):
+        design = _sample_design()
+
+        async def _run():
+            with patch("agent.template_generator.download_image", new_callable=AsyncMock) as mock_dl:
+                mock_dl.return_value = None
+                return await save_generated_image(design)
+
+        with pytest.raises(ValueError, match="Failed to download"):
+            asyncio.run(_run())
 
 
 # ---------------------------------------------------------------------------
@@ -447,22 +530,24 @@ class TestRegisterLayout:
 
 class TestGenerateFromReference:
     def test_end_to_end(self, templates_dir, tmp_path):
-        from PIL import ImageFont
-        default_font = ImageFont.load_default()
-
+        import io as _io
         img_path = _create_test_image(tmp_path / "screenshot.png", 1280, 720)
 
         mock_response = MagicMock()
-        mock_response.content = [MagicMock(text=_mock_layout_response())]
+        mock_response.content = [MagicMock(text=_mock_analysis_response())]
+
+        fake_img = Image.new("RGB", (1280, 720), "purple")
 
         async def _run():
             with patch("agent.template_generator.anthropic.AsyncAnthropic") as mock_cls, \
-                 patch("agent.template_generator._brand_color", return_value=(10, 10, 26)), \
-                 patch("agent.template_generator._brand_font", return_value=default_font), \
-                 patch("agent.template_generator._load_logo", return_value=None):
+                 patch("agent.template_generator._cc.get_config", return_value=_mock_brand_config()), \
+                 patch("agent.template_generator.generate_img2img", new_callable=AsyncMock) as mock_gen, \
+                 patch("agent.template_generator.download_image", new_callable=AsyncMock) as mock_dl:
                 mock_client = AsyncMock()
                 mock_client.messages.create = AsyncMock(return_value=mock_response)
                 mock_cls.return_value = mock_client
+                mock_gen.return_value = "https://replicate.com/output/tpl.png"
+                mock_dl.return_value = fake_img
                 return await generate_template_from_reference(img_path, name="Test Layout")
 
         template, img = asyncio.run(_run())
@@ -477,49 +562,6 @@ class TestGenerateFromReference:
         assert "image" in region_types
         assert "text" in region_types
         assert "logo" in region_types
-
-    def test_raises_on_empty_zones(self, templates_dir, tmp_path):
-        img_path = _create_test_image(tmp_path / "blank.png")
-
-        mock_response = MagicMock()
-        mock_response.content = [MagicMock(text='{"zones": [], "canvas_width": 800, "canvas_height": 600}')]
-
-        async def _run():
-            with patch("agent.template_generator.anthropic.AsyncAnthropic") as mock_cls:
-                mock_client = AsyncMock()
-                mock_client.messages.create = AsyncMock(return_value=mock_response)
-                mock_cls.return_value = mock_client
-                return await generate_template_from_reference(img_path)
-
-        with pytest.raises(ValueError, match="Could not detect"):
-            asyncio.run(_run())
-
-    def test_auto_name(self, templates_dir, tmp_path):
-        img_path = _create_test_image(tmp_path / "ref.png")
-
-        mock_response = MagicMock()
-        mock_response.content = [MagicMock(text=json.dumps({
-            "canvas_width": 400, "canvas_height": 400,
-            "layout_pattern": "simple",
-            "zones": [
-                {"type": "background", "x": 0, "y": 0, "width": 400, "height": 400,
-                 "description": "bg", "style_notes": "dark"},
-                {"type": "image", "x": 20, "y": 20, "width": 360, "height": 360,
-                 "description": "img", "style_notes": ""},
-            ],
-        }))]
-
-        async def _run():
-            with patch("agent.template_generator.anthropic.AsyncAnthropic") as mock_cls, \
-                 patch("agent.template_generator._brand_color", return_value=(10, 10, 26)), \
-                 patch("agent.template_generator._load_logo", return_value=None):
-                mock_client = AsyncMock()
-                mock_client.messages.create = AsyncMock(return_value=mock_response)
-                mock_cls.return_value = mock_client
-                return await generate_template_from_reference(img_path)
-
-        template, _ = asyncio.run(_run())
-        assert template.name.startswith("Generated ")
 
 
 # ---------------------------------------------------------------------------
@@ -546,22 +588,17 @@ class TestTemplateFromRefIntent:
 
 
 # ---------------------------------------------------------------------------
-# LayoutZone and LayoutAnalysis dataclasses
+# TemplateDesign dataclass
 # ---------------------------------------------------------------------------
 
 class TestDataclasses:
-    def test_layout_zone_defaults(self):
-        z = LayoutZone(type="image")
-        assert z.x == 0
-        assert z.y == 0
-        assert z.width == 0
-        assert z.height == 0
-        assert z.description == ""
-        assert z.style_notes == ""
-
-    def test_layout_analysis_defaults(self):
-        a = LayoutAnalysis()
-        assert a.canvas_width == 1280
-        assert a.canvas_height == 720
-        assert a.layout_pattern == ""
-        assert a.zones == []
+    def test_template_design_defaults(self):
+        d = TemplateDesign()
+        assert d.layout_description == ""
+        assert d.visual_style == ""
+        assert d.generation_prompt == ""
+        assert d.reference_image_path == ""
+        assert d.generated_image_url == ""
+        assert d.canvas_width == 1280
+        assert d.canvas_height == 720
+        assert d.regions == []

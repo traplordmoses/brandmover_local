@@ -1,16 +1,15 @@
 """
-Template Generator — create branded templates from reference images.
+Template Generator — create branded templates from reference images using AI.
 
 Given a screenshot or reference image (e.g. a competitor post, a layout the user
 likes), this module:
-1. Analyzes the layout via Claude Vision to extract structural zones
-2. Renders a clean template image using PIL with the client's brand colors,
-   fonts, and logo — no AI image generation
-3. Registers the result via TemplateMemory for future posts
+1. Analyzes the layout via Claude Vision to produce a natural language description
+2. Builds a detailed generation prompt combining layout + brand identity
+3. Generates a polished template image via flux-kontext-pro img2img
+4. Registers the result via TemplateMemory for future posts
 
-The generated template is a *structural replica*, not a pixel copy. It captures
-the layout intent (header bar, image area, text zone, logo placement) and
-rebuilds it in the client's visual identity.
+The reference image is used as a composition guide — flux-kontext-pro preserves
+the spatial layout while applying the client's brand colors, fonts, and style.
 """
 
 import base64
@@ -22,77 +21,55 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 import anthropic
-from PIL import Image, ImageDraw, ImageFilter, ImageFont
+import httpx
+from PIL import Image
 
 from agent import compositor_config as _cc
+from agent.image_gen import generate_img2img
 from agent.template_memory import (
     BrandTemplate,
     TemplateMemory,
     TemplateRegion,
-    _get_text_font,
-    _resize_crop,
 )
 from config import settings
 
 logger = logging.getLogger(__name__)
 
-_LOGO_PNG = Path(settings.BRAND_FOLDER) / "assets" / "logo.png"
-
 
 # ---------------------------------------------------------------------------
-# Claude Vision — layout analysis prompt
+# Claude Vision — natural language layout analysis
 # ---------------------------------------------------------------------------
 
 _LAYOUT_ANALYSIS_PROMPT = """\
-Analyze this image as a social media post or design layout. Your job is to \
-identify the *structural zones* — where different content types are placed.
+Analyze this image as a social media post or design layout. Describe the \
+visual structure in natural language so an AI image generator can recreate \
+a similar layout with different branding.
 
-Identify each zone with its purpose and approximate pixel coordinates.
+Describe:
+1. **Overall composition**: Layout pattern (split-panel, centered, grid, full-bleed, etc.), \
+aspect ratio, and spatial flow.
+2. **Background**: Colors, gradients, textures, or patterns.
+3. **Image areas**: Where photos or illustrations sit, their shape (rounded corners, \
+circular crop, full-width), and approximate position/size relative to the canvas.
+4. **Text zones**: Where headlines, subtitles, and body text appear. Describe position, \
+alignment, relative size, and visual weight (bold, light, uppercase).
+5. **Branding elements**: Logo placement, badges, tags, watermarks — position and style.
+6. **Decorative elements**: Borders, dividers, accent lines, glow effects, overlays.
+7. **Visual style**: Glass-morphism, flat design, gradient mesh, neon, minimal, etc.
 
-Zone types:
-- "background" — the dominant background area (always include one)
-- "image" — area where a photo or illustration sits
-- "header" — top bar or banner area
-- "text_primary" — main headline or title text area
-- "text_secondary" — subtitle, body text, or description area
-- "logo" — brand logo placement
-- "badge" — small label, tag, or category badge
-- "footer" — bottom bar area
-- "accent" — decorative element, border, or divider
-
-For each zone provide:
-- type (from the list above)
-- x, y (top-left corner, in pixels from image top-left)
-- width, height (in pixels)
-- description (what's in this zone in the reference)
-- style_notes (visual characteristics: color, opacity, rounded corners, etc.)
-
-Also describe the overall layout pattern.
+Also identify content regions for template registration (where generated images \
+and text would be placed in future posts):
 
 Return ONLY valid JSON:
 {
+  "layout_description": "A detailed natural language description of the full layout...",
+  "visual_style": "glass-morphism with neon accents on dark background",
   "canvas_width": 1280,
   "canvas_height": 720,
-  "layout_pattern": "split-panel with image left, text right, header bar on top",
-  "zones": [
-    {
-      "type": "background",
-      "x": 0, "y": 0, "width": 1280, "height": 720,
-      "description": "Dark navy background",
-      "style_notes": "solid dark color, slight gradient"
-    },
-    {
-      "type": "image",
-      "x": 40, "y": 80, "width": 580, "height": 560,
-      "description": "Main product image with rounded corners",
-      "style_notes": "rounded corners ~20px, slight shadow"
-    },
-    {
-      "type": "text_primary",
-      "x": 660, "y": 200, "width": 560, "height": 80,
-      "description": "Bold headline in large font",
-      "style_notes": "white text, uppercase, large bold font"
-    }
+  "regions": [
+    {"type": "image", "x": 40, "y": 80, "width": 580, "height": 560, "description": "Main image area"},
+    {"type": "text", "x": 660, "y": 200, "width": 560, "height": 80, "description": "Headline text"},
+    {"type": "logo", "x": 50, "y": 20, "width": 100, "height": 50, "description": "Logo top-left"}
   ]
 }
 
@@ -100,26 +77,19 @@ Return ONLY the JSON, no markdown formatting."""
 
 
 # ---------------------------------------------------------------------------
-# Layout analysis
+# Data model
 # ---------------------------------------------------------------------------
 
 @dataclass
-class LayoutZone:
-    type: str
-    x: int = 0
-    y: int = 0
-    width: int = 0
-    height: int = 0
-    description: str = ""
-    style_notes: str = ""
-
-
-@dataclass
-class LayoutAnalysis:
+class TemplateDesign:
+    layout_description: str = ""
+    visual_style: str = ""
+    generation_prompt: str = ""
+    reference_image_path: str = ""
+    generated_image_url: str = ""
     canvas_width: int = 1280
     canvas_height: int = 720
-    layout_pattern: str = ""
-    zones: list[LayoutZone] = field(default_factory=list)
+    regions: list[TemplateRegion] = field(default_factory=list)
 
 
 def _parse_json_response(raw: str) -> dict:
@@ -132,8 +102,12 @@ def _parse_json_response(raw: str) -> dict:
     return json.loads(text.strip())
 
 
-async def analyze_layout(image_path: str) -> LayoutAnalysis:
-    """Use Claude Vision to extract structural layout zones from a reference image."""
+# ---------------------------------------------------------------------------
+# Phase 1a: Analyze reference image
+# ---------------------------------------------------------------------------
+
+async def analyze_reference(image_path: str) -> TemplateDesign:
+    """Use Claude Vision to produce a natural language layout description."""
     path = Path(image_path)
     suffix = path.suffix.lower()
     media_type_map = {
@@ -161,363 +135,187 @@ async def analyze_layout(image_path: str) -> LayoutAnalysis:
         parsed = _parse_json_response(raw)
     except (json.JSONDecodeError, IndexError):
         logger.warning("Layout analysis returned non-JSON: %s", raw[:200])
-        return LayoutAnalysis()
+        return TemplateDesign(reference_image_path=image_path)
 
-    zones = [
-        LayoutZone(**z)
-        for z in parsed.get("zones", [])
+    regions = [
+        TemplateRegion(**r) for r in parsed.get("regions", [])
     ]
 
-    return LayoutAnalysis(
+    return TemplateDesign(
+        layout_description=parsed.get("layout_description", ""),
+        visual_style=parsed.get("visual_style", ""),
+        reference_image_path=image_path,
         canvas_width=parsed.get("canvas_width", 1280),
         canvas_height=parsed.get("canvas_height", 720),
-        layout_pattern=parsed.get("layout_pattern", ""),
-        zones=zones,
+        regions=regions,
     )
 
 
 # ---------------------------------------------------------------------------
-# PIL rendering — draw template from layout + brand config
+# Phase 1b: Build generation prompt from layout + brand identity
 # ---------------------------------------------------------------------------
 
-def _load_logo(height: int) -> tuple[Image.Image, int] | None:
-    """Load and resize brand logo to given height."""
-    if not _LOGO_PNG.exists():
-        return None
-    try:
-        logo = Image.open(str(_LOGO_PNG)).convert("RGBA")
-        w = int(height * logo.width / logo.height)
-        logo = logo.resize((w, height), Image.LANCZOS)
-        return logo, w
-    except Exception as e:
-        logger.warning("Logo load failed: %s", e)
-        return None
-
-
-def _brand_color(role: str, fallback: tuple[int, int, int] = (255, 255, 255)) -> tuple[int, int, int]:
-    """Get brand color RGB by role."""
-    return _cc.get_color_rgb(role, fallback)
-
-
-def _brand_font(style: str, size: int) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
-    """Load a brand font by style name and size."""
-    fonts_dir = Path(settings.BRAND_FOLDER) / "assets" / "fonts"
-    font_map = _cc.get_font_map()
-    info = font_map.get(style, font_map.get("regular", {}))
-    if info:
-        p = fonts_dir / info.get("filename", "")
-        if p.exists():
-            try:
-                return ImageFont.truetype(str(p), size)
-            except (OSError, IOError):
-                pass
-    # System fallback
-    for sys_font in ("/System/Library/Fonts/Helvetica.ttc", "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"):
-        try:
-            return ImageFont.truetype(sys_font, size)
-        except (OSError, IOError):
-            continue
-    return ImageFont.load_default()
-
-
-def render_template(layout: LayoutAnalysis) -> Image.Image:
-    """Render a branded template image from layout analysis using PIL.
-
-    Each zone type maps to a specific drawing operation using brand colors.
-    """
+def build_generation_prompt(design: TemplateDesign) -> str:
+    """Combine layout description with brand config to build a flux-kontext-pro prompt."""
     cfg = _cc.get_config()
-    cw, ch = layout.canvas_width, layout.canvas_height
 
-    # Background
-    bg_color = _brand_color("background", (10, 10, 26))
-    canvas = Image.new("RGBA", (cw, ch), bg_color + (255,))
-    draw = ImageDraw.Draw(canvas)
+    # Collect brand colors
+    color_parts = []
+    for role in ("primary", "secondary", "accent", "background", "text"):
+        entry = cfg.colors.get(role)
+        if entry:
+            color_parts.append(f"{role}: {entry.hex}")
+    colors_str = ", ".join(color_parts) if color_parts else "dark modern palette"
 
-    # Sort zones: background first, then other zones
-    bg_zones = [z for z in layout.zones if z.type == "background"]
-    other_zones = [z for z in layout.zones if z.type != "background"]
+    # Collect font info
+    font_parts = []
+    for use in ("display", "body"):
+        entry = cfg.fonts.get(use)
+        if entry:
+            font_parts.append(f"{use}: {entry.family}")
+    fonts_str = ", ".join(font_parts) if font_parts else "modern sans-serif"
 
-    # Draw background zones (gradients, fills)
-    for zone in bg_zones:
-        _draw_background_zone(draw, canvas, zone, cfg)
+    # Style keywords
+    style_str = ", ".join(cfg.style_keywords) if cfg.style_keywords else ""
 
-    # Draw structural zones
-    for zone in other_zones:
-        _draw_zone(draw, canvas, zone, cfg)
+    # Brand name
+    brand_name = cfg.brand_name or "the brand"
 
-    return canvas
+    # Visual style from analysis
+    visual_style = design.visual_style or "modern, clean design"
 
+    prompt = (
+        f"Recreate this layout as a branded social media template for {brand_name}. "
+        f"Keep the exact same spatial composition and layout structure. "
+        f"\n\nLayout: {design.layout_description}"
+        f"\n\nVisual style: {visual_style}"
+        f"\n\nBrand colors: {colors_str}"
+        f"\n\nTypography: {fonts_str}"
+    )
+    if style_str:
+        prompt += f"\n\nStyle keywords: {style_str}"
+    if cfg.tagline:
+        prompt += f"\n\nTagline: {cfg.tagline}"
 
-def _draw_background_zone(
-    draw: ImageDraw.ImageDraw,
-    canvas: Image.Image,
-    zone: LayoutZone,
-    cfg,
-) -> None:
-    """Draw a background zone — fill with brand background color."""
-    bg = _brand_color("background", (10, 10, 26))
-    bg_alt = _brand_color("background_alt", (26, 26, 58))
-
-    # If style mentions gradient, draw a vertical gradient
-    if "gradient" in zone.style_notes.lower():
-        for y in range(zone.y, zone.y + zone.height):
-            t = (y - zone.y) / max(zone.height, 1)
-            r = int(bg[0] + (bg_alt[0] - bg[0]) * t)
-            g = int(bg[1] + (bg_alt[1] - bg[1]) * t)
-            b = int(bg[2] + (bg_alt[2] - bg[2]) * t)
-            draw.line([(zone.x, y), (zone.x + zone.width, y)], fill=(r, g, b, 255))
-    else:
-        draw.rectangle(
-            [zone.x, zone.y, zone.x + zone.width, zone.y + zone.height],
-            fill=bg + (255,),
-        )
-
-
-def _draw_zone(
-    draw: ImageDraw.ImageDraw,
-    canvas: Image.Image,
-    zone: LayoutZone,
-    cfg,
-) -> None:
-    """Dispatch zone drawing by type."""
-    handlers = {
-        "image": _draw_image_zone,
-        "header": _draw_header_zone,
-        "footer": _draw_footer_zone,
-        "text_primary": _draw_text_primary_zone,
-        "text_secondary": _draw_text_secondary_zone,
-        "logo": _draw_logo_zone,
-        "badge": _draw_badge_zone,
-        "accent": _draw_accent_zone,
-    }
-    handler = handlers.get(zone.type)
-    if handler:
-        handler(draw, canvas, zone, cfg)
-
-
-def _draw_image_zone(
-    draw: ImageDraw.ImageDraw,
-    canvas: Image.Image,
-    zone: LayoutZone,
-    cfg,
-) -> None:
-    """Draw an image placeholder — semi-transparent panel with border."""
-    bg_alt = _brand_color("background_alt", (26, 26, 58))
-    primary = _brand_color("primary", (255, 105, 180))
-    # Glass-like panel
-    overlay = Image.new("RGBA", (zone.width, zone.height), bg_alt + (40,))
-    # Rounded corners via mask
-    radius = min(20, zone.width // 10, zone.height // 10)
-    mask = Image.new("L", (zone.width, zone.height), 0)
-    mask_draw = ImageDraw.Draw(mask)
-    mask_draw.rounded_rectangle([0, 0, zone.width, zone.height], radius=radius, fill=255)
-    canvas.paste(overlay, (zone.x, zone.y), mask)
-    # Border
-    draw.rounded_rectangle(
-        [zone.x, zone.y, zone.x + zone.width, zone.y + zone.height],
-        radius=radius,
-        outline=primary + (60,),
-        width=2,
+    prompt += (
+        "\n\nIMPORTANT: This is a TEMPLATE — use placeholder text like "
+        f"'{brand_name.upper()}' for headlines and 'Your message here' for body text. "
+        "Leave image areas as clean placeholder zones. "
+        "The template should look polished and production-ready."
     )
 
-
-def _draw_header_zone(
-    draw: ImageDraw.ImageDraw,
-    canvas: Image.Image,
-    zone: LayoutZone,
-    cfg,
-) -> None:
-    """Draw a header bar — semi-transparent panel."""
-    bg_alt = _brand_color("background_alt", (26, 26, 58))
-    overlay = Image.new("RGBA", (zone.width, zone.height), bg_alt + (80,))
-    canvas.paste(overlay, (zone.x, zone.y), overlay)
-
-
-def _draw_footer_zone(
-    draw: ImageDraw.ImageDraw,
-    canvas: Image.Image,
-    zone: LayoutZone,
-    cfg,
-) -> None:
-    """Draw a footer bar — similar to header."""
-    bg_alt = _brand_color("background_alt", (26, 26, 58))
-    overlay = Image.new("RGBA", (zone.width, zone.height), bg_alt + (60,))
-    canvas.paste(overlay, (zone.x, zone.y), overlay)
-
-
-def _draw_text_primary_zone(
-    draw: ImageDraw.ImageDraw,
-    canvas: Image.Image,
-    zone: LayoutZone,
-    cfg,
-) -> None:
-    """Draw a primary text placeholder — uppercase brand font label."""
-    text_color = _brand_color("text", (255, 255, 255))
-    font_size = max(16, min(zone.height // 2, 60))
-    font = _brand_font("bold", font_size)
-    label = cfg.brand_name.upper() if cfg.brand_name else "HEADLINE"
-    draw.text(
-        (zone.x + 4, zone.y + (zone.height - font_size) // 2),
-        label,
-        fill=text_color + (100,),
-        font=font,
-    )
-
-
-def _draw_text_secondary_zone(
-    draw: ImageDraw.ImageDraw,
-    canvas: Image.Image,
-    zone: LayoutZone,
-    cfg,
-) -> None:
-    """Draw a secondary text placeholder — lighter, smaller font."""
-    text_color = _brand_color("text", (255, 255, 255))
-    font_size = max(12, min(zone.height // 2, 28))
-    font = _brand_font("regular", font_size)
-    label = cfg.tagline if cfg.tagline else "subtitle text"
-    draw.text(
-        (zone.x + 4, zone.y + (zone.height - font_size) // 2),
-        label,
-        fill=text_color + (70,),
-        font=font,
-    )
-
-
-def _draw_logo_zone(
-    draw: ImageDraw.ImageDraw,
-    canvas: Image.Image,
-    zone: LayoutZone,
-    cfg,
-) -> None:
-    """Place the brand logo in the zone."""
-    logo_height = min(zone.height, 60)
-    result = _load_logo(logo_height)
-    if result:
-        logo_img, logo_w = result
-        # Center in zone
-        lx = zone.x + (zone.width - logo_w) // 2
-        ly = zone.y + (zone.height - logo_height) // 2
-        canvas.paste(logo_img, (lx, ly), logo_img)
-    else:
-        # Fallback: draw a placeholder circle
-        primary = _brand_color("primary", (255, 105, 180))
-        cx = zone.x + zone.width // 2
-        cy = zone.y + zone.height // 2
-        r = min(zone.width, zone.height) // 3
-        draw.ellipse([cx - r, cy - r, cx + r, cy + r], fill=primary + (80,))
-
-
-def _draw_badge_zone(
-    draw: ImageDraw.ImageDraw,
-    canvas: Image.Image,
-    zone: LayoutZone,
-    cfg,
-) -> None:
-    """Draw a badge/tag placeholder — rounded pill with brand color."""
-    primary = _brand_color("primary", (255, 105, 180))
-    radius = min(zone.height // 2, 12)
-    draw.rounded_rectangle(
-        [zone.x, zone.y, zone.x + zone.width, zone.y + zone.height],
-        radius=radius,
-        fill=primary + (50,),
-        outline=primary + (120,),
-        width=1,
-    )
-
-
-def _draw_accent_zone(
-    draw: ImageDraw.ImageDraw,
-    canvas: Image.Image,
-    zone: LayoutZone,
-    cfg,
-) -> None:
-    """Draw a decorative accent — line or glow element."""
-    primary = _brand_color("primary", (255, 105, 180))
-    # Thin line or bar
-    if zone.width > zone.height * 3:
-        # Horizontal accent line
-        y_mid = zone.y + zone.height // 2
-        draw.line(
-            [(zone.x, y_mid), (zone.x + zone.width, y_mid)],
-            fill=primary + (100,),
-            width=max(2, zone.height // 3),
-        )
-    elif zone.height > zone.width * 3:
-        # Vertical accent line
-        x_mid = zone.x + zone.width // 2
-        draw.line(
-            [(x_mid, zone.y), (x_mid, zone.y + zone.height)],
-            fill=primary + (100,),
-            width=max(2, zone.width // 3),
-        )
-    else:
-        # Square-ish accent — subtle glow
-        draw.rounded_rectangle(
-            [zone.x, zone.y, zone.x + zone.width, zone.y + zone.height],
-            radius=8,
-            fill=primary + (30,),
-        )
+    design.generation_prompt = prompt
+    return prompt
 
 
 # ---------------------------------------------------------------------------
-# Layout serialization — convert to/from dicts for context storage
+# Phase 1c: Generate template image via flux-kontext-pro
 # ---------------------------------------------------------------------------
 
-def layout_to_dict(layout: LayoutAnalysis) -> dict:
-    """Serialize LayoutAnalysis to a JSON-safe dict for storing in user_data."""
+async def generate_template_image(design: TemplateDesign) -> str | None:
+    """Call flux-kontext-pro img2img to generate a branded template.
+
+    Returns the generated image URL, or None on failure.
+    """
+    if not design.generation_prompt:
+        build_generation_prompt(design)
+
+    url = await generate_img2img(
+        prompt=design.generation_prompt,
+        input_image_path=design.reference_image_path,
+        strength=0.75,
+    )
+    if url:
+        design.generated_image_url = url
+    return url
+
+
+async def download_image(url: str) -> Image.Image | None:
+    """Download an image from URL and return as PIL Image."""
+    try:
+        async with httpx.AsyncClient(timeout=30) as client:
+            resp = await client.get(url)
+            resp.raise_for_status()
+            return Image.open(io.BytesIO(resp.content)).convert("RGB")
+    except Exception as e:
+        logger.warning("Failed to download image: %s", e)
+        return None
+
+
+# ---------------------------------------------------------------------------
+# Serialization — convert to/from dicts for user_data storage
+# ---------------------------------------------------------------------------
+
+def design_to_dict(design: TemplateDesign) -> dict:
+    """Serialize TemplateDesign to a JSON-safe dict for storing in user_data."""
     return {
-        "canvas_width": layout.canvas_width,
-        "canvas_height": layout.canvas_height,
-        "layout_pattern": layout.layout_pattern,
-        "zones": [
+        "layout_description": design.layout_description,
+        "visual_style": design.visual_style,
+        "generation_prompt": design.generation_prompt,
+        "reference_image_path": design.reference_image_path,
+        "generated_image_url": design.generated_image_url,
+        "canvas_width": design.canvas_width,
+        "canvas_height": design.canvas_height,
+        "regions": [
             {
-                "type": z.type, "x": z.x, "y": z.y,
-                "width": z.width, "height": z.height,
-                "description": z.description, "style_notes": z.style_notes,
+                "type": r.type, "x": r.x, "y": r.y,
+                "width": r.width, "height": r.height,
+                "description": r.description,
             }
-            for z in layout.zones
+            for r in design.regions
         ],
     }
 
 
-def layout_from_dict(d: dict) -> LayoutAnalysis:
-    """Deserialize a dict back into LayoutAnalysis."""
-    return LayoutAnalysis(
+def design_from_dict(d: dict) -> TemplateDesign:
+    """Deserialize a dict back into TemplateDesign."""
+    return TemplateDesign(
+        layout_description=d.get("layout_description", ""),
+        visual_style=d.get("visual_style", ""),
+        generation_prompt=d.get("generation_prompt", ""),
+        reference_image_path=d.get("reference_image_path", ""),
+        generated_image_url=d.get("generated_image_url", ""),
         canvas_width=d.get("canvas_width", 1280),
         canvas_height=d.get("canvas_height", 720),
-        layout_pattern=d.get("layout_pattern", ""),
-        zones=[LayoutZone(**z) for z in d.get("zones", [])],
+        regions=[TemplateRegion(**r) for r in d.get("regions", [])],
     )
 
 
 # ---------------------------------------------------------------------------
-# Layout adjustment — Claude modifies zones based on user feedback
+# Design adjustment — Claude modifies prompt based on user feedback
 # ---------------------------------------------------------------------------
 
 _ADJUST_PROMPT = """\
-You are adjusting a template layout based on user feedback.
+You are adjusting a template generation prompt based on user feedback.
 
-Current layout (JSON):
-{layout_json}
+Current generation prompt:
+{current_prompt}
+
+Layout description:
+{layout_description}
 
 User feedback: "{feedback}"
 
-Apply the user's requested changes to the layout. You may:
-- Move zones (change x, y)
-- Resize zones (change width, height)
-- Add new zones
-- Remove zones
-- Change zone types
-- Modify canvas dimensions
+Rewrite the generation prompt to incorporate the user's feedback. Keep the \
+brand identity (colors, fonts, style) but adjust the layout, composition, \
+or visual elements as requested.
 
-Return the COMPLETE updated layout as valid JSON with the same structure.
+Return ONLY valid JSON:
+{{
+  "generation_prompt": "the updated prompt text...",
+  "layout_description": "updated layout description if changed..."
+}}
+
 Return ONLY the JSON, no markdown formatting."""
 
 
-async def adjust_layout(layout: LayoutAnalysis, feedback: str) -> LayoutAnalysis:
-    """Use Claude to adjust a layout based on user feedback text."""
-    layout_json = json.dumps(layout_to_dict(layout), indent=2)
-    prompt = _ADJUST_PROMPT.format(layout_json=layout_json, feedback=feedback)
+async def adjust_design(design: TemplateDesign, feedback: str) -> TemplateDesign:
+    """Use Claude to adjust the generation prompt based on user feedback, then regenerate."""
+    prompt = _ADJUST_PROMPT.format(
+        current_prompt=design.generation_prompt,
+        layout_description=design.layout_description,
+        feedback=feedback,
+    )
 
     client = anthropic.AsyncAnthropic(api_key=settings.ANTHROPIC_API_KEY)
     response = await client.messages.create(
@@ -530,49 +328,28 @@ async def adjust_layout(layout: LayoutAnalysis, feedback: str) -> LayoutAnalysis
     try:
         parsed = _parse_json_response(raw)
     except (json.JSONDecodeError, IndexError):
-        logger.warning("Layout adjustment returned non-JSON: %s", raw[:200])
-        return layout  # Return unchanged on failure
+        logger.warning("Design adjustment returned non-JSON: %s", raw[:200])
+        return design  # Return unchanged on failure
 
-    zones = [LayoutZone(**z) for z in parsed.get("zones", [])]
-    if not zones:
-        return layout  # Don't wipe zones on bad response
+    new_prompt = parsed.get("generation_prompt", "")
+    if not new_prompt:
+        return design
 
-    return LayoutAnalysis(
-        canvas_width=parsed.get("canvas_width", layout.canvas_width),
-        canvas_height=parsed.get("canvas_height", layout.canvas_height),
-        layout_pattern=parsed.get("layout_pattern", layout.layout_pattern),
-        zones=zones,
-    )
+    design.generation_prompt = new_prompt
+    if parsed.get("layout_description"):
+        design.layout_description = parsed["layout_description"]
+
+    # Regenerate with updated prompt
+    url = await generate_template_image(design)
+    if not url:
+        logger.warning("Regeneration failed after adjustment")
+
+    return design
 
 
 # ---------------------------------------------------------------------------
-# Helpers — region building and aspect ratio
+# Helpers
 # ---------------------------------------------------------------------------
-
-def _build_regions(layout: LayoutAnalysis) -> list[TemplateRegion]:
-    """Map layout zones to TemplateMemory regions."""
-    regions = []
-    for z in layout.zones:
-        if z.type == "image":
-            regions.append(TemplateRegion(
-                type="image", x=z.x, y=z.y,
-                width=z.width, height=z.height,
-                description=z.description,
-            ))
-        elif z.type in ("text_primary", "text_secondary"):
-            regions.append(TemplateRegion(
-                type="text", x=z.x, y=z.y,
-                width=z.width, height=z.height,
-                description=z.description,
-            ))
-        elif z.type == "logo":
-            regions.append(TemplateRegion(
-                type="logo", x=z.x, y=z.y,
-                width=z.width, height=z.height,
-                description=z.description,
-            ))
-    return regions
-
 
 def _compute_aspect_ratio(width: int, height: int) -> str:
     """Compute a human-readable aspect ratio string."""
@@ -591,46 +368,58 @@ def _compute_aspect_ratio(width: int, height: int) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Template generation — split into analyze+render and register phases
+# Main pipeline — analyze + generate (preview) and register (save)
 # ---------------------------------------------------------------------------
 
-async def analyze_and_render(image_path: str) -> tuple[LayoutAnalysis, Image.Image]:
-    """Phase 1: Analyze reference image and render a branded template preview.
+async def analyze_and_generate(image_path: str) -> tuple[TemplateDesign, Image.Image]:
+    """Phase 1: Analyze reference image and generate a branded template preview.
 
-    Returns (layout, rendered_image) without registering anything.
+    Returns (design, generated_image) without registering anything.
     """
-    layout = await analyze_layout(image_path)
-    if not layout.zones:
-        raise ValueError("Could not detect any layout zones in the reference image.")
+    design = await analyze_reference(image_path)
+    if not design.layout_description:
+        raise ValueError("Could not analyze the reference image layout.")
 
     logger.info(
-        "Layout analysis: %dx%d, %d zones, pattern: %s",
-        layout.canvas_width, layout.canvas_height,
-        len(layout.zones), layout.layout_pattern,
+        "Layout analysis: %dx%d, %d regions, style: %s",
+        design.canvas_width, design.canvas_height,
+        len(design.regions), design.visual_style,
     )
 
-    template_img = render_template(layout)
-    return layout, template_img
+    build_generation_prompt(design)
+    url = await generate_template_image(design)
+    if not url:
+        raise ValueError("Template image generation failed. Check REPLICATE_API_TOKEN.")
+
+    img = await download_image(url)
+    if not img:
+        raise ValueError("Failed to download generated template image.")
+
+    return design, img
 
 
-def render_and_save(layout: LayoutAnalysis) -> tuple[Image.Image, str]:
-    """Re-render a layout and save to disk. Returns (image, path)."""
-    template_img = render_template(layout)
+async def save_generated_image(design: TemplateDesign) -> str:
+    """Download the generated image and save to templates dir. Returns file path."""
     templates_dir = Path(settings.BRAND_FOLDER) / "templates"
     templates_dir.mkdir(parents=True, exist_ok=True)
-    save_path = templates_dir / f"preview_{uuid.uuid4().hex[:8]}.png"
-    template_img.convert("RGB").save(str(save_path), "PNG")
-    return template_img, str(save_path)
+
+    img = await download_image(design.generated_image_url)
+    if not img:
+        raise ValueError("Failed to download generated image for saving.")
+
+    save_path = templates_dir / f"generated_{uuid.uuid4().hex[:8]}.png"
+    img.save(str(save_path), "PNG")
+    return str(save_path)
 
 
-def register_layout(
-    layout: LayoutAnalysis,
+def register_design(
+    design: TemplateDesign,
     image_path: str,
     name: str | None = None,
 ) -> BrandTemplate:
-    """Phase 2: Register a finalized layout as a template in TemplateMemory."""
+    """Phase 2: Register a finalized design as a template in TemplateMemory."""
     tid = str(uuid.uuid4())[:8]
-    cw, ch = layout.canvas_width, layout.canvas_height
+    cw, ch = design.canvas_width, design.canvas_height
     template_name = name or f"Generated {tid}"
 
     template = BrandTemplate(
@@ -639,10 +428,13 @@ def register_layout(
         path=image_path,
         width=cw,
         height=ch,
-        regions=_build_regions(layout),
+        regions=design.regions,
         aspect_ratio=_compute_aspect_ratio(cw, ch),
         content_types=[],  # Universal
-        analysis_notes=f"Generated from reference. Layout: {layout.layout_pattern}",
+        analysis_notes=(
+            f"AI-generated from reference. Style: {design.visual_style}. "
+            f"Layout: {design.layout_description[:200]}"
+        ),
     )
 
     memory = TemplateMemory()
@@ -659,14 +451,9 @@ async def generate_template_from_reference(
     image_path: str,
     name: str | None = None,
 ) -> tuple[BrandTemplate, Image.Image]:
-    """Full pipeline: analyze, render, register. Used by non-interactive callers."""
-    layout, template_img = await analyze_and_render(image_path)
+    """Full pipeline: analyze, generate, register. Used by non-interactive callers."""
+    design, template_img = await analyze_and_generate(image_path)
 
-    templates_dir = Path(settings.BRAND_FOLDER) / "templates"
-    templates_dir.mkdir(parents=True, exist_ok=True)
-    tid = str(uuid.uuid4())[:8]
-    template_path = templates_dir / f"generated_{tid}.png"
-    template_img.convert("RGB").save(str(template_path), "PNG")
-
-    template = register_layout(layout, str(template_path), name)
+    saved_path = await save_generated_image(design)
+    template = register_design(design, saved_path, name)
     return template, template_img

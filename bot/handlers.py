@@ -1511,7 +1511,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
     # Template-from-reference adjustment intercept
     tplref = (context.user_data or {}).get("tplref_pending") if context else None
-    if isinstance(tplref, dict) and "layout" in tplref:
+    if isinstance(tplref, dict) and "design" in tplref:
         await _handle_tplref_adjustment(update, context, request)
         return
 
@@ -2075,19 +2075,18 @@ async def _handle_template_from_reference(update: Update, context: ContextTypes.
 
     context.user_data["awaiting_template_from_ref"] = False
     await update.message.chat.send_action("typing")
-    await update.message.reply_text("Analyzing layout and generating branded template...")
+    await update.message.reply_text("Analyzing layout and generating branded template via AI...")
 
     try:
-        layout, rendered_img = await _tg.analyze_and_render(tmp_path)
+        design, generated_img = await _tg.analyze_and_generate(tmp_path)
 
-        # Store layout and metadata in user_data for adjustments
+        # Store design and metadata in user_data for adjustments
         context.user_data["tplref_pending"] = {
-            "layout": _tg.layout_to_dict(layout),
+            "design": _tg.design_to_dict(design),
             "name": (context.user_data or {}).get("template_from_ref_name", ""),
-            "image_path": None,  # Will be set on save
         }
 
-        await _send_template_preview(update, context, layout, rendered_img)
+        await _send_template_preview(update, context, design, generated_img)
     except Exception as e:
         logger.error("Template generation from reference failed: %s", e)
         context.user_data.pop("tplref_pending", None)
@@ -2100,26 +2099,25 @@ async def _handle_template_from_reference(update: Update, context: ContextTypes.
 async def _send_template_preview(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE,
-    layout,
-    rendered_img,
+    design,
+    generated_img,
 ) -> None:
     """Send a template preview with inline save/adjust/discard buttons."""
     from agent import template_generator as _tg
 
     buf = io.BytesIO()
-    rendered_img.convert("RGB").save(buf, "PNG")
+    generated_img.convert("RGB").save(buf, "PNG")
     buf.seek(0)
 
-    regions = _tg._build_regions(layout)
-    regions_str = ", ".join(f"{r.type} ({r.width}x{r.height})" for r in regions)
-    aspect = _tg._compute_aspect_ratio(layout.canvas_width, layout.canvas_height)
+    regions_str = ", ".join(f"{r.type} ({r.width}x{r.height})" for r in design.regions)
+    aspect = _tg._compute_aspect_ratio(design.canvas_width, design.canvas_height)
     name = (context.user_data.get("tplref_pending") or {}).get("name", "")
 
     caption = (
-        f"<b>Template Preview</b>\n\n"
-        f"Size: {layout.canvas_width}x{layout.canvas_height} ({aspect})\n"
+        f"<b>Template Preview</b> (AI-generated)\n\n"
+        f"Size: {design.canvas_width}x{design.canvas_height} ({aspect})\n"
+        f"Style: {_esc(design.visual_style or 'detected')}\n"
         f"Regions: {_esc(regions_str) or 'none detected'}\n"
-        f"Layout: {_esc(layout.layout_pattern or 'detected')}\n"
     )
     if name:
         caption += f"Name: <b>{_esc(name)}</b>\n"
@@ -2142,7 +2140,7 @@ async def _send_template_preview(
 
 
 async def _handle_tplref_adjustment(update: Update, context: ContextTypes.DEFAULT_TYPE, feedback: str) -> None:
-    """Apply user feedback to the pending template-from-reference layout."""
+    """Apply user feedback to the pending template design — adjusts prompt and regenerates."""
     from agent import template_generator as _tg
 
     pending = context.user_data.get("tplref_pending")
@@ -2152,10 +2150,10 @@ async def _handle_tplref_adjustment(update: Update, context: ContextTypes.DEFAUL
     # "looks good" / "save" / "done" → treat as save
     lower = feedback.lower().strip()
     if lower in ("looks good", "save", "save it", "done", "perfect", "yes", "keep it", "ok", "okay"):
-        layout = _tg.layout_from_dict(pending["layout"])
+        design = _tg.design_from_dict(pending["design"])
         name = pending.get("name") or None
-        rendered_img, saved_path = _tg.render_and_save(layout)
-        template = _tg.register_layout(layout, saved_path, name)
+        saved_path = await _tg.save_generated_image(design)
+        template = _tg.register_design(design, saved_path, name)
         context.user_data.pop("tplref_pending", None)
 
         regions_str = ", ".join(f"{r.type} ({r.width}x{r.height})" for r in template.regions)
@@ -2176,22 +2174,26 @@ async def _handle_tplref_adjustment(update: Update, context: ContextTypes.DEFAUL
         await update.message.reply_text("Template discarded.")
         return
 
-    # Otherwise treat as adjustment feedback
+    # Otherwise treat as adjustment feedback — modify prompt and regenerate
     await update.message.chat.send_action("typing")
-    await update.message.reply_text("Adjusting template...")
+    await update.message.reply_text("Adjusting prompt and regenerating template...")
 
     try:
-        layout = _tg.layout_from_dict(pending["layout"])
-        adjusted = await _tg.adjust_layout(layout, feedback)
+        design = _tg.design_from_dict(pending["design"])
+        adjusted = await _tg.adjust_design(design, feedback)
 
-        # Re-render
-        rendered_img = _tg.render_template(adjusted)
+        if not adjusted.generated_image_url:
+            raise ValueError("Regeneration failed after prompt adjustment.")
 
-        # Update stored layout
-        pending["layout"] = _tg.layout_to_dict(adjusted)
+        generated_img = await _tg.download_image(adjusted.generated_image_url)
+        if not generated_img:
+            raise ValueError("Failed to download regenerated template image.")
+
+        # Update stored design
+        pending["design"] = _tg.design_to_dict(adjusted)
         context.user_data["tplref_pending"] = pending
 
-        await _send_template_preview(update, context, adjusted, rendered_img)
+        await _send_template_preview(update, context, adjusted, generated_img)
     except Exception as e:
         logger.error("Template adjustment failed: %s", e)
         await update.message.reply_text(
@@ -2218,12 +2220,12 @@ async def tplref_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         return
 
     if action == "save":
-        layout = _tg.layout_from_dict(pending["layout"])
+        design = _tg.design_from_dict(pending["design"])
         name = pending.get("name") or None
 
-        # Render final version and save
-        rendered_img, saved_path = _tg.render_and_save(layout)
-        template = _tg.register_layout(layout, saved_path, name)
+        # Download and save the generated image
+        saved_path = await _tg.save_generated_image(design)
+        template = _tg.register_design(design, saved_path, name)
 
         context.user_data.pop("tplref_pending", None)
 
@@ -2244,9 +2246,9 @@ async def tplref_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     elif action == "adjust":
         await query.message.reply_text(
             "What should I adjust? Reply with your feedback, e.g.:\n"
-            "<i>make the image area larger</i>\n"
-            "<i>move the text higher</i>\n"
-            "<i>add a footer bar</i>",
+            "<i>make the colors more vibrant</i>\n"
+            "<i>use a darker background</i>\n"
+            "<i>add more spacing between elements</i>",
             parse_mode="HTML",
         )
 
