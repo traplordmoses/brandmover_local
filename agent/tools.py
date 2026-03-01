@@ -16,7 +16,7 @@ from pathlib import Path
 
 from PIL import Image as _PILImage, ImageOps as _PILImageOps
 
-from agent import content_types, feedback, figma, guidelines, image_gen, lora_pipeline, state as _state
+from agent import asset_library, content_types, feedback, figma, guidelines, image_gen, lora_pipeline, state as _state
 from agent.resource_log import ResourceTracker
 from config import settings
 
@@ -254,6 +254,21 @@ async def _handle_generate_image(
 
     content_type = input_dict.get("content_type", "announcement")
 
+    # Check asset library for a reusable match before generating
+    existing = asset_library.suggest(prompt, content_type)
+    if existing:
+        lib_path = asset_library.get_library_path(existing)
+        if lib_path:
+            asset_library.mark_used(existing.id)
+            logger.info("Reusing library asset %s instead of generating", existing.id)
+            return json.dumps({
+                "image_url": str(lib_path),
+                "model": "library",
+                "reason": f"reused library asset {existing.id}",
+                "prompt_used": prompt,
+                "library_entry_id": existing.id,
+            })
+
     # 0. brand_3d — dedicated 3D asset pipeline
     # Always: master prompt splice + category refs + optional logo refs
     # LoRA trigger (BRAND3D) appended as suffix when available (never prepended)
@@ -440,6 +455,10 @@ async def _handle_generate_image(
     url = await image_gen.generate_image(prompt, content_type=content_type)
 
     if url:
+        try:
+            asset_library.add(url, "generated", content_type, prompt=prompt)
+        except Exception as e:
+            logger.debug("Asset library add failed: %s", e)
         return json.dumps({"image_url": url, "model": model_id, "reason": reason, "prompt_used": prompt})
     else:
         return json.dumps({"error": "Image generation failed or REPLICATE_API_TOKEN not set", "model": model_id, "prompt_used": prompt})

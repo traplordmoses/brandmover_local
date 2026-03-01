@@ -5,8 +5,75 @@ System prompt for agent mode — the "soul" of the BrandMover agent.
 from config import settings
 
 
+def _get_platform_block() -> str:
+    """Return platform instructions for agent prompt based on brand config."""
+    from agent import compositor_config
+    try:
+        cfg = compositor_config.get_config()
+    except Exception:
+        return 'The `platform` field is "WEB", "APP", or "PRO" — the badge shown on the template.'
+    if cfg.badge_text is None:
+        return "Do NOT include a `platform` field in the JSON output. No badge will be shown."
+    return f'The `platform` badge is fixed to "{cfg.badge_text}". Always use this value.'
+
+
+def _get_platform_json_line() -> str:
+    """Return platform JSON line for agent prompt output format."""
+    from agent import compositor_config
+    try:
+        cfg = compositor_config.get_config()
+    except Exception:
+        return '  "platform": "WEB"'
+    if cfg.badge_text is None:
+        return ""
+    return f'  "platform": "{cfg.badge_text}"'
+
+
+def _get_image_mode_block() -> str:
+    """Return image generation instruction for agent prompt."""
+    from agent import compositor_config
+    try:
+        cfg = compositor_config.get_config()
+    except Exception:
+        return ""
+    mode = cfg.default_mode
+    if mode == "text_only":
+        return "\n**IMAGE MODE: TEXT ONLY** — Do NOT generate images or include image_prompt. This brand uses text-only posts.\n"
+    elif mode == "image_always":
+        return "\n**IMAGE MODE: ALWAYS** — Always generate an image for every post. Always include image_prompt.\n"
+    return ""
+
+
+def _get_content_types_block() -> str:
+    """Return content types list for agent prompt."""
+    from agent.content_types import AGENT_SELECTABLE_TYPES
+    _descriptions = {
+        "announcement": "product launches, updates, news, partnerships (uses text-overlay-optimized model)",
+        "lifestyle": "aspirational, day-in-the-life, culture (uses photorealistic model)",
+        "event": "conferences, AMAs, meetups (uses photorealistic model)",
+        "educational": "tutorials, explainers, how-tos",
+        "brand_asset": "logos, icons, badges, graphics (uses SVG-optimized model)",
+        "community": "giveaways, polls, engagement posts",
+        "market_commentary": "market analysis, price action, trends",
+        "brand_3d": "3D product illustrations, objects, and brand assets",
+    }
+    lines = []
+    for ct in AGENT_SELECTABLE_TYPES:
+        desc = _descriptions.get(ct, ct)
+        lines.append(f'- "{ct}" — {desc}')
+    return "\n".join(lines)
+
+
 def build_system_prompt() -> str:
     """Build the system prompt for the agent, incorporating brand name and context instructions."""
+    platform_block = _get_platform_block()
+    platform_json_line = _get_platform_json_line()
+    image_mode_block = _get_image_mode_block()
+    content_types_block = _get_content_types_block()
+
+    # Build the platform JSON field for the output format
+    platform_field = f",\n{platform_json_line}" if platform_json_line else ""
+
     return f"""You are BrandMover, an autonomous AI marketing agent for {settings.BRAND_NAME}.
 
 Your mission: given a content request, produce a publish-ready social media post draft with an image — all aligned to the brand's identity.
@@ -40,23 +107,15 @@ Follow these steps in order. Use your tools at each step.
   "image_prompt": "The prompt used for image generation",
   "content_type": "announcement",
   "title": "UPPERCASE HEADLINE",
-  "subtitle": "Brief explanation of the feature or topic",
-  "platform": "WEB"
+  "subtitle": "Brief explanation of the feature or topic"{platform_field}
 }}
 ```
 
-The `title` and `subtitle` fields are used for the branded post template (text overlay on the image card). The `platform` field is "WEB", "APP", or "PRO" — the badge shown on the template.
+The `title` and `subtitle` fields are used for the branded post template (text overlay on the image card). {platform_block}
 **Do NOT include hashtags in ANY field.** Zero hashtags, zero exceptions. The system will strip them automatically if you add them.
-
+{image_mode_block}
 CONTENT_TYPE values (pick the best fit for the request):
-- "announcement" — product launches, updates, news, partnerships (uses text-overlay-optimized model)
-- "lifestyle" — aspirational, day-in-the-life, culture (uses photorealistic model)
-- "event" — conferences, AMAs, meetups (uses photorealistic model)
-- "educational" — tutorials, explainers, how-tos
-- "brand_asset" — logos, icons, badges, graphics (uses SVG-optimized model)
-- "community" — giveaways, polls, engagement posts
-- "market_commentary" — market analysis, price action, trends
-- "brand_3d" — 3D product illustrations, objects, and brand assets
+{content_types_block}
 
 The content_type you choose determines which image generation model is used automatically.
 

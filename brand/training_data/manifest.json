@@ -1,0 +1,12 @@
+{
+  "images": [
+    {
+      "filename": "brand_asset_1772271281.jpg",
+      "prompt": "Brand logo design: Bold white uppercase text \"FOID\" in a chunky geometric sans-serif font centered on a solid deep dark navy-black background. 3D anaglyph chromatic aberration effect on the text \u2014 cyan/blue offset to the left and pink/magenta offset to the right, creating a retro 3D glasses look. The text glows softly white in the center with the colored edges bleeding out. CRT scanline texture overlay across the entire image. Subtle film grain. Minimal composition \u2014 just the text, nothing else. No dots, no bars, no decorations. Clean and centered. Dark moody atmosphere. Y2K retro digital aesthetic. Clean scalable vector, centered composition, crisp edges, professional brand identity. Style: Visual aesthetic, Frutiger Aero meets Y2K terminal, Image generation prompt guidance, Technical specs, dark midnight background, neon aqua and pink glow, glass morphism panels, Frutiger Aero aesthetic, Y2K digital art style. Color palette: aqua #72e1ff, candy pink #ffb3d9, lavender #cdb7ff. Background: midnight #0e0f2b., clean scalable vector design, centered composition, crisp edges, professional brand identity, high contrast, works at any size, simple bold shapes",
+      "content_type": "brand_asset",
+      "added_at": 1772271281
+    }
+  ],
+  "versions": [],
+  "threshold": 20
+}

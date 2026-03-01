@@ -50,23 +50,19 @@ OUTPUT FORMAT (strict JSON):
   "image_prompt": "Detailed prompt for image generation matching brand visual style",
   "content_type": "announcement",
   "title": "UPPERCASE HEADLINE",
-  "subtitle": "Brief explanation of the feature or topic",
-  "platform": "WEB"
+  "subtitle": "Brief explanation of the feature or topic"{platform_json_field}
 }}
 
+{image_mode_instruction}
+
+{platform_instruction}
+
 CONTENT_TYPE values (pick the best fit):
-- "announcement" — product launches, updates, news, partnerships
-- "lifestyle" — aspirational, day-in-the-life, culture
-- "event" — conferences, AMAs, meetups
-- "educational" — tutorials, explainers, how-tos
-- "brand_asset" — logos, icons, badges, graphics
-- "community" — giveaways, polls, engagement posts
-- "market_commentary" — market analysis, price action, trends
+{content_type_list}
 
 TEMPLATE FIELDS:
 - "title": ALL CAPS headline for the post image template (max 4-5 words, action-oriented)
 - "subtitle": Brief feature/topic explanation for the image template (1-2 sentences)
-- "platform": Badge to show — "WEB", "APP", or "PRO"
 """
 
 _REVISION_PROMPT_TEMPLATE = """The user rejected the previous draft and provided feedback.
@@ -85,8 +81,7 @@ Output ONLY valid JSON in the same format:
   "image_prompt": "...",
   "content_type": "...",
   "title": "...",
-  "subtitle": "...",
-  "platform": "..."
+  "subtitle": "..."{platform_json_field}
 }}"""
 
 # ---------------------------------------------------------------------------
@@ -194,6 +189,10 @@ FULL BRAND CONTEXT:
 USER REQUEST:
 {request}
 
+{image_mode_instruction}
+
+{platform_instruction}
+
 Output ONLY valid JSON — no markdown fences, no commentary:
 {{
   "caption": "The post caption text",
@@ -201,8 +200,7 @@ Output ONLY valid JSON — no markdown fences, no commentary:
   "image_prompt": "Detailed prompt for image generation matching brand visual style",
   "content_type": "announcement",
   "title": "UPPERCASE HEADLINE",
-  "subtitle": "Brief explanation of the feature or topic",
-  "platform": "WEB"
+  "subtitle": "Brief explanation of the feature or topic"{platform_json_field}
 }}"""
 
 _PLAN_AND_VERIFY_PROMPT = """You are BrandMover's creative planning + compliance module for {brand_name}.
@@ -239,6 +237,75 @@ Output ONLY valid JSON:
 
 
 # ---------------------------------------------------------------------------
+# Mode-aware prompt helpers
+# ---------------------------------------------------------------------------
+
+def _get_platform_instruction() -> str:
+    """Return platform instruction based on brand config badge_text."""
+    from agent import compositor_config
+    try:
+        cfg = compositor_config.get_config()
+    except Exception:
+        return 'The "platform" field is the badge to show — "WEB", "APP", or "PRO".'
+    if cfg.badge_text is None:
+        return "Do NOT include a platform field in the JSON output."
+    return f'The platform badge is fixed to "{cfg.badge_text}".'
+
+
+def _get_platform_json_field() -> str:
+    """Return the platform JSON field line for prompt templates, or empty."""
+    from agent import compositor_config
+    try:
+        cfg = compositor_config.get_config()
+    except Exception:
+        return ',\n  "platform": "WEB"'
+    if cfg.badge_text is None:
+        return ""
+    return f',\n  "platform": "{cfg.badge_text}"'
+
+
+def _get_image_mode_instruction() -> str:
+    """Return image generation instruction based on default_mode."""
+    from agent import compositor_config
+    try:
+        cfg = compositor_config.get_config()
+    except Exception:
+        return "Include image_prompt when an image enhances the post."
+    mode = cfg.default_mode
+    if mode == "text_only":
+        return "Do NOT include image_prompt. This brand uses text-only posts."
+    elif mode == "image_always":
+        return "Always include a detailed image_prompt for image generation."
+    else:
+        return "Include image_prompt when an image would enhance the post."
+
+
+def _get_content_type_list() -> str:
+    """Return formatted content type list for prompts."""
+    from agent.content_types import AGENT_SELECTABLE_TYPES
+    lines = []
+    _descriptions = {
+        "announcement": "product launches, updates, news, partnerships",
+        "lifestyle": "aspirational, day-in-the-life, culture",
+        "event": "conferences, AMAs, meetups",
+        "educational": "tutorials, explainers, how-tos",
+        "brand_asset": "logos, icons, badges, graphics",
+        "community": "giveaways, polls, engagement posts",
+        "market_commentary": "market analysis, price action, trends",
+        "brand_3d": "3D product illustrations, objects",
+        "campaign": "marketing campaigns, launches",
+        "market": "market data, stats, trends",
+        "meme": "memes, humor, viral content",
+        "engagement": "engagement, conversation starters",
+        "advice": "tips, recommendations, guidance",
+    }
+    for ct in AGENT_SELECTABLE_TYPES:
+        desc = _descriptions.get(ct, ct)
+        lines.append(f'- "{ct}" — {desc}')
+    return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
 # Data structures
 # ---------------------------------------------------------------------------
 
@@ -267,7 +334,7 @@ def _parse_llm_response(text: str) -> dict:
             lines = lines[:-1]
         cleaned = "\n".join(lines).strip()
     result = json.loads(cleaned)
-    required = {"caption", "alt_text", "image_prompt"}
+    required = {"caption", "alt_text"}
     missing = required - set(result.keys())
     if missing:
         raise ValueError(f"LLM response missing keys: {missing}")
@@ -477,6 +544,10 @@ async def pipeline_generate(
         gen_system = _SYSTEM_PROMPT_TEMPLATE.format(
             brand_name=settings.BRAND_NAME,
             brand_context="",  # context passed in user message
+            platform_instruction=_get_platform_instruction(),
+            platform_json_field=_get_platform_json_field(),
+            image_mode_instruction=_get_image_mode_instruction(),
+            content_type_list=_get_content_type_list(),
         )
         gen_user = _GENERATE_PROMPT.format(
             brand_name=settings.BRAND_NAME,
@@ -485,6 +556,9 @@ async def pipeline_generate(
             verification=json.dumps(result.verification, indent=2),
             brand_context=brand_context,
             request=request,
+            platform_instruction=_get_platform_instruction(),
+            platform_json_field=_get_platform_json_field(),
+            image_mode_instruction=_get_image_mode_instruction(),
         )
         raw_draft = await _call_llm(gen_system, gen_user)
         result.draft = _parse_llm_response(raw_draft)
@@ -526,6 +600,10 @@ async def generate_draft(request: str, brand_context: str) -> dict:
     system_prompt = _SYSTEM_PROMPT_TEMPLATE.format(
         brand_name=settings.BRAND_NAME,
         brand_context=brand_context,
+        platform_instruction=_get_platform_instruction(),
+        platform_json_field=_get_platform_json_field(),
+        image_mode_instruction=_get_image_mode_instruction(),
+        content_type_list=_get_content_type_list(),
     )
     logger.info("Generating draft for request: %s", request[:100])
     raw = await _call_llm(system_prompt, request)
@@ -550,11 +628,16 @@ async def revise_draft(
     system_prompt = _SYSTEM_PROMPT_TEMPLATE.format(
         brand_name=settings.BRAND_NAME,
         brand_context=brand_context,
+        platform_instruction=_get_platform_instruction(),
+        platform_json_field=_get_platform_json_field(),
+        image_mode_instruction=_get_image_mode_instruction(),
+        content_type_list=_get_content_type_list(),
     )
     user_message = _REVISION_PROMPT_TEMPLATE.format(
         caption=original_draft.get("caption", ""),
         hashtags=", ".join(original_draft.get("hashtags", [])),
         feedback=feedback,
+        platform_json_field=_get_platform_json_field(),
     )
     logger.info("Revising draft with feedback: %s", feedback[:100])
     raw = await _call_llm(system_prompt, user_message)

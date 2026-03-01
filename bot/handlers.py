@@ -15,7 +15,8 @@ from PIL import Image as _PILImage
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import ContextTypes
 
-from agent import asset_gen, auto_state, brain, compositor, compositor_config, engine, feedback, generation_history, guidelines, image_gen, publisher, scheduler, state
+from agent import asset_gen, asset_library, auto_state, brain, compositor, compositor_config, engine, feedback, generation_history, guidelines, image_gen, onboarding, publisher, scheduler, state
+from agent import compositor_config as _cc
 from config import settings
 
 logger = logging.getLogger(__name__)
@@ -102,6 +103,10 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         "/history — Show generation history and stats\n"
         "/analytics — Show approval rates by content type and model\n"
         "/apply — Apply extracted brand info to guidelines\n"
+        "/template — Toggle image composition on/off\n"
+        "/onboard — Start conversational brand onboarding\n"
+        "/onboard_cancel — Cancel onboarding\n"
+        "/library — List or search the asset library\n"
         "/help — Show this message"
     )
     await update.message.reply_text(msg, parse_mode="HTML")
@@ -278,6 +283,16 @@ async def approve_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         except Exception as e:
             logger.warning("Failed to save to style profile: %s", e)
 
+        # Add to asset library
+        try:
+            asset_library.add(
+                composed_path, "approved", composed_ct or "general",
+                prompt=pending.get("image_prompt", ""),
+                tags=["approved"],
+            )
+        except Exception as e:
+            logger.debug("Asset library add failed: %s", e)
+
         # Clean up temp composed file
         try:
             Path(composed_path).unlink(missing_ok=True)
@@ -453,8 +468,7 @@ async def edit_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
                 draft["title"] = sentences[0].rstrip(".")
                 draft["subtitle"] = sentences[1] if len(sentences) > 1 else ""
 
-        composed = await compositor.compose_branded_image(draft, url, ct)
-        photo = composed if composed else url
+        photo, composed = await _maybe_compose(draft, url, ct)
 
         # Save composed for archiving
         if composed and isinstance(composed, io.BytesIO):
@@ -463,6 +477,7 @@ async def edit_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
                 with open(tmp_composed, "wb") as f:
                     f.write(composed.getvalue())
                 composed.seek(0)
+                photo = composed  # reset after reading for save
                 state.set_last_composed(tmp_composed, ct)
             except Exception as e:
                 logger.debug("Failed to save edit composed image: %s", e)
@@ -851,6 +866,23 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     if not _authorized(update.effective_user.id):
         return
 
+    # Onboarding intercept — accept documents as brand assets during upload phase
+    ob_session = onboarding.get_session(update.effective_user.id)
+    if ob_session and ob_session.state == onboarding.OnboardingState.UPLOADS.value:
+        document = update.message.document
+        if document:
+            import tempfile
+            tg_file = await document.get_file()
+            tmp_path = str(Path(tempfile.gettempdir()) / f"onboard_doc_{int(time.time())}_{document.file_name or 'doc'}")
+            await tg_file.download_to_drive(tmp_path)
+            ob_session.uploaded_assets.append({"path": tmp_path, "type": "document"})
+            onboarding.save_session(ob_session)
+            count = len(ob_session.uploaded_assets)
+            await update.message.reply_text(
+                f"Document received ({count} assets total). Send more, or /onboard_skip when done.",
+            )
+        return
+
     if not context.user_data.get("awaiting_setup_pdf"):
         await update.message.reply_text(
             "Use /setup first if you want to bootstrap brand guidelines from a PDF.",
@@ -978,6 +1010,17 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         img.save(tmp_path, "JPEG", quality=95)
     except Exception as e:
         logger.warning("Image conversion failed (using as-is): %s", e)
+
+    # --- Onboarding upload intercept ---
+    ob_session = onboarding.get_session(update.effective_user.id)
+    if ob_session and ob_session.state == onboarding.OnboardingState.UPLOADS.value:
+        ob_session.uploaded_assets.append({"path": tmp_path, "type": "image"})
+        onboarding.save_session(ob_session)
+        count = len(ob_session.uploaded_assets)
+        await update.message.reply_text(
+            f"Asset {count} received. Send more, or /onboard_skip when done.",
+        )
+        return
 
     # --- Priority flag checks (logo > ingest > brand_check) ---
     user_data = context.user_data if context else {}
@@ -1118,6 +1161,26 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     if not request:
         return
 
+    # Onboarding intercept — handle messages during onboarding flow
+    session = onboarding.get_session(update.effective_user.id)
+    if session and session.state not in (
+        onboarding.OnboardingState.IDLE.value,
+        onboarding.OnboardingState.COMPLETE.value,
+    ):
+        session, response = onboarding.advance(session, request)
+        onboarding.save_session(session)
+        await update.message.reply_text(response, parse_mode="HTML")
+
+        # Handle async state transitions
+        if session.state == onboarding.OnboardingState.AUDITING.value:
+            await _run_onboarding_audit(update, session)
+        elif session.state == onboarding.OnboardingState.STRATEGY.value:
+            await _run_onboarding_strategy(update, session)
+        elif session.state == onboarding.OnboardingState.COMPLETE.value:
+            summary = await onboarding.finalize_onboarding(session)
+            await update.message.reply_text(summary, parse_mode="HTML")
+        return
+
     # Rate limit — prevent accidental double-sends from burning API credits
     if _rate_limited(update.effective_user.id):
         await update.message.reply_text(
@@ -1204,6 +1267,232 @@ async def _handle_agent_mode(update: Update, request: str) -> None:
         )
 
 
+# ---------------------------------------------------------------------------
+# Onboarding commands
+# ---------------------------------------------------------------------------
+
+
+async def onboard_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /onboard — start conversational onboarding."""
+    if not _authorized(update.effective_user.id):
+        return
+
+    user_id = update.effective_user.id
+    session = onboarding.get_session(user_id)
+
+    # Resume existing session
+    if session and session.state not in (
+        onboarding.OnboardingState.IDLE.value,
+        onboarding.OnboardingState.COMPLETE.value,
+    ):
+        await update.message.reply_text(
+            f"You have an onboarding session in progress "
+            f"(state: {_esc(session.state)}, brand: {_esc(session.brand_name)}).\n\n"
+            f"Continue where you left off, or /onboard_cancel to start fresh.",
+            parse_mode="HTML",
+        )
+        return
+
+    # Start new session
+    session = onboarding.OnboardingSession(user_id=user_id)
+    session, response = onboarding.advance(session, None)
+    onboarding.save_session(session)
+    await update.message.reply_text(response, parse_mode="HTML")
+
+
+async def onboard_cancel_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /onboard_cancel — cancel onboarding session."""
+    if not _authorized(update.effective_user.id):
+        return
+
+    onboarding.delete_session(update.effective_user.id)
+    await update.message.reply_text("Onboarding cancelled. Use /onboard to start again.")
+
+
+async def onboard_skip_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /onboard_skip — skip upload phase during onboarding."""
+    if not _authorized(update.effective_user.id):
+        return
+
+    session = onboarding.get_session(update.effective_user.id)
+    if not session or session.state != onboarding.OnboardingState.UPLOADS.value:
+        await update.message.reply_text("Not in upload phase. Use /onboard to start onboarding.")
+        return
+
+    session, response = onboarding.advance(session, "/onboard_skip")
+    onboarding.save_session(session)
+    await update.message.reply_text(response, parse_mode="HTML")
+
+    # If we transitioned to AUDITING, run the audit
+    if session.state == onboarding.OnboardingState.AUDITING.value:
+        await _run_onboarding_audit(update, session)
+
+
+async def _run_onboarding_audit(update: Update, session: onboarding.OnboardingSession) -> None:
+    """Run Claude Vision audit on uploaded assets and advance the session."""
+    from agent import asset_audit
+
+    await update.message.chat.send_action("typing")
+
+    paths = [a["path"] for a in session.uploaded_assets if Path(a["path"]).exists()]
+    if not paths:
+        session.state = onboarding.OnboardingState.VISUAL_PREF.value
+        onboarding.save_session(session)
+        await update.message.reply_text(
+            "No valid assets found. Let's pick a visual style instead.\n\n"
+            "Options: <b>modern</b> / <b>playful</b> / <b>corporate</b> / "
+            "<b>minimal</b> / <b>bold</b> / <b>elegant</b>",
+            parse_mode="HTML",
+        )
+        return
+
+    try:
+        inventory = await asset_audit.audit_batch(paths)
+        asset_audit.save_inventory(inventory)
+
+        audit_data = {
+            "archetype": inventory.archetype,
+            "consolidated_colors": inventory.consolidated_colors,
+            "consolidated_style": inventory.consolidated_style,
+            "missing_items": inventory.missing_items,
+            "entry_count": len(inventory.entries),
+        }
+        session, response = onboarding.finalize_audit(session, audit_data)
+        onboarding.save_session(session)
+        await update.message.reply_text(response, parse_mode="HTML")
+    except Exception as e:
+        logger.error("Onboarding audit failed: %s", e)
+        session.state = onboarding.OnboardingState.VISUAL_PREF.value
+        onboarding.save_session(session)
+        await update.message.reply_text(
+            f"Asset analysis failed: {_esc(str(e))}\n\nLet's pick a visual style instead.\n"
+            "Options: <b>modern</b> / <b>playful</b> / <b>corporate</b> / "
+            "<b>minimal</b> / <b>bold</b> / <b>elegant</b>",
+            parse_mode="HTML",
+        )
+
+
+async def _run_onboarding_strategy(update: Update, session: onboarding.OnboardingSession) -> None:
+    """Run strategy recommendation and advance session to CONFIRM."""
+    from agent import strategy as strategy_mod
+    from agent.asset_audit import AssetInventory, load_inventory
+
+    await update.message.chat.send_action("typing")
+
+    try:
+        inventory = load_inventory()
+        rec = await strategy_mod.recommend_strategy(
+            brand_name=session.brand_name,
+            description=session.description,
+            platforms=session.platforms,
+            inventory=inventory,
+            visual_preferences=session.visual_preferences,
+        )
+
+        strategy_data = {
+            "archetype": rec.archetype,
+            "compositor_enabled": rec.compositor_enabled,
+            "badge_text": rec.badge_text,
+            "default_mode": rec.default_mode,
+            "recommended_content_types": rec.recommended_content_types,
+            "visual_style_notes": rec.visual_style_notes,
+            "reasoning": rec.reasoning,
+        }
+        session, response = onboarding.finalize_strategy(session, strategy_data)
+        onboarding.save_session(session)
+        await update.message.reply_text(response, parse_mode="HTML")
+    except Exception as e:
+        logger.error("Onboarding strategy failed: %s", e)
+        # Use defaults and continue to confirm
+        from agent.strategy import _ARCHETYPE_DEFAULTS
+        archetype = session.asset_audit.get("archetype", "starting_fresh")
+        defaults = _ARCHETYPE_DEFAULTS.get(archetype, _ARCHETYPE_DEFAULTS["starting_fresh"])
+        strategy_data = {"archetype": archetype, **defaults, "reasoning": f"Auto-configured (strategy generation failed: {e})"}
+        session, response = onboarding.finalize_strategy(session, strategy_data)
+        onboarding.save_session(session)
+        await update.message.reply_text(response, parse_mode="HTML")
+
+
+async def _maybe_compose(draft: dict, image_url: str, content_type: str):
+    """Compositor guard. Returns (photo_to_send, composed_bytes_or_None)."""
+    cfg = _cc.get_config()
+    if not cfg.compositor_enabled:
+        return image_url, None
+    composed = await compositor.compose_branded_image(draft, image_url, content_type)
+    return (composed if composed else image_url), composed
+
+
+async def template_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /template — toggle image composition on/off."""
+    if not _authorized(update.effective_user.id):
+        return
+
+    text = (update.message.text or "").strip()
+    arg = text.partition("/template")[2].strip().lower()
+
+    guidelines_path = Path(settings.BRAND_FOLDER) / "guidelines.md"
+
+    if not arg:
+        # Show current status
+        cfg = _cc.get_config()
+        status = "ON" if cfg.compositor_enabled else "OFF"
+        badge = cfg.badge_text or "(none)"
+        mode = cfg.default_mode
+        await update.message.reply_text(
+            f"<b>Compositor Status</b>\n\n"
+            f"Enabled: <b>{status}</b>\n"
+            f"Badge: <code>{_esc(badge)}</code>\n"
+            f"Mode: <code>{_esc(mode)}</code>\n\n"
+            f"<code>/template on</code> — enable\n"
+            f"<code>/template off</code> — disable",
+            parse_mode="HTML",
+        )
+        return
+
+    if arg not in ("on", "off"):
+        await update.message.reply_text(
+            "Usage: /template on | /template off | /template",
+        )
+        return
+
+    enabled_value = "true" if arg == "on" else "false"
+
+    # Read current guidelines
+    if not guidelines_path.exists():
+        await update.message.reply_text("No guidelines.md found. Run /setup first.")
+        return
+
+    content = guidelines_path.read_text(encoding="utf-8")
+
+    # Check if COMPOSITOR section already exists
+    import re as _re
+    section_match = _re.search(r"##\s*COMPOSITOR(.*?)(?=\n##|\Z)", content, _re.DOTALL)
+    if section_match:
+        # Update the Enabled row
+        section = section_match.group(0)
+        updated = _re.sub(
+            r"(\|\s*Enabled\s*\|\s*)(true|false|yes|no|on|off)(\s*\|)",
+            rf"\g<1>{enabled_value}\g<3>",
+            section,
+            flags=_re.IGNORECASE,
+        )
+        content = content.replace(section, updated)
+    else:
+        # Add COMPOSITOR section at the end
+        content += f"\n\n## COMPOSITOR\n\n| Setting        | Value          |\n|----------------|----------------|\n| Enabled        | {enabled_value}           |\n"
+
+    guidelines_path.write_text(content, encoding="utf-8")
+    _cc.invalidate_cache()
+    compositor.clear_font_cache()
+    guidelines.invalidate_brand_context()
+
+    status_str = "ON" if arg == "on" else "OFF"
+    await update.message.reply_text(
+        f"Compositor <b>{status_str}</b>",
+        parse_mode="HTML",
+    )
+
+
 async def _handle_pipeline_mode(update: Update, request: str) -> None:
     """Run the existing multi-step pipeline for a content request."""
     await update.message.chat.send_action("typing")
@@ -1237,9 +1526,11 @@ async def _handle_pipeline_mode(update: Update, request: str) -> None:
 
         logger.info("Draft generated: %s", draft.get("caption", "")[:80])
 
-        # Generate image with smart model routing
+        # Generate image with smart model routing (mode-aware)
         image_url = None
-        if draft.get("image_prompt"):
+        cfg = _cc.get_config()
+        should_gen = draft.get("image_prompt") and cfg.default_mode != "text_only"
+        if should_gen:
             await update.message.chat.send_action("upload_photo")
             content_type = draft.get("content_type", "announcement")
             image_url = await image_gen.generate_image(draft["image_prompt"], content_type=content_type)
@@ -1302,8 +1593,7 @@ async def _send_draft(
     # --- Multi-option path (N>1 images) ---
     if image_urls and len(image_urls) > 1:
         for idx, url in enumerate(image_urls, 1):
-            composed = await compositor.compose_branded_image(draft, url, content_type)
-            photo = composed if composed else url
+            photo, composed = await _maybe_compose(draft, url, content_type)
 
             # Save composed image for approve-time archiving (save last option)
             if composed and isinstance(composed, io.BytesIO):
@@ -1360,8 +1650,7 @@ async def _send_draft(
         text_msg += f"\n\n<i>Resources: {_esc(resources.to_summary())}</i>"
 
     if image_url:
-        composed = await compositor.compose_branded_image(draft, image_url, content_type)
-        photo = composed if composed else image_url
+        photo, composed = await _maybe_compose(draft, image_url, content_type)
 
         # Save composed image to temp for approve-time archiving
         if composed and isinstance(composed, io.BytesIO):
@@ -1429,8 +1718,7 @@ async def send_auto_draft(bot, draft: dict, image_url: str | None, slot_name: st
     )
 
     if image_url:
-        composed = await compositor.compose_branded_image(draft, image_url, content_type)
-        photo = composed if composed else image_url
+        photo, composed = await _maybe_compose(draft, image_url, content_type)
 
         # Save composed for archiving on approve
         if composed and isinstance(composed, io.BytesIO):
@@ -2362,5 +2650,30 @@ async def analytics_command(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         for model, stats in model_data.items():
             total = stats["approved"] + stats["rejected"]
             lines.append(f"  {model}: {stats['rate']:.0f}% ({stats['approved']}/{total})")
+
+    await update.message.reply_text("\n".join(lines), parse_mode="HTML")
+
+
+async def library_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /library [query] — list or search the asset library."""
+    if not _authorized(update.effective_user.id):
+        return
+
+    text = (update.message.text or "").strip()
+    parts = text.split(maxsplit=1)
+    query = parts[1] if len(parts) > 1 else ""
+
+    entries = asset_library.find(query=query, limit=10) if query else asset_library.list_all(limit=10)
+
+    if not entries:
+        await update.message.reply_text("Asset library is empty." if not query else f"No assets matching '{_esc(query)}'.")
+        return
+
+    lines = [f"<b>Asset Library</b> ({len(entries)} shown)\n"]
+    for e in entries:
+        used = f", used {e.used_count}x" if e.used_count else ""
+        tags = f" [{', '.join(e.tags[:3])}]" if e.tags else ""
+        prompt_short = (e.prompt[:40] + "...") if len(e.prompt) > 40 else e.prompt
+        lines.append(f"<code>{e.id}</code> {e.source}/{e.content_type}{tags}{used}\n  {_esc(prompt_short)}")
 
     await update.message.reply_text("\n".join(lines), parse_mode="HTML")

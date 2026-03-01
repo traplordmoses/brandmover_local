@@ -247,8 +247,11 @@ def _draw_platform_badge(
     platform: str, logo_height: int = 44,
 ) -> None:
     """Outline-style badge — brand color border, transparent fill, brand color text."""
+    cfg = _brand_cfg.get_config()
+    if cfg.badge_text is None:
+        return
     bf   = _load_font("bold", 15)
-    text = (platform or "WEB").upper()
+    text = cfg.badge_text.upper()
     tb   = bf.getbbox(text)
     tw, th = tb[2]-tb[0], tb[3]-tb[1]
     px, py = 16, 7

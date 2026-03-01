@@ -267,3 +267,40 @@ class TestLayoutMappingsOverride:
         for ct in ("announcement", "meme", "market"):
             profile_key = cfg.layout_mappings.get(ct) or COMPOSITOR_PROFILE_MAP.get(ct, "default")
             assert profile_key == COMPOSITOR_PROFILE_MAP[ct]
+
+
+# ---------------------------------------------------------------------------
+# _draw_platform_badge — badge_text conditionalization (v8)
+# ---------------------------------------------------------------------------
+
+class TestBadgeConfig:
+    def test_badge_skipped_when_badge_text_none(self):
+        """Badge should not be drawn when badge_text is None."""
+        cfg = _make_cfg(badge_text=None)
+        canvas = Image.new("RGBA", (200, 100), (0, 0, 0, 255))
+        draw = compositor.ImageDraw.Draw(canvas)
+
+        # Capture the canvas before
+        before = canvas.copy()
+
+        with patch("agent.compositor._brand_cfg.get_config", return_value=cfg):
+            compositor._draw_platform_badge(draw, 10, 10, "WEB", 44)
+
+        # Canvas should be unchanged
+        assert list(canvas.getdata()) == list(before.getdata())
+
+    def test_badge_drawn_with_custom_text(self):
+        """Badge should be drawn with custom badge_text from config."""
+        cfg = _make_cfg(badge_text="PRO")
+        canvas = Image.new("RGBA", (200, 100), (0, 0, 0, 255))
+        draw = compositor.ImageDraw.Draw(canvas)
+
+        before_data = list(canvas.getdata())
+
+        with patch("agent.compositor._brand_cfg.get_config", return_value=cfg):
+            with patch("agent.compositor._brand_cfg.get_color_rgb", return_value=(255, 255, 255)):
+                compositor._draw_platform_badge(draw, 10, 10, "WEB", 44)
+
+        # Canvas should be modified (badge drawn)
+        after_data = list(canvas.getdata())
+        assert before_data != after_data

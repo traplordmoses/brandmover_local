@@ -73,6 +73,10 @@ class BrandConfig:
     orb_alpha_base: int = 18
     orb_count: int = 7
     noise_opacity: int = 0
+    # Compositor control — configurable via ## COMPOSITOR table
+    compositor_enabled: bool = True
+    badge_text: str | None = None       # None = no badge, str = custom badge text
+    default_mode: str = "image_optional" # "text_only" | "image_always" | "image_optional"
 
 
 # ---------------------------------------------------------------------------
@@ -301,6 +305,46 @@ def _parse_visual_effects(text: str) -> dict:
     return effects
 
 
+_COMPOSITOR_KEY_MAP = {
+    "enabled": "compositor_enabled",
+    "badge text": "badge_text",
+    "default mode": "default_mode",
+}
+
+_COMPOSITOR_ROW = re.compile(
+    r"\|\s*(?P<setting>[^|]+?)\s*\|\s*(?P<value>[^|]+?)\s*\|",
+)
+
+
+def _parse_compositor_section(text: str) -> dict:
+    """Parse optional ## COMPOSITOR table section."""
+    m = re.search(r"##\s*COMPOSITOR(.*?)(?=\n##|\Z)", text, re.DOTALL)
+    if not m:
+        return {}
+    section = m.group(1)
+    compositor: dict = {}
+    for row in _COMPOSITOR_ROW.finditer(section):
+        raw_setting = row.group("setting").strip().lower()
+        raw_value = row.group("value").strip()
+        # Skip header/separator rows
+        if raw_setting in ("setting", "---", "-------") or raw_setting.startswith("-"):
+            continue
+        key = _COMPOSITOR_KEY_MAP.get(raw_setting)
+        if not key:
+            continue
+        if key == "compositor_enabled":
+            compositor[key] = raw_value.lower() in ("true", "1", "yes", "on")
+        elif key == "badge_text":
+            # Empty/missing value → None (no badge)
+            val = raw_value.strip()
+            compositor[key] = val if val and val.lower() not in ("none", "null", "") else None
+        elif key == "default_mode":
+            val = raw_value.strip().lower().replace(" ", "_")
+            if val in ("text_only", "image_always", "image_optional"):
+                compositor[key] = val
+    return compositor
+
+
 _LAYOUT_KEY_MAP = {
     "canvas width": "canvas_width",
     "canvas height": "canvas_height",
@@ -371,6 +415,30 @@ def _parse_layout_mappings(text: str) -> dict[str, str]:
 
 
 # ---------------------------------------------------------------------------
+# brand/config.json loader (v8)
+# ---------------------------------------------------------------------------
+
+_CONFIG_JSON_PATH = Path(__file__).resolve().parent.parent / "brand" / "config.json"
+
+
+def _load_config_json(path: Path | None = None) -> dict | None:
+    """Read brand/config.json and return parsed dict. Returns None if missing."""
+    import json
+    src = path or _CONFIG_JSON_PATH
+    if not src.exists():
+        return None
+    try:
+        data = json.loads(src.read_text(encoding="utf-8"))
+        if not isinstance(data, dict):
+            logger.warning("config.json is not a dict — ignoring")
+            return None
+        return data
+    except (json.JSONDecodeError, OSError) as e:
+        logger.warning("Failed to read config.json: %s", e)
+        return None
+
+
+# ---------------------------------------------------------------------------
 # Config cache
 # ---------------------------------------------------------------------------
 
@@ -407,6 +475,7 @@ def get_config(path: Path | None = None) -> BrandConfig:
     effects = _parse_visual_effects(raw)
     layout = _parse_layout_profiles(raw)
     layout_map = _parse_layout_mappings(raw)
+    compositor = _parse_compositor_section(raw)
 
     _cached_config = BrandConfig(
         brand_name=identity.get("brand_name", ""),
@@ -428,7 +497,22 @@ def get_config(path: Path | None = None) -> BrandConfig:
         source_path=str(src),
         **layout,
         **effects,
+        **compositor,
     )
+    # config.json overrides (v8) — takes precedence over ## COMPOSITOR in guidelines.md
+    config_json = _load_config_json()
+    if config_json:
+        pipeline = config_json.get("pipeline", {})
+        if "compositor_enabled" in pipeline:
+            _cached_config.compositor_enabled = bool(pipeline["compositor_enabled"])
+        if "badge_text" in pipeline:
+            val = pipeline["badge_text"]
+            _cached_config.badge_text = val if val else None
+        if "default_mode" in pipeline:
+            val = str(pipeline["default_mode"])
+            if val in ("text_only", "image_always", "image_optional"):
+                _cached_config.default_mode = val
+
     logger.info(
         "Parsed brand config: %d colors, %d fonts, brand=%s",
         len(colors), len(fonts), _cached_config.brand_name,

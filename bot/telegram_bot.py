@@ -50,6 +50,11 @@ def create_bot() -> Application:
     app.add_handler(CommandHandler("lora_rollback", handlers.lora_rollback_command))
     app.add_handler(CommandHandler("history", handlers.history_command))
     app.add_handler(CommandHandler("analytics", handlers.analytics_command))
+    app.add_handler(CommandHandler("template", handlers.template_command))
+    app.add_handler(CommandHandler("onboard", handlers.onboard_command))
+    app.add_handler(CommandHandler("onboard_cancel", handlers.onboard_cancel_command))
+    app.add_handler(CommandHandler("onboard_skip", handlers.onboard_skip_command))
+    app.add_handler(CommandHandler("library", handlers.library_command))
 
     # Inline button callbacks (e.g. /generate approve/reject buttons)
     app.add_handler(CallbackQueryHandler(handlers.generate_callback, pattern=r"^gen_"))

@@ -15,6 +15,7 @@ from agent.compositor_config import (
     _parse_themes,
     _parse_layout_profiles,
     _parse_layout_mappings,
+    _parse_compositor_section,
 )
 
 
@@ -107,6 +108,14 @@ SAMPLE_GUIDELINES = """\
 | announcement       | campaign      |
 | meme               | engagement    |
 | lifestyle          | announcement  |
+
+## COMPOSITOR
+
+| Setting        | Value          |
+|----------------|----------------|
+| Enabled        | true           |
+| Badge text     | WEB            |
+| Default mode   | image_always   |
 """
 
 
@@ -280,3 +289,71 @@ def test_brand_config_defaults():
     assert cfg.image_width == 570
     assert cfg.image_bottom_margin == 38
     assert cfg.layout_mappings == {}
+    # v8 compositor defaults
+    assert cfg.compositor_enabled is True
+    assert cfg.badge_text is None
+    assert cfg.default_mode == "image_optional"
+
+
+# ---------------------------------------------------------------------------
+# COMPOSITOR section parsing (v8)
+# ---------------------------------------------------------------------------
+
+
+def test_parse_compositor_section():
+    result = _parse_compositor_section(SAMPLE_GUIDELINES)
+    assert result["compositor_enabled"] is True
+    assert result["badge_text"] == "WEB"
+    assert result["default_mode"] == "image_always"
+
+
+def test_parse_compositor_disabled():
+    text = """\
+## COMPOSITOR
+
+| Setting        | Value          |
+|----------------|----------------|
+| Enabled        | false          |
+| Badge text     | none           |
+| Default mode   | text_only      |
+"""
+    result = _parse_compositor_section(text)
+    assert result["compositor_enabled"] is False
+    assert result["badge_text"] is None
+    assert result["default_mode"] == "text_only"
+
+
+def test_parse_compositor_missing():
+    text = "# Brand\nNo compositor section here."
+    result = _parse_compositor_section(text)
+    assert result == {}
+
+
+def test_parse_compositor_empty_badge():
+    text = """\
+## COMPOSITOR
+
+| Setting        | Value          |
+|----------------|----------------|
+| Enabled        | true           |
+| Badge text     |                |
+| Default mode   | image_optional |
+"""
+    result = _parse_compositor_section(text)
+    assert result["compositor_enabled"] is True
+    assert result["badge_text"] is None
+    assert result["default_mode"] == "image_optional"
+
+
+def test_parse_compositor_partial():
+    text = """\
+## COMPOSITOR
+
+| Setting        | Value   |
+|----------------|---------|
+| Enabled        | false   |
+"""
+    result = _parse_compositor_section(text)
+    assert result["compositor_enabled"] is False
+    assert "badge_text" not in result
+    assert "default_mode" not in result

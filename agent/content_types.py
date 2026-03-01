@@ -65,3 +65,14 @@ COMPOSITOR_PROFILE_MAP = {
     "brand_3d": "default",
     "default": "default",
 }
+
+
+def get_enabled_content_types() -> tuple[str, ...]:
+    """Return types from config.json, or ALL_CONTENT_TYPES in legacy mode."""
+    from agent.compositor_config import _load_config_json
+    config_json = _load_config_json()
+    if config_json and "content_types_enabled" in config_json:
+        enabled = config_json["content_types_enabled"]
+        if isinstance(enabled, list) and enabled:
+            return tuple(enabled)
+    return ALL_CONTENT_TYPES
