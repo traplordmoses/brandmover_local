@@ -24,7 +24,9 @@ from agent.asset_audit import (
 # ---------------------------------------------------------------------------
 
 def _entry(category="logo", quality=7, colors=None, style=None,
-           content_potential=None, brand_signals=None, recommended_formats=None):
+           content_potential=None, brand_signals=None, recommended_formats=None,
+           first_impression="", creative_dna=None, never_do=None,
+           overall_energy="", what_makes_it_special="", character_system=""):
     return AssetAuditEntry(
         path=f"/tmp/{category}.png",
         category=category,
@@ -35,6 +37,12 @@ def _entry(category="logo", quality=7, colors=None, style=None,
         content_potential=content_potential or [],
         brand_signals=brand_signals or [],
         recommended_formats=recommended_formats or [],
+        first_impression=first_impression,
+        creative_dna=creative_dna or [],
+        never_do=never_do or [],
+        overall_energy=overall_energy,
+        what_makes_it_special=what_makes_it_special,
+        character_system=character_system,
     )
 
 
@@ -174,6 +182,51 @@ class TestAuditSingleAsset:
         assert entry.content_potential == []
         assert entry.brand_signals == []
         assert entry.recommended_formats == []
+        # Creative fields also default empty
+        assert entry.first_impression == ""
+        assert entry.what_makes_it_special == ""
+        assert entry.creative_dna == []
+        assert entry.content_directions == []
+        assert entry.never_do == []
+        assert entry.overall_energy == ""
+        assert entry.character_system == ""
+        assert entry.presentation_formats == []
+
+    def test_parses_creative_fields(self):
+        """New creative fields are parsed from Claude response."""
+        response = self._mock_response({
+            "category": "logo",
+            "dominant_colors": [{"hex": "#ff0000", "name": "Red", "role": "primary"}],
+            "style_keywords": ["hand-drawn"],
+            "description": "A crayon-drawn logo on butcher paper",
+            "quality_score": 7,
+            "first_impression": "Instant warmth — feels like someone's passion project",
+            "what_makes_it_special": "The hand-drawn imperfection is the brand",
+            "creative_dna": ["hand-drawn warmth", "deliberate imperfection", "origin story energy"],
+            "content_directions": ["behind-the-scenes process", "raw sketches"],
+            "never_do": ["Don't pair with stock photography", "Never auto-smooth the edges"],
+            "overall_energy": "garage startup confidence",
+            "character_system": "The artisan who makes everything by hand",
+            "presentation_formats": ["torn paper edge", "notebook sketch"],
+        })
+
+        async def _run():
+            with patch("agent.asset_audit._encode_image", return_value=("base64data", "image/png")):
+                with patch("agent.asset_audit.anthropic.AsyncAnthropic") as mock_cls:
+                    mock_client = AsyncMock()
+                    mock_client.messages.create = AsyncMock(return_value=response)
+                    mock_cls.return_value = mock_client
+                    return await audit_single_asset("/tmp/logo.png")
+
+        entry = asyncio.run(_run())
+        assert entry.first_impression == "Instant warmth — feels like someone's passion project"
+        assert entry.what_makes_it_special == "The hand-drawn imperfection is the brand"
+        assert "hand-drawn warmth" in entry.creative_dna
+        assert "behind-the-scenes process" in entry.content_directions
+        assert "Don't pair with stock photography" in entry.never_do
+        assert entry.overall_energy == "garage startup confidence"
+        assert entry.character_system == "The artisan who makes everything by hand"
+        assert "torn paper edge" in entry.presentation_formats
 
 
 # ---------------------------------------------------------------------------
@@ -365,7 +418,11 @@ class TestPersistence:
                    style=["bold"],
                    content_potential=["announcement"],
                    brand_signals=["professional"],
-                   recommended_formats=["social_post", "avatar"]),
+                   recommended_formats=["social_post", "avatar"],
+                   first_impression="Bold and confident",
+                   creative_dna=["tech-forward precision"],
+                   never_do=["Never use comic sans"],
+                   overall_energy="quiet confidence"),
             _entry("icon", 6),
         ]
         inventory = AssetInventory(
@@ -392,6 +449,14 @@ class TestPersistence:
         assert loaded.entries[0].content_potential == ["announcement"]
         assert loaded.entries[0].brand_signals == ["professional"]
         assert loaded.entries[0].recommended_formats == ["social_post", "avatar"]
+        # Creative fields round-trip
+        assert loaded.entries[0].first_impression == "Bold and confident"
+        assert loaded.entries[0].creative_dna == ["tech-forward precision"]
+        assert loaded.entries[0].never_do == ["Never use comic sans"]
+        assert loaded.entries[0].overall_energy == "quiet confidence"
+        # Second entry has empty creative defaults
+        assert loaded.entries[1].first_impression == ""
+        assert loaded.entries[1].creative_dna == []
         assert loaded.collection_analysis["visual_coherence"] == "high"
         assert "bold" in loaded.brand_insights["personality_traits"]
 
@@ -427,3 +492,27 @@ class TestPersistence:
     def test_load_missing_returns_none(self, tmp_path):
         with patch("agent.asset_audit._INVENTORY_PATH", tmp_path / "missing.json"):
             assert load_inventory() is None
+
+
+# ---------------------------------------------------------------------------
+# Prompt string — creative fields present
+# ---------------------------------------------------------------------------
+
+class TestAuditPrompt:
+    def test_prompt_contains_creative_field_names(self):
+        from agent.asset_audit import _AUDIT_PROMPT
+        for field_name in [
+            "first_impression", "what_makes_it_special", "creative_dna",
+            "content_directions", "never_do", "overall_energy",
+            "character_system", "presentation_formats",
+        ]:
+            assert field_name in _AUDIT_PROMPT, f"Missing {field_name} in _AUDIT_PROMPT"
+
+    def test_prompt_retains_classification_fields(self):
+        from agent.asset_audit import _AUDIT_PROMPT
+        for field_name in [
+            "category", "dominant_colors", "style_keywords",
+            "description", "quality_score", "content_potential",
+            "brand_signals", "recommended_formats",
+        ]:
+            assert field_name in _AUDIT_PROMPT, f"Missing {field_name} in _AUDIT_PROMPT"

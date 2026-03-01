@@ -32,6 +32,15 @@ class AssetAuditEntry:
     content_potential: list[str] = field(default_factory=list)  # suggested content types
     brand_signals: list[str] = field(default_factory=list)  # detected brand traits
     recommended_formats: list[str] = field(default_factory=list)  # e.g. ["social_post", "banner"]
+    # Creative understanding fields (v8.3)
+    first_impression: str = ""
+    what_makes_it_special: str = ""
+    creative_dna: list[str] = field(default_factory=list)
+    content_directions: list[str] = field(default_factory=list)
+    never_do: list[str] = field(default_factory=list)
+    overall_energy: str = ""
+    character_system: str = ""
+    presentation_formats: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -71,7 +80,11 @@ def _encode_image(image_path: str) -> tuple[str, str]:
 # ---------------------------------------------------------------------------
 
 _AUDIT_PROMPT = """\
-Analyze this image as a brand asset. Perform a deep style analysis. Return ONLY valid JSON:
+You are a creative director seeing this brand asset for the first time. \
+Don't just categorize it — feel it. What's the energy? What story is it telling? \
+What would you NEVER pair it with?
+
+Return ONLY valid JSON:
 {
   "category": "logo|icon|color_palette|font_specimen|style_guide|photography|illustration|other",
   "dominant_colors": [{"hex": "#rrggbb", "name": "Color Name", "role": "primary|secondary|accent|neutral"}],
@@ -80,7 +93,15 @@ Analyze this image as a brand asset. Perform a deep style analysis. Return ONLY 
   "quality_score": 7,
   "content_potential": ["announcement", "community"],
   "brand_signals": ["professional", "tech-forward"],
-  "recommended_formats": ["social_post", "banner"]
+  "recommended_formats": ["social_post", "banner"],
+  "first_impression": "Your gut reaction in one vivid sentence — what hits you first?",
+  "what_makes_it_special": "The one thing about this asset that a generic brand could never replicate",
+  "creative_dna": ["hand-drawn warmth", "deliberate imperfection", "origin story energy"],
+  "content_directions": ["behind-the-scenes origin stories", "raw process shots"],
+  "never_do": ["Don't pair with sterile stock photography", "Never crop the hand-drawn edges"],
+  "overall_energy": "One phrase capturing the vibe — e.g. 'garage startup confidence', 'quiet luxury'",
+  "character_system": "If this asset were a character, who would it be? Brief description.",
+  "presentation_formats": ["polaroid frame", "torn paper edge", "notebook sketch"]
 }
 
 Categories:
@@ -93,13 +114,23 @@ Categories:
 - "illustration" — brand illustrations, graphics
 - "other" — anything else
 
-Fields:
+Classification fields:
 - dominant_colors: Extract up to 5 colors. Assign each a role (primary, secondary, accent, neutral).
 - style_keywords: 3-6 words describing visual style (e.g. minimalist, geometric, warm, retro, corporate).
 - quality_score: 1 (unusable) to 10 (professional, print-ready).
 - content_potential: Which content types could USE this asset? Options: announcement, community, meme, engagement, educational, onchain_update, brand_3d.
 - brand_signals: Traits this asset communicates about the brand (e.g. "luxury", "playful", "trustworthy", "bold", "tech-forward", "community-driven").
 - recommended_formats: Where this asset works best: social_post, story, banner, avatar, background, pattern, overlay.
+
+Creative fields:
+- first_impression: Your instant gut reaction — what hits you before you start analyzing?
+- what_makes_it_special: The unique thing about this asset that makes it irreplaceable.
+- creative_dna: 2-4 phrases capturing the creative essence — what makes this FEEL like this brand.
+- content_directions: 2-3 content ideas this asset naturally suggests.
+- never_do: 1-3 things that would destroy this asset's energy.
+- overall_energy: One phrase capturing the vibe.
+- character_system: If this asset had a personality, describe it in one sentence.
+- presentation_formats: 2-3 visual formats that would showcase this asset well.
 
 Return ONLY the JSON, no markdown formatting."""
 
@@ -154,6 +185,14 @@ async def audit_single_asset(image_path: str) -> AssetAuditEntry:
         content_potential=data.get("content_potential", []),
         brand_signals=data.get("brand_signals", []),
         recommended_formats=data.get("recommended_formats", []),
+        first_impression=data.get("first_impression", ""),
+        what_makes_it_special=data.get("what_makes_it_special", ""),
+        creative_dna=data.get("creative_dna", []),
+        content_directions=data.get("content_directions", []),
+        never_do=data.get("never_do", []),
+        overall_energy=data.get("overall_energy", ""),
+        character_system=data.get("character_system", ""),
+        presentation_formats=data.get("presentation_formats", []),
     )
 
 
@@ -350,6 +389,14 @@ def save_inventory(inventory: AssetInventory) -> None:
                 "content_potential": e.content_potential,
                 "brand_signals": e.brand_signals,
                 "recommended_formats": e.recommended_formats,
+                "first_impression": e.first_impression,
+                "what_makes_it_special": e.what_makes_it_special,
+                "creative_dna": e.creative_dna,
+                "content_directions": e.content_directions,
+                "never_do": e.never_do,
+                "overall_energy": e.overall_energy,
+                "character_system": e.character_system,
+                "presentation_formats": e.presentation_formats,
             }
             for e in inventory.entries
         ],
