@@ -19,7 +19,14 @@ def create_bot() -> Application:
     """Build and configure the Telegram bot Application."""
     settings.validate(exit_on_error=True)
 
-    app = Application.builder().token(settings.TELEGRAM_BOT_TOKEN).build()
+    app = (
+        Application.builder()
+        .token(settings.TELEGRAM_BOT_TOKEN)
+        .read_timeout(30)
+        .write_timeout(30)
+        .connect_timeout(15)
+        .build()
+    )
 
     # Register command handlers
     app.add_handler(CommandHandler("help", handlers.help_command))

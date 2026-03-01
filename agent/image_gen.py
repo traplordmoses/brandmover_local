@@ -29,9 +29,9 @@ _MODELS = {
     "seedream": "bytedance/seedream-4.5",
 }
 
-# Keywords that suggest text overlay in the prompt
+# Keywords that suggest the user wants AI-rendered text IN the image
 _TEXT_OVERLAY_KEYWORDS = re.compile(
-    r"text reads|headline|title overlay|bold text|text says|typography|lettering|words?.*overlay",
+    r"text reads|title overlay|bold text|text says|words?.*overlay",
     re.IGNORECASE,
 )
 
