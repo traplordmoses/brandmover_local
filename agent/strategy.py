@@ -28,6 +28,7 @@ class StrategyRecommendation:
     badge_text: str | None = None
     default_mode: str = "image_optional"
     recommended_content_types: list[str] = field(default_factory=list)
+    platforms: list[str] = field(default_factory=lambda: ["x"])
     visual_style_notes: str = ""
     reasoning: str = ""
 
@@ -39,8 +40,9 @@ class StrategyRecommendation:
 _ARCHETYPE_DEFAULTS: dict[str, dict] = {
     "full_brand": {
         "compositor_enabled": True,
-        "badge_text": None,  # configurable per brand
+        "badge_text": None,
         "default_mode": "image_always",
+        "visual_source": "client_assets",
         "recommended_content_types": [
             "announcement", "community", "meme", "engagement",
             "educational", "brand_asset", "lifestyle", "market_commentary",
@@ -50,6 +52,7 @@ _ARCHETYPE_DEFAULTS: dict[str, dict] = {
         "compositor_enabled": True,
         "badge_text": None,
         "default_mode": "image_optional",
+        "visual_source": "hybrid",
         "recommended_content_types": [
             "announcement", "community", "educational",
         ],
@@ -58,6 +61,7 @@ _ARCHETYPE_DEFAULTS: dict[str, dict] = {
         "compositor_enabled": False,
         "badge_text": None,
         "default_mode": "image_optional",
+        "visual_source": "ai_generated",
         "recommended_content_types": [
             "announcement", "community",
         ],
@@ -170,6 +174,11 @@ async def recommend_strategy(
 # config.json generation
 # ---------------------------------------------------------------------------
 
+def _visual_source_for_archetype(archetype: str) -> str:
+    """Return the default visual source for an archetype."""
+    return _ARCHETYPE_DEFAULTS.get(archetype, {}).get("visual_source", "ai_generated")
+
+
 def generate_config_json(rec: StrategyRecommendation, brand_name: str = "") -> dict:
     """Generate a brand/config.json from a strategy recommendation."""
     return {
@@ -180,6 +189,11 @@ def generate_config_json(rec: StrategyRecommendation, brand_name: str = "") -> d
             "badge_text": rec.badge_text,
             "default_mode": rec.default_mode,
             "agent_mode": settings.AGENT_MODE,
+        },
+        "platforms": rec.platforms,
+        "visual_source": {
+            "primary": _visual_source_for_archetype(rec.archetype),
+            "fallback": "ai_generated",
         },
         "content_types_enabled": rec.recommended_content_types,
         "image_generation": {
@@ -208,6 +222,7 @@ def generate_strategy_markdown(rec: StrategyRecommendation, brand_name: str = ""
         f"**Compositor:** {'ON' if rec.compositor_enabled else 'OFF'}",
         f"**Badge:** {rec.badge_text or '(none)'}",
         f"**Default mode:** {rec.default_mode}",
+        f"**Platforms:** {', '.join(rec.platforms)}",
         "",
         "## Recommended Content Types",
         "",
@@ -244,3 +259,144 @@ def save_strategy(rec: StrategyRecommendation, brand_name: str = "") -> None:
     strategy_path = brand_path / "strategy.md"
     strategy_path.write_text(strategy_md, encoding="utf-8")
     logger.info("Saved strategy.md: %s", strategy_path)
+
+
+# ---------------------------------------------------------------------------
+# Content calendar generation
+# ---------------------------------------------------------------------------
+
+_CALENDAR_PROMPT = """\
+You are a content strategist. Generate a weekly content calendar for the brand below.
+
+Brand: {brand_name}
+Description: {description}
+Platforms: {platforms}
+Archetype: {archetype}
+Enabled content types: {content_types}
+Visual style: {visual_style}
+Posting frequency: {posting_frequency}
+
+Create a 7-day content calendar (Monday through Sunday). Each day should have:
+- Day of week
+- Content type (from the enabled list)
+- Topic/theme idea
+- Brief description (1 sentence)
+- Best posting time (general, e.g. "9am", "12pm", "6pm")
+- Platform(s) to post on
+
+Guidelines:
+- Vary content types across the week
+- Space out similar content (don't do 2 announcements back to back)
+- Weekend content can be lighter/more engaging
+- Match posting times to platform norms
+- If posting frequency is low, mark some days as "rest" (no post)
+
+Return ONLY valid JSON:
+{{
+  "calendar": [
+    {{
+      "day": "Monday",
+      "content_type": "announcement",
+      "topic": "Product update highlight",
+      "description": "Share the latest feature or improvement",
+      "time": "9am",
+      "platforms": ["x"]
+    }}
+  ],
+  "weekly_theme": "Brief theme tying the week together",
+  "notes": "Any strategic notes about the cadence"
+}}"""
+
+
+async def generate_content_calendar(
+    brand_name: str,
+    description: str,
+    platforms: list[str],
+    rec: StrategyRecommendation,
+    posting_frequency: str = "",
+) -> str:
+    """Generate a weekly content calendar and return it as markdown.
+
+    Also saves to brand/content_calendar.md.
+    """
+    client = anthropic.AsyncAnthropic(api_key=settings.ANTHROPIC_API_KEY)
+
+    prompt = _CALENDAR_PROMPT.format(
+        brand_name=brand_name,
+        description=description,
+        platforms=", ".join(platforms) if platforms else "x",
+        archetype=rec.archetype,
+        content_types=", ".join(rec.recommended_content_types),
+        visual_style=rec.visual_style_notes or "modern",
+        posting_frequency=posting_frequency or "daily",
+    )
+
+    response = await client.messages.create(
+        model="claude-sonnet-4-20250514",
+        max_tokens=1500,
+        messages=[{"role": "user", "content": prompt}],
+    )
+
+    raw = response.content[0].text.strip()
+    if raw.startswith("```"):
+        raw = raw.split("\n", 1)[1] if "\n" in raw else raw[3:]
+    if raw.endswith("```"):
+        raw = raw[:-3]
+    raw = raw.strip()
+
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        logger.warning("Calendar generation returned non-JSON, using fallback")
+        data = {"calendar": [], "weekly_theme": "", "notes": ""}
+
+    # Convert to markdown
+    md = _calendar_to_markdown(data, brand_name)
+
+    # Save to file
+    cal_path = Path(settings.BRAND_FOLDER) / "content_calendar.md"
+    cal_path.parent.mkdir(parents=True, exist_ok=True)
+    cal_path.write_text(md, encoding="utf-8")
+    logger.info("Saved content_calendar.md")
+
+    return md
+
+
+def _calendar_to_markdown(data: dict, brand_name: str = "") -> str:
+    """Convert calendar JSON to readable markdown."""
+    name = brand_name or settings.BRAND_NAME
+    lines = [
+        f"# {name} — Weekly Content Calendar",
+        "",
+    ]
+
+    theme = data.get("weekly_theme", "")
+    if theme:
+        lines.append(f"**Weekly Theme:** {theme}")
+        lines.append("")
+
+    lines.append("| Day | Type | Topic | Time | Platforms |")
+    lines.append("|-----|------|-------|------|-----------|")
+
+    for entry in data.get("calendar", []):
+        day = entry.get("day", "?")
+        ct = entry.get("content_type", "—")
+        topic = entry.get("topic", "—")
+        time_str = entry.get("time", "—")
+        plats = ", ".join(entry.get("platforms", []))
+        lines.append(f"| {day} | {ct} | {topic} | {time_str} | {plats} |")
+
+    notes = data.get("notes", "")
+    if notes:
+        lines.extend(["", "## Notes", "", notes])
+
+    # Details section
+    details = [e for e in data.get("calendar", []) if e.get("description")]
+    if details:
+        lines.extend(["", "## Daily Details", ""])
+        for entry in details:
+            day = entry.get("day", "?")
+            desc = entry.get("description", "")
+            lines.append(f"- **{day}:** {desc}")
+
+    return "\n".join(lines)

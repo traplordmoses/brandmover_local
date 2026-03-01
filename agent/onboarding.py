@@ -1,5 +1,6 @@
 """
-Conversational onboarding state machine — guides new brands through setup.
+Conversational onboarding — Claude-driven discovery + state machine for
+uploads/audit/strategy/confirm phases.
 
 Persisted in state/onboarding.json. Survives bot restarts.
 """
@@ -10,6 +11,8 @@ import time
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
+
+import anthropic
 
 from config import settings
 
@@ -24,10 +27,13 @@ _STATE_PATH = Path(__file__).resolve().parent.parent / "state" / "onboarding.jso
 
 class OnboardingState(str, Enum):
     IDLE = "idle"
+    DISCOVERY = "discovery"         # Claude-driven conversation
+    # Legacy states kept for backward compat with existing sessions
     PROJECT_NAME = "project_name"
     DESCRIPTION = "description"
     PLATFORMS = "platforms"
     ASSET_CHECK = "asset_check"
+    # Active states
     UPLOADS = "uploads"
     AUDITING = "auditing"
     VISUAL_PREF = "visual_pref"
@@ -54,6 +60,22 @@ class OnboardingSession:
     strategy: dict = field(default_factory=dict)
     started_at: float = 0.0
     updated_at: float = 0.0
+    # Smart onboarding fields
+    conversation_history: list[dict] = field(default_factory=list)  # [{role, content}]
+    collected_fields: dict = field(default_factory=dict)
+
+
+# Required fields that must be collected during discovery
+REQUIRED_FIELDS = (
+    "project_name", "description", "platforms",
+    "has_assets", "visual_preference",
+)
+
+# Optional fields Claude may discover through conversation
+OPTIONAL_FIELDS = (
+    "target_audience", "posting_frequency", "tone_preference",
+    "competitors_or_references",
+)
 
 
 # ---------------------------------------------------------------------------
@@ -81,7 +103,10 @@ def get_session(user_id: int) -> OnboardingSession | None:
     if key not in sessions:
         return None
     data = sessions[key]
-    return OnboardingSession(**data)
+    # Filter out unknown fields for backward compat
+    known = {f.name for f in OnboardingSession.__dataclass_fields__.values()}
+    filtered = {k: v for k, v in data.items() if k in known}
+    return OnboardingSession(**filtered)
 
 
 def save_session(session: OnboardingSession) -> None:
@@ -100,6 +125,8 @@ def save_session(session: OnboardingSession) -> None:
         "strategy": session.strategy,
         "started_at": session.started_at,
         "updated_at": session.updated_at,
+        "conversation_history": session.conversation_history,
+        "collected_fields": session.collected_fields,
     }
     _save_sessions(sessions)
 
@@ -112,6 +139,107 @@ def delete_session(user_id: int) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Claude-driven discovery
+# ---------------------------------------------------------------------------
+
+_DISCOVERY_SYSTEM = """\
+You are a brand strategist onboarding a new client for BrandMover, an AI content engine \
+that generates branded social media posts.
+
+Your job is to learn about their brand through natural conversation and collect the \
+information needed to configure their content pipeline.
+
+INFORMATION STILL NEEDED:
+{missing_fields}
+
+INFORMATION ALREADY COLLECTED:
+{collected_fields}
+
+RULES:
+- Be conversational, not robotic. React to what they say.
+- If they mention specific things (3D characters, NFT collection, meme culture), \
+ask intelligent follow-up questions about THAT before moving to the next topic.
+- Don't ask more than 1-2 questions per message.
+- When you have enough info for a field, extract it.
+- When all required fields are collected, set all_required_complete to true.
+- Keep messages concise. This is Telegram, not email.
+- Use HTML formatting sparingly (<b> for emphasis).
+
+FIELD EXTRACTION GUIDE:
+- project_name: The brand/project name
+- description: What the brand does (1-2 sentences)
+- platforms: List of social platforms (x, telegram, linkedin, instagram, threads, bluesky)
+- has_assets: Whether they have brand assets to upload (true/false)
+- visual_preference: Their preferred visual style or aesthetic description
+- target_audience: Who their audience is (optional)
+- posting_frequency: How often they want to post (optional)
+- tone_preference: Communication tone/voice (optional)
+- competitors_or_references: Brands they admire or compete with (optional)
+
+Respond with ONLY valid JSON (no markdown fences):
+{{"message": "your response to the user", "fields_collected": {{}}, "all_required_complete": false, "suggest_upload": false}}"""
+
+
+async def _call_discovery(session: OnboardingSession, user_message: str) -> dict:
+    """Send conversation to Claude and get the next response + extracted fields."""
+    missing = [f for f in REQUIRED_FIELDS if f not in session.collected_fields]
+    collected_str = json.dumps(session.collected_fields, indent=2) if session.collected_fields else "(none yet)"
+    missing_str = ", ".join(missing) if missing else "(all collected)"
+
+    system = _DISCOVERY_SYSTEM.format(
+        missing_fields=missing_str,
+        collected_fields=collected_str,
+    )
+
+    # Build message history
+    messages = list(session.conversation_history)
+    messages.append({"role": "user", "content": user_message})
+
+    client = anthropic.AsyncAnthropic(api_key=settings.ANTHROPIC_API_KEY)
+    response = await client.messages.create(
+        model="claude-sonnet-4-20250514",
+        max_tokens=500,
+        system=system,
+        messages=messages,
+    )
+
+    raw = response.content[0].text.strip()
+    # Strip markdown fences if present
+    if raw.startswith("```"):
+        raw = raw.split("\n", 1)[1] if "\n" in raw else raw[3:]
+    if raw.endswith("```"):
+        raw = raw[:-3]
+    raw = raw.strip()
+
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        logger.warning("Discovery response was not JSON: %s", raw[:200])
+        data = {"message": raw, "fields_collected": {}, "all_required_complete": False, "suggest_upload": False}
+
+    return data
+
+
+def _apply_collected_fields(session: OnboardingSession, fields: dict) -> None:
+    """Apply extracted fields to the session."""
+    for key, value in fields.items():
+        session.collected_fields[key] = value
+
+        # Also map to the session's typed fields
+        if key == "project_name" and value:
+            session.brand_name = str(value)
+        elif key == "description" and value:
+            session.description = str(value)
+        elif key == "platforms" and value:
+            if isinstance(value, list):
+                session.platforms = value
+            elif isinstance(value, str):
+                session.platforms = [p.strip().lower() for p in value.split(",") if p.strip()]
+        elif key == "visual_preference" and value:
+            session.visual_preferences = {"style": "custom", "description": str(value)}
+
+
+# ---------------------------------------------------------------------------
 # State machine transitions
 # ---------------------------------------------------------------------------
 
@@ -119,24 +247,161 @@ _VISUAL_STYLES = {"modern", "playful", "corporate", "minimal", "bold", "elegant"
 
 
 def advance(session: OnboardingSession, user_input: str | None) -> tuple[OnboardingSession, str]:
-    """Advance the state machine based on user input.
+    """Advance the state machine based on user input (sync transitions only).
 
     Returns (updated_session, response_message).
+    The DISCOVERY state returns a placeholder — the actual Claude call
+    happens in advance_async().
     """
     st = session.state
     inp = (user_input or "").strip()
     inp_lower = inp.lower()
 
     if st == OnboardingState.IDLE.value:
-        # Starting onboarding
-        session.state = OnboardingState.PROJECT_NAME.value
+        session.state = OnboardingState.DISCOVERY.value
         session.started_at = time.time()
+        session.collected_fields = {}
+        session.conversation_history = []
         return session, (
-            "Let's set up your brand! This takes about 2 minutes.\n\n"
+            "Let's set up your brand! I'll ask you a few questions — "
+            "just chat naturally and I'll figure out the rest.\n\n"
             "What's your brand name?"
         )
 
-    elif st == OnboardingState.PROJECT_NAME.value:
+    # Legacy states — redirect to DISCOVERY for sessions started pre-upgrade
+    elif st in (OnboardingState.PROJECT_NAME.value,
+                OnboardingState.DESCRIPTION.value,
+                OnboardingState.PLATFORMS.value,
+                OnboardingState.ASSET_CHECK.value):
+        return _advance_legacy(session, inp, inp_lower)
+
+    elif st == OnboardingState.DISCOVERY.value:
+        # Placeholder — actual processing happens in advance_async()
+        return session, "_NEEDS_ASYNC_"
+
+    elif st == OnboardingState.UPLOADS.value:
+        if inp_lower in ("/onboard_skip", "done", "skip"):
+            if session.uploaded_assets:
+                session.state = OnboardingState.AUDITING.value
+                return session, (
+                    f"Analyzing {len(session.uploaded_assets)} asset(s) with Claude Vision..."
+                )
+            else:
+                session.state = OnboardingState.VISUAL_PREF.value
+                return session, (
+                    "No assets uploaded. Let's pick a visual style instead.\n\n"
+                    "Options: <b>modern</b> / <b>playful</b> / <b>corporate</b> / "
+                    "<b>minimal</b> / <b>bold</b> / <b>elegant</b>"
+                )
+        return session, (
+            "Upload your brand assets as photos. "
+            "Use /onboard_skip when you're done uploading."
+        )
+
+    elif st == OnboardingState.AUDITING.value:
+        return session, "Still analyzing your assets... please wait."
+
+    elif st == OnboardingState.VISUAL_PREF.value:
+        if not inp:
+            return session, "Please describe your preferred visual style."
+        if inp_lower in _VISUAL_STYLES:
+            session.visual_preferences = {"style": inp_lower}
+        else:
+            session.visual_preferences = {"style": "custom", "description": inp}
+        session.state = OnboardingState.STRATEGY.value
+        return session, "Generating your brand strategy..."
+
+    elif st == OnboardingState.TEMPLATE_CHOICE.value:
+        session.state = OnboardingState.STRATEGY.value
+        return session, "Generating your brand strategy based on your assets..."
+
+    elif st == OnboardingState.STRATEGY.value:
+        return session, "Still generating strategy... please wait."
+
+    elif st == OnboardingState.CONFIRM.value:
+        if inp_lower in ("yes", "y", "confirm", "ok", "looks good"):
+            session.state = OnboardingState.COMPLETE.value
+            return session, "Setting up your brand..."
+        elif inp_lower in ("no", "n", "restart", "redo"):
+            session.state = OnboardingState.DISCOVERY.value
+            session.brand_name = ""
+            session.description = ""
+            session.platforms = []
+            session.uploaded_assets = []
+            session.asset_audit = {}
+            session.visual_preferences = {}
+            session.strategy = {}
+            session.collected_fields = {}
+            session.conversation_history = []
+            return session, "Let's start over.\n\nWhat's your brand name?"
+        return session, "Reply <b>yes</b> to confirm or <b>no</b> to restart."
+
+    elif st == OnboardingState.COMPLETE.value:
+        return session, "Onboarding already complete! Your brand is set up."
+
+    return session, "Something went wrong. Use /onboard_cancel to restart."
+
+
+async def advance_async(session: OnboardingSession, user_input: str) -> tuple[OnboardingSession, str]:
+    """Async version for the DISCOVERY state — calls Claude for conversation."""
+    if session.state != OnboardingState.DISCOVERY.value:
+        return advance(session, user_input)
+
+    inp = (user_input or "").strip()
+    if not inp:
+        return session, "Tell me about your brand!"
+
+    # Call Claude
+    result = await _call_discovery(session, inp)
+
+    # Update conversation history
+    session.conversation_history.append({"role": "user", "content": inp})
+    bot_msg = result.get("message", "Tell me more about your brand.")
+    session.conversation_history.append({"role": "assistant", "content": bot_msg})
+
+    # Trim history to last 20 messages to prevent unbounded growth
+    if len(session.conversation_history) > 20:
+        session.conversation_history = session.conversation_history[-20:]
+
+    # Apply extracted fields
+    fields = result.get("fields_collected", {})
+    if fields:
+        _apply_collected_fields(session, fields)
+
+    # Check if discovery is complete
+    if result.get("all_required_complete"):
+        has_assets = session.collected_fields.get("has_assets")
+        if has_assets in (True, "true", "yes"):
+            session.state = OnboardingState.UPLOADS.value
+            bot_msg += (
+                "\n\nUpload your brand assets now — logos, images, style guides. "
+                "Send them as photos or documents. Use /onboard_skip when done."
+            )
+        else:
+            # Check if visual preference was already collected
+            if session.visual_preferences:
+                session.state = OnboardingState.STRATEGY.value
+                bot_msg += "\n\nGenerating your brand strategy..."
+            else:
+                session.state = OnboardingState.VISUAL_PREF.value
+                bot_msg += (
+                    "\n\nWhat visual style suits your brand?\n"
+                    "Options: <b>modern</b> / <b>playful</b> / <b>corporate</b> / "
+                    "<b>minimal</b> / <b>bold</b> / <b>elegant</b>"
+                )
+
+    return session, bot_msg
+
+
+# ---------------------------------------------------------------------------
+# Legacy state transitions (for sessions started before smart onboarding)
+# ---------------------------------------------------------------------------
+
+def _advance_legacy(session: OnboardingSession, inp: str, inp_lower: str) -> tuple[OnboardingSession, str]:
+    """Handle legacy fixed-state transitions for backward compat."""
+    st = session.state
+
+    if st == OnboardingState.PROJECT_NAME.value:
         if not inp:
             return session, "Please enter your brand name."
         session.brand_name = inp
@@ -181,70 +446,6 @@ def advance(session: OnboardingSession, user_input: str | None) -> tuple[Onboard
                 "<b>minimal</b> / <b>bold</b> / <b>elegant</b>\n\n"
                 "Or describe your own style."
             )
-
-    elif st == OnboardingState.UPLOADS.value:
-        # Accumulate uploads — photos are handled by handle_photo
-        # This state handles text messages during upload phase
-        if inp_lower in ("/onboard_skip", "done", "skip"):
-            if session.uploaded_assets:
-                session.state = OnboardingState.AUDITING.value
-                return session, (
-                    f"Analyzing {len(session.uploaded_assets)} asset(s) with Claude Vision..."
-                )
-            else:
-                session.state = OnboardingState.VISUAL_PREF.value
-                return session, (
-                    "No assets uploaded. Let's pick a visual style instead.\n\n"
-                    "Options: <b>modern</b> / <b>playful</b> / <b>corporate</b> / "
-                    "<b>minimal</b> / <b>bold</b> / <b>elegant</b>"
-                )
-        return session, (
-            "Upload your brand assets as photos. "
-            "Use /onboard_skip when you're done uploading."
-        )
-
-    elif st == OnboardingState.AUDITING.value:
-        # This state is transitioned through programmatically after Claude Vision
-        # audit completes — see finalize_audit() below
-        return session, "Still analyzing your assets... please wait."
-
-    elif st == OnboardingState.VISUAL_PREF.value:
-        if not inp:
-            return session, "Please describe your preferred visual style."
-        if inp_lower in _VISUAL_STYLES:
-            session.visual_preferences = {"style": inp_lower}
-        else:
-            session.visual_preferences = {"style": "custom", "description": inp}
-        session.state = OnboardingState.STRATEGY.value
-        return session, "Generating your brand strategy..."
-
-    elif st == OnboardingState.TEMPLATE_CHOICE.value:
-        # After audit, show archetype recommendation
-        session.state = OnboardingState.STRATEGY.value
-        return session, "Generating your brand strategy based on your assets..."
-
-    elif st == OnboardingState.STRATEGY.value:
-        # This state is transitioned through programmatically after strategy generation
-        return session, "Still generating strategy... please wait."
-
-    elif st == OnboardingState.CONFIRM.value:
-        if inp_lower in ("yes", "y", "confirm", "ok", "looks good"):
-            session.state = OnboardingState.COMPLETE.value
-            return session, "Setting up your brand..."
-        elif inp_lower in ("no", "n", "restart", "redo"):
-            session.state = OnboardingState.PROJECT_NAME.value
-            session.brand_name = ""
-            session.description = ""
-            session.platforms = []
-            session.uploaded_assets = []
-            session.asset_audit = {}
-            session.visual_preferences = {}
-            session.strategy = {}
-            return session, "Let's start over.\n\nWhat's your brand name?"
-        return session, "Reply <b>yes</b> to confirm or <b>no</b> to restart."
-
-    elif st == OnboardingState.COMPLETE.value:
-        return session, "Onboarding already complete! Your brand is set up."
 
     return session, "Something went wrong. Use /onboard_cancel to restart."
 
@@ -333,12 +534,26 @@ async def finalize_onboarding(session: OnboardingSession) -> str:
         badge_text=rec_data.get("badge_text"),
         default_mode=rec_data.get("default_mode", "image_optional"),
         recommended_content_types=rec_data.get("recommended_content_types", ["announcement", "community"]),
+        platforms=session.platforms or ["x"],
         visual_style_notes=rec_data.get("visual_style_notes", ""),
         reasoning=rec_data.get("reasoning", ""),
     )
 
     # Save config.json + strategy.md
     strategy_mod.save_strategy(rec, session.brand_name)
+
+    # Generate content calendar
+    try:
+        posting_freq = session.collected_fields.get("posting_frequency", "")
+        await strategy_mod.generate_content_calendar(
+            brand_name=session.brand_name,
+            description=session.description,
+            platforms=session.platforms or ["x"],
+            rec=rec,
+            posting_frequency=posting_freq,
+        )
+    except Exception as e:
+        logger.warning("Content calendar generation failed: %s", e)
 
     # Generate minimal guidelines.md if not present
     guidelines_path = brand_path / "guidelines.md"
@@ -389,6 +604,8 @@ async def finalize_onboarding(session: OnboardingSession) -> str:
         f"Files created:\n"
         f"- <code>brand/config.json</code>\n"
         f"- <code>brand/strategy.md</code>\n"
-        f"- <code>brand/guidelines.md</code>\n\n"
+        f"- <code>brand/guidelines.md</code>\n"
+        f"- <code>brand/content_calendar.md</code>\n\n"
+        f"Use /strategy to view your setup. "
         f"Send me a content request to generate your first post!"
     )

@@ -29,13 +29,14 @@ _INDEX_PATH = Path(settings.BRAND_FOLDER) / "asset_library.json"
 class LibraryEntry:
     id: str = ""
     path: str = ""             # relative to brand/assets/library/
-    source: str = "generated"  # "generated" | "uploaded" | "approved"
+    source: str = "generated"  # "generated" | "uploaded" | "approved" | "scanned"
     content_type: str = ""
     prompt: str = ""
     tags: list[str] = field(default_factory=list)
     created_at: float = 0.0
     used_count: int = 0
     last_used: float = 0.0
+    original_path: str = ""    # original source path (for dedup during scan)
 
 
 # ---------------------------------------------------------------------------
@@ -66,7 +67,7 @@ def _save_index(entries: list[dict]) -> None:
 # Public API
 # ---------------------------------------------------------------------------
 
-def add(image_path: str, source: str, content_type: str, prompt: str = "", tags: list[str] | None = None) -> LibraryEntry:
+def add(image_path: str, source: str, content_type: str, prompt: str = "", tags: list[str] | None = None, original_path: str = "") -> LibraryEntry:
     """Add an image to the library. Copies the file to brand/assets/library/."""
     _LIBRARY_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -91,6 +92,7 @@ def add(image_path: str, source: str, content_type: str, prompt: str = "", tags:
         prompt=prompt,
         tags=tags or [],
         created_at=time.time(),
+        original_path=original_path,
     )
 
     entries = _load_index()
@@ -179,3 +181,74 @@ def get_library_path(entry: LibraryEntry) -> Path | None:
         return None  # URL-based entry
     p = _LIBRARY_DIR / entry.path
     return p if p.exists() else None
+
+
+# ---------------------------------------------------------------------------
+# Startup directory scan
+# ---------------------------------------------------------------------------
+
+_IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp"}
+_ASSETS_ROOT = Path(settings.BRAND_FOLDER) / "assets"
+
+
+def _guess_content_type(path: Path) -> str:
+    """Guess a content type from filename/directory heuristics."""
+    name = path.stem.lower()
+    parent = path.parent.name.lower()
+    for keyword, ct in [
+        ("logo", "logo"), ("icon", "icon"), ("mascot", "character"),
+        ("character", "character"), ("background", "background"),
+        ("pattern", "pattern"), ("3d", "brand_3d"), ("render", "brand_3d"),
+    ]:
+        if keyword in name or keyword in parent:
+            return ct
+    return "general"
+
+
+def index_directory() -> int:
+    """Scan brand/assets/ recursively and index new image files.
+
+    Uses filename heuristics for tagging. Returns the count of newly added files.
+    """
+    if not _ASSETS_ROOT.exists():
+        return 0
+
+    entries = _load_index()
+    # Build set of known original paths for dedup
+    indexed_originals = set()
+    for e in entries:
+        op = e.get("original_path", "")
+        if op:
+            indexed_originals.add(op)
+
+    added = 0
+    for img_path in _ASSETS_ROOT.rglob("*"):
+        if not img_path.is_file():
+            continue
+        if img_path.suffix.lower() not in _IMAGE_EXTENSIONS:
+            continue
+        # Skip files inside the library/ subdirectory (managed by add())
+        try:
+            img_path.relative_to(_LIBRARY_DIR)
+            continue
+        except ValueError:
+            pass
+        # Skip if this source path was already indexed
+        abs_str = str(img_path.resolve())
+        if abs_str in indexed_originals:
+            continue
+
+        content_type = _guess_content_type(img_path)
+        tags = [content_type]
+        # Add directory name as tag if meaningful
+        if img_path.parent != _ASSETS_ROOT:
+            tags.append(img_path.parent.name.lower())
+
+        entry = add(str(img_path), "scanned", content_type, prompt="", tags=tags,
+                   original_path=str(img_path.resolve()))
+        added += 1
+        logger.info("Indexed asset: %s → %s", img_path.name, content_type)
+
+    if added:
+        logger.info("Startup scan: indexed %d new assets", added)
+    return added

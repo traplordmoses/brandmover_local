@@ -15,6 +15,8 @@ from agent.asset_library import (
     mark_used,
     list_all,
     get_library_path,
+    index_directory,
+    _guess_content_type,
     _load_index,
     _save_index,
 )
@@ -270,3 +272,92 @@ class TestGetLibraryPath:
         entry = LibraryEntry(id="x", path="nonexistent.png")
         path = get_library_path(entry)
         assert path is None
+
+
+# ---------------------------------------------------------------------------
+# _guess_content_type()
+# ---------------------------------------------------------------------------
+
+class TestGuessContentType:
+    def test_logo_in_name(self):
+        assert _guess_content_type(Path("/tmp/brand_logo.png")) == "logo"
+
+    def test_mascot_in_name(self):
+        assert _guess_content_type(Path("/tmp/mascot_v2.png")) == "character"
+
+    def test_3d_in_name(self):
+        assert _guess_content_type(Path("/tmp/3d_render.png")) == "brand_3d"
+
+    def test_icon_in_directory(self):
+        assert _guess_content_type(Path("/tmp/icons/app.png")) == "icon"
+
+    def test_unknown(self):
+        assert _guess_content_type(Path("/tmp/photo123.png")) == "general"
+
+
+# ---------------------------------------------------------------------------
+# index_directory()
+# ---------------------------------------------------------------------------
+
+class TestIndexDirectory:
+    def test_indexes_new_files(self, library_env, tmp_path):
+        lib_dir, idx_path = library_env
+        assets_dir = tmp_path / "assets"
+        assets_dir.mkdir()
+
+        # Create some image files
+        (assets_dir / "logo.png").write_bytes(b"\x89PNG\r\n\x1a\n" + b"\x00" * 50)
+        (assets_dir / "mascot.jpg").write_bytes(b"\xff\xd8\xff" + b"\x00" * 50)
+        (assets_dir / "readme.txt").write_text("not an image")
+
+        with patch("agent.asset_library._ASSETS_ROOT", assets_dir):
+            count = index_directory()
+
+        assert count == 2
+        entries = _load_index()
+        assert len(entries) == 2
+        types = {e["content_type"] for e in entries}
+        assert "logo" in types
+        assert "character" in types
+
+    def test_skips_already_indexed(self, library_env, tmp_path):
+        lib_dir, idx_path = library_env
+        assets_dir = tmp_path / "assets"
+        assets_dir.mkdir()
+        (assets_dir / "logo.png").write_bytes(b"\x89PNG\r\n\x1a\n" + b"\x00" * 50)
+
+        with patch("agent.asset_library._ASSETS_ROOT", assets_dir):
+            count1 = index_directory()
+            count2 = index_directory()
+
+        assert count1 == 1
+        assert count2 == 0  # Already indexed
+
+    def test_empty_directory(self, library_env, tmp_path):
+        assets_dir = tmp_path / "assets"
+        assets_dir.mkdir()
+
+        with patch("agent.asset_library._ASSETS_ROOT", assets_dir):
+            count = index_directory()
+
+        assert count == 0
+
+    def test_missing_directory(self, library_env, tmp_path):
+        with patch("agent.asset_library._ASSETS_ROOT", tmp_path / "nonexistent"):
+            count = index_directory()
+
+        assert count == 0
+
+    def test_subdirectory_scan(self, library_env, tmp_path):
+        lib_dir, idx_path = library_env
+        assets_dir = tmp_path / "assets"
+        subdir = assets_dir / "characters"
+        subdir.mkdir(parents=True)
+        (subdir / "hero.png").write_bytes(b"\x89PNG\r\n\x1a\n" + b"\x00" * 50)
+
+        with patch("agent.asset_library._ASSETS_ROOT", assets_dir):
+            count = index_directory()
+
+        assert count == 1
+        entries = _load_index()
+        assert "characters" in entries[0].get("tags", [])

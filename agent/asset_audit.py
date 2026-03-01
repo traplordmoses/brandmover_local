@@ -29,6 +29,9 @@ class AssetAuditEntry:
     style_keywords: list[str] = field(default_factory=list)
     description: str = ""
     quality_score: int = 5  # 1-10
+    content_potential: list[str] = field(default_factory=list)  # suggested content types
+    brand_signals: list[str] = field(default_factory=list)  # detected brand traits
+    recommended_formats: list[str] = field(default_factory=list)  # e.g. ["social_post", "banner"]
 
 
 @dataclass
@@ -38,6 +41,8 @@ class AssetInventory:
     consolidated_style: list[str] = field(default_factory=list)
     missing_items: list[str] = field(default_factory=list)
     archetype: str = "starting_fresh"  # full_brand|has_identity|starting_fresh
+    collection_analysis: dict = field(default_factory=dict)  # coherence, diversity, gaps
+    brand_insights: dict = field(default_factory=dict)  # personality, audience, tone
 
 
 # ---------------------------------------------------------------------------
@@ -66,16 +71,19 @@ def _encode_image(image_path: str) -> tuple[str, str]:
 # ---------------------------------------------------------------------------
 
 _AUDIT_PROMPT = """\
-Analyze this image as a brand asset. Return ONLY valid JSON with this structure:
+Analyze this image as a brand asset. Perform a deep style analysis. Return ONLY valid JSON:
 {
   "category": "logo|icon|color_palette|font_specimen|style_guide|photography|illustration|other",
-  "dominant_colors": [{"hex": "#rrggbb", "name": "Color Name"}],
-  "style_keywords": ["keyword1", "keyword2"],
-  "description": "Brief description of what this asset is",
-  "quality_score": 7
+  "dominant_colors": [{"hex": "#rrggbb", "name": "Color Name", "role": "primary|secondary|accent|neutral"}],
+  "style_keywords": ["keyword1", "keyword2", "keyword3"],
+  "description": "Detailed description of the asset — what it depicts, visual style, mood",
+  "quality_score": 7,
+  "content_potential": ["announcement", "community"],
+  "brand_signals": ["professional", "tech-forward"],
+  "recommended_formats": ["social_post", "banner"]
 }
 
-For category:
+Categories:
 - "logo" — brand logos, wordmarks, logomarks
 - "icon" — app icons, favicons, small symbols
 - "color_palette" — color swatches, palette images
@@ -85,7 +93,14 @@ For category:
 - "illustration" — brand illustrations, graphics
 - "other" — anything else
 
-quality_score: 1 (very low quality/unusable) to 10 (professional, print-ready)
+Fields:
+- dominant_colors: Extract up to 5 colors. Assign each a role (primary, secondary, accent, neutral).
+- style_keywords: 3-6 words describing visual style (e.g. minimalist, geometric, warm, retro, corporate).
+- quality_score: 1 (unusable) to 10 (professional, print-ready).
+- content_potential: Which content types could USE this asset? Options: announcement, community, meme, engagement, educational, onchain_update, brand_3d.
+- brand_signals: Traits this asset communicates about the brand (e.g. "luxury", "playful", "trustworthy", "bold", "tech-forward", "community-driven").
+- recommended_formats: Where this asset works best: social_post, story, banner, avatar, background, pattern, overlay.
+
 Return ONLY the JSON, no markdown formatting."""
 
 
@@ -136,12 +151,80 @@ async def audit_single_asset(image_path: str) -> AssetAuditEntry:
         style_keywords=data.get("style_keywords", []),
         description=data.get("description", ""),
         quality_score=data.get("quality_score", 5),
+        content_potential=data.get("content_potential", []),
+        brand_signals=data.get("brand_signals", []),
+        recommended_formats=data.get("recommended_formats", []),
     )
 
 
 # ---------------------------------------------------------------------------
 # Batch audit + inventory
 # ---------------------------------------------------------------------------
+
+_COLLECTION_PROMPT = """\
+You are analyzing a collection of brand assets. Here is a summary of each asset:
+
+{asset_summaries}
+
+Analyze the COLLECTION as a whole. Return ONLY valid JSON:
+{{
+  "collection_analysis": {{
+    "visual_coherence": "high|medium|low",
+    "coherence_notes": "Brief explanation of visual consistency across assets",
+    "style_diversity": "high|medium|low",
+    "color_harmony": "harmonious|mixed|clashing",
+    "strongest_asset_types": ["logo", "photography"],
+    "gaps": ["Missing consistent typography", "No pattern/texture assets"]
+  }},
+  "brand_insights": {{
+    "personality_traits": ["professional", "innovative", "approachable"],
+    "likely_audience": "Brief description of target audience based on visual cues",
+    "suggested_tone": "formal|conversational|playful|authoritative|friendly",
+    "visual_maturity": "polished|developing|early_stage"
+  }}
+}}
+
+Return ONLY the JSON, no markdown formatting."""
+
+
+async def _analyze_collection(entries: list[AssetAuditEntry]) -> tuple[dict, dict]:
+    """Run Claude on asset summaries to get collection-level insights."""
+    summaries = []
+    for e in entries:
+        colors_str = ", ".join(c.get("hex", "") for c in e.dominant_colors[:3])
+        summaries.append(
+            f"- {e.category}: {e.description} | "
+            f"colors: {colors_str} | style: {', '.join(e.style_keywords[:4])} | "
+            f"quality: {e.quality_score}/10 | signals: {', '.join(e.brand_signals[:3])}"
+        )
+
+    prompt = _COLLECTION_PROMPT.format(asset_summaries="\n".join(summaries))
+
+    client = anthropic.AsyncAnthropic(api_key=settings.ANTHROPIC_API_KEY)
+    response = await client.messages.create(
+        model="claude-sonnet-4-20250514",
+        max_tokens=1000,
+        messages=[{"role": "user", "content": prompt}],
+    )
+
+    raw = response.content[0].text.strip()
+    if raw.startswith("```"):
+        raw = raw.split("\n", 1)[1] if "\n" in raw else raw[3:]
+    if raw.endswith("```"):
+        raw = raw[:-3]
+    raw = raw.strip()
+
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        logger.warning("Collection analysis returned non-JSON: %s", raw[:200])
+        data = {}
+
+    return (
+        data.get("collection_analysis", {}),
+        data.get("brand_insights", {}),
+    )
+
 
 async def audit_batch(image_paths: list[str]) -> AssetInventory:
     """Audit multiple assets and consolidate into an inventory."""
@@ -180,12 +263,24 @@ async def audit_batch(image_paths: list[str]) -> AssetInventory:
     missing = detect_missing(entries)
     archetype = determine_archetype(entries)
 
+    # Collection-level analysis (only if 2+ successful entries)
+    successful = [e for e in entries if e.quality_score > 1]
+    collection_analysis = {}
+    brand_insights = {}
+    if len(successful) >= 2:
+        try:
+            collection_analysis, brand_insights = await _analyze_collection(successful)
+        except Exception as e:
+            logger.warning("Collection analysis failed: %s", e)
+
     inventory = AssetInventory(
         entries=entries,
         consolidated_colors=all_colors,
         consolidated_style=all_styles,
         missing_items=missing,
         archetype=archetype,
+        collection_analysis=collection_analysis,
+        brand_insights=brand_insights,
     )
 
     return inventory
@@ -252,6 +347,9 @@ def save_inventory(inventory: AssetInventory) -> None:
                 "style_keywords": e.style_keywords,
                 "description": e.description,
                 "quality_score": e.quality_score,
+                "content_potential": e.content_potential,
+                "brand_signals": e.brand_signals,
+                "recommended_formats": e.recommended_formats,
             }
             for e in inventory.entries
         ],
@@ -259,6 +357,8 @@ def save_inventory(inventory: AssetInventory) -> None:
         "consolidated_style": inventory.consolidated_style,
         "missing_items": inventory.missing_items,
         "archetype": inventory.archetype,
+        "collection_analysis": inventory.collection_analysis,
+        "brand_insights": inventory.brand_insights,
     }
     _INVENTORY_PATH.parent.mkdir(parents=True, exist_ok=True)
     _INVENTORY_PATH.write_text(json.dumps(data, indent=2), encoding="utf-8")
@@ -271,8 +371,11 @@ def load_inventory() -> AssetInventory | None:
         return None
     try:
         data = json.loads(_INVENTORY_PATH.read_text(encoding="utf-8"))
+        # Filter to known fields for backward compat with older inventories
+        known_entry_fields = {f.name for f in AssetAuditEntry.__dataclass_fields__.values()}
         entries = [
-            AssetAuditEntry(**e) for e in data.get("entries", [])
+            AssetAuditEntry(**{k: v for k, v in e.items() if k in known_entry_fields})
+            for e in data.get("entries", [])
         ]
         return AssetInventory(
             entries=entries,
@@ -280,6 +383,8 @@ def load_inventory() -> AssetInventory | None:
             consolidated_style=data.get("consolidated_style", []),
             missing_items=data.get("missing_items", []),
             archetype=data.get("archetype", "starting_fresh"),
+            collection_analysis=data.get("collection_analysis", {}),
+            brand_insights=data.get("brand_insights", {}),
         )
     except Exception as e:
         logger.warning("Failed to load asset inventory: %s", e)

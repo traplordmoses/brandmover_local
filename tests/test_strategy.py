@@ -12,6 +12,8 @@ from agent.strategy import (
     recommend_strategy,
     generate_config_json,
     generate_strategy_markdown,
+    generate_content_calendar,
+    _calendar_to_markdown,
     save_strategy,
     _ARCHETYPE_DEFAULTS,
 )
@@ -122,6 +124,7 @@ class TestGenerateConfigJson:
             compositor_enabled=True,
             default_mode="image_always",
             recommended_content_types=["announcement", "meme"],
+            platforms=["x", "telegram"],
         )
         config = generate_config_json(rec, "TestBrand")
 
@@ -130,6 +133,7 @@ class TestGenerateConfigJson:
         assert config["pipeline"]["compositor_enabled"] is True
         assert config["pipeline"]["default_mode"] == "image_always"
         assert config["content_types_enabled"] == ["announcement", "meme"]
+        assert config["platforms"] == ["x", "telegram"]
         assert config["onboarding"]["completed"] is True
         assert config["onboarding"]["archetype"] == "full_brand"
 
@@ -137,6 +141,27 @@ class TestGenerateConfigJson:
         rec = StrategyRecommendation(archetype="starting_fresh", badge_text=None)
         config = generate_config_json(rec)
         assert config["pipeline"]["badge_text"] is None
+
+    def test_platforms_default(self):
+        rec = StrategyRecommendation(archetype="starting_fresh")
+        config = generate_config_json(rec)
+        assert config["platforms"] == ["x"]
+
+    def test_visual_source_full_brand(self):
+        rec = StrategyRecommendation(archetype="full_brand")
+        config = generate_config_json(rec)
+        assert config["visual_source"]["primary"] == "client_assets"
+        assert config["visual_source"]["fallback"] == "ai_generated"
+
+    def test_visual_source_has_identity(self):
+        rec = StrategyRecommendation(archetype="has_identity")
+        config = generate_config_json(rec)
+        assert config["visual_source"]["primary"] == "hybrid"
+
+    def test_visual_source_starting_fresh(self):
+        rec = StrategyRecommendation(archetype="starting_fresh")
+        config = generate_config_json(rec)
+        assert config["visual_source"]["primary"] == "ai_generated"
 
 
 # ---------------------------------------------------------------------------
@@ -150,6 +175,7 @@ class TestGenerateStrategyMarkdown:
             compositor_enabled=True,
             default_mode="image_optional",
             recommended_content_types=["announcement", "community"],
+            platforms=["x", "linkedin"],
             visual_style_notes="Clean and modern",
             reasoning="Has logo and some colors",
         )
@@ -159,6 +185,7 @@ class TestGenerateStrategyMarkdown:
         assert "announcement" in md
         assert "Clean and modern" in md
         assert "Has logo and some colors" in md
+        assert "x, linkedin" in md
 
 
 # ---------------------------------------------------------------------------
@@ -185,3 +212,137 @@ class TestSaveStrategy:
         config = json.loads((tmp_path / "config.json").read_text())
         assert config["brand_name"] == "TestBrand"
         assert config["onboarding"]["completed"] is True
+
+
+# ---------------------------------------------------------------------------
+# Content calendar
+# ---------------------------------------------------------------------------
+
+class TestCalendarToMarkdown:
+    def test_generates_table(self):
+        data = {
+            "calendar": [
+                {
+                    "day": "Monday",
+                    "content_type": "announcement",
+                    "topic": "Product update",
+                    "description": "Share the latest feature",
+                    "time": "9am",
+                    "platforms": ["x"],
+                },
+                {
+                    "day": "Tuesday",
+                    "content_type": "community",
+                    "topic": "Community spotlight",
+                    "description": "Highlight a community member",
+                    "time": "12pm",
+                    "platforms": ["x", "telegram"],
+                },
+            ],
+            "weekly_theme": "Building momentum",
+            "notes": "Focus on engagement",
+        }
+        md = _calendar_to_markdown(data, "TestBrand")
+        assert "TestBrand" in md
+        assert "Weekly Content Calendar" in md
+        assert "Building momentum" in md
+        assert "Monday" in md
+        assert "announcement" in md
+        assert "Tuesday" in md
+        assert "community" in md
+        assert "Focus on engagement" in md
+
+    def test_empty_calendar(self):
+        data = {"calendar": [], "weekly_theme": "", "notes": ""}
+        md = _calendar_to_markdown(data, "Test")
+        assert "Test" in md
+        assert "| Day |" in md
+
+    def test_details_section(self):
+        data = {
+            "calendar": [
+                {
+                    "day": "Wednesday",
+                    "content_type": "meme",
+                    "topic": "Industry humor",
+                    "description": "Light-hearted meme about crypto",
+                    "time": "3pm",
+                    "platforms": ["x"],
+                },
+            ],
+        }
+        md = _calendar_to_markdown(data, "Test")
+        assert "Daily Details" in md
+        assert "Wednesday" in md
+        assert "Light-hearted meme" in md
+
+
+class TestGenerateContentCalendar:
+    def test_generates_and_saves_calendar(self, tmp_path):
+        mock_response = MagicMock()
+        mock_response.content = [MagicMock(text=json.dumps({
+            "calendar": [
+                {
+                    "day": "Monday",
+                    "content_type": "announcement",
+                    "topic": "Weekly update",
+                    "description": "Share progress",
+                    "time": "9am",
+                    "platforms": ["x"],
+                },
+            ],
+            "weekly_theme": "Growth week",
+            "notes": "Keep it concise",
+        }))]
+
+        rec = StrategyRecommendation(
+            archetype="has_identity",
+            recommended_content_types=["announcement", "community"],
+            platforms=["x"],
+        )
+
+        async def _run():
+            with patch("agent.strategy.anthropic.AsyncAnthropic") as mock_cls:
+                mock_client = AsyncMock()
+                mock_client.messages.create = AsyncMock(return_value=mock_response)
+                mock_cls.return_value = mock_client
+                with patch("agent.strategy.settings") as mock_settings:
+                    mock_settings.BRAND_FOLDER = str(tmp_path)
+                    mock_settings.BRAND_NAME = "TestBrand"
+                    mock_settings.ANTHROPIC_API_KEY = "test-key"
+                    return await generate_content_calendar(
+                        "TestBrand", "A test brand", ["x"], rec,
+                    )
+
+        md = asyncio.run(_run())
+        assert "TestBrand" in md
+        assert "Monday" in md
+        assert "Growth week" in md
+        assert (tmp_path / "content_calendar.md").exists()
+        saved = (tmp_path / "content_calendar.md").read_text()
+        assert saved == md
+
+    def test_handles_bad_json_response(self, tmp_path):
+        mock_response = MagicMock()
+        mock_response.content = [MagicMock(text="Not valid JSON at all")]
+
+        rec = StrategyRecommendation(archetype="starting_fresh")
+
+        async def _run():
+            with patch("agent.strategy.anthropic.AsyncAnthropic") as mock_cls:
+                mock_client = AsyncMock()
+                mock_client.messages.create = AsyncMock(return_value=mock_response)
+                mock_cls.return_value = mock_client
+                with patch("agent.strategy.settings") as mock_settings:
+                    mock_settings.BRAND_FOLDER = str(tmp_path)
+                    mock_settings.BRAND_NAME = "TestBrand"
+                    mock_settings.ANTHROPIC_API_KEY = "test-key"
+                    return await generate_content_calendar(
+                        "TestBrand", "A test", ["x"], rec,
+                    )
+
+        md = asyncio.run(_run())
+        # Should still produce valid markdown with empty table
+        assert "TestBrand" in md
+        assert "| Day |" in md
+        assert (tmp_path / "content_calendar.md").exists()

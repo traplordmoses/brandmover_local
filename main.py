@@ -28,4 +28,14 @@ from bot import telegram_bot  # noqa: E402 — after logging setup
 
 if __name__ == "__main__":
     logging.getLogger().info("Bot starting — logs also written to %s", _LOG_FILE)
+
+    # Startup asset scan — index new files in brand/assets/
+    try:
+        from agent import asset_library
+        count = asset_library.index_directory()
+        if count:
+            logging.getLogger().info("Asset library: indexed %d new files on startup", count)
+    except Exception as e:
+        logging.getLogger().warning("Asset library startup scan failed: %s", e)
+
     telegram_bot.run()

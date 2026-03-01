@@ -107,6 +107,11 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         "/onboard — Start conversational brand onboarding\n"
         "/onboard_cancel — Cancel onboarding\n"
         "/library — List or search the asset library\n"
+        "/strategy — View current brand strategy and config\n"
+        "/preview [topic] — Generate a sample post (no rate limit)\n"
+        "/reset_brand — Wipe brand config and start fresh\n"
+        "/upload — Add images to your brand asset library\n"
+        "/done — Finish asset upload session\n"
         "/help — Show this message"
     )
     await update.message.reply_text(msg, parse_mode="HTML")
@@ -1022,9 +1027,28 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         )
         return
 
-    # --- Priority flag checks (logo > ingest > brand_check) ---
+    # --- /upload asset library intercept ---
     user_data = context.user_data if context else {}
+    if user_data.get("awaiting_asset_upload"):
+        try:
+            from agent import asset_audit
+            import asyncio
+            # Tag via filename heuristic (fast, no API call)
+            ct = asset_library._guess_content_type(Path(tmp_path))
+            entry = asset_library.add(tmp_path, "uploaded", ct, tags=[ct, "uploaded"])
+            upload_count = user_data.get("_asset_upload_count", 0) + 1
+            user_data["_asset_upload_count"] = upload_count
+            await update.message.reply_text(
+                f"Added to library: <code>{entry.id}</code> ({ct})\n"
+                f"{upload_count} asset(s) uploaded this session. Send more or /done when finished.",
+                parse_mode="HTML",
+            )
+        except Exception as e:
+            logger.warning("Asset upload failed: %s", e)
+            await update.message.reply_text(f"Failed to add asset: {_esc(str(e))}", parse_mode="HTML")
+        return
 
+    # --- Priority flag checks (logo > ingest > brand_check) ---
     if user_data.get("awaiting_logo_upload"):
         user_data["awaiting_logo_upload"] = False
         logo_dir = Path(settings.BRAND_FOLDER) / "assets"
@@ -1167,7 +1191,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         onboarding.OnboardingState.IDLE.value,
         onboarding.OnboardingState.COMPLETE.value,
     ):
-        session, response = onboarding.advance(session, request)
+        # DISCOVERY state uses Claude-driven async conversation
+        if session.state == onboarding.OnboardingState.DISCOVERY.value:
+            await update.message.chat.send_action("typing")
+            session, response = await onboarding.advance_async(session, request)
+        else:
+            session, response = onboarding.advance(session, request)
         onboarding.save_session(session)
         await update.message.reply_text(response, parse_mode="HTML")
 
@@ -2677,3 +2706,196 @@ async def library_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         lines.append(f"<code>{e.id}</code> {e.source}/{e.content_type}{tags}{used}\n  {_esc(prompt_short)}")
 
     await update.message.reply_text("\n".join(lines), parse_mode="HTML")
+
+
+async def strategy_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /strategy — show current brand strategy and config."""
+    if not _authorized(update.effective_user.id):
+        return
+
+    config_path = Path(settings.BRAND_FOLDER) / "config.json"
+    strategy_path = Path(settings.BRAND_FOLDER) / "strategy.md"
+
+    if not config_path.exists() and not strategy_path.exists():
+        await update.message.reply_text(
+            "No strategy configured yet. Run /onboard to set up your brand."
+        )
+        return
+
+    lines = ["<b>Brand Strategy</b>\n"]
+
+    # Read config.json
+    if config_path.exists():
+        try:
+            import json as _json
+            cfg = _json.loads(config_path.read_text(encoding="utf-8"))
+            pipeline = cfg.get("pipeline", {})
+            lines.append(f"<b>Brand:</b> {_esc(cfg.get('brand_name', 'N/A'))}")
+            lines.append(f"<b>Archetype:</b> {_esc(cfg.get('onboarding', {}).get('archetype', 'N/A'))}")
+            lines.append(f"<b>Compositor:</b> {'ON' if pipeline.get('compositor_enabled') else 'OFF'}")
+            badge = pipeline.get("badge_text")
+            lines.append(f"<b>Badge:</b> {_esc(badge) if badge else '(none)'}")
+            lines.append(f"<b>Mode:</b> {_esc(pipeline.get('default_mode', 'N/A'))}")
+            platforms = cfg.get("platforms", [])
+            if platforms:
+                lines.append(f"<b>Platforms:</b> {', '.join(platforms)}")
+            vs = cfg.get("visual_source", {})
+            if vs:
+                lines.append(f"<b>Visual source:</b> {_esc(vs.get('primary', 'N/A'))}")
+            types = cfg.get("content_types_enabled", [])
+            if types:
+                lines.append(f"<b>Content types:</b> {', '.join(types[:8])}")
+        except Exception as e:
+            lines.append(f"<i>Error reading config.json: {_esc(str(e))}</i>")
+
+    # Read strategy.md (show first ~500 chars)
+    if strategy_path.exists():
+        try:
+            md = strategy_path.read_text(encoding="utf-8")
+            preview = md[:500]
+            if len(md) > 500:
+                preview += "..."
+            lines.append(f"\n<b>Strategy Notes:</b>\n<pre>{_esc(preview)}</pre>")
+        except Exception as e:
+            lines.append(f"<i>Error reading strategy.md: {_esc(str(e))}</i>")
+
+    # Show calendar if exists
+    cal_path = Path(settings.BRAND_FOLDER) / "content_calendar.md"
+    if cal_path.exists():
+        lines.append("\nContent calendar available — see <code>brand/content_calendar.md</code>")
+
+    await update.message.reply_text("\n".join(lines), parse_mode="HTML")
+
+
+# State for /reset_brand confirmation
+_reset_pending: dict[int, float] = {}
+
+
+async def reset_brand_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /reset_brand — wipe brand config and start fresh."""
+    if not _authorized(update.effective_user.id):
+        return
+
+    text = (update.message.text or "").strip()
+    parts = text.split(maxsplit=1)
+    confirm_word = parts[1].strip() if len(parts) > 1 else ""
+
+    user_id = update.effective_user.id
+
+    if confirm_word.upper() == "RESET":
+        brand_path = Path(settings.BRAND_FOLDER)
+
+        # Backup guidelines.md
+        gl = brand_path / "guidelines.md"
+        if gl.exists():
+            import shutil
+            shutil.copy2(str(gl), str(gl) + ".bak")
+
+        # Delete config files
+        deleted = []
+        for fname in ("config.json", "strategy.md", "content_calendar.md"):
+            p = brand_path / fname
+            if p.exists():
+                p.unlink()
+                deleted.append(fname)
+
+        # Delete onboarding session
+        onboarding.delete_session(user_id)
+
+        # Invalidate caches
+        compositor_config.invalidate_cache()
+
+        summary = ", ".join(deleted) if deleted else "no config files found"
+        await update.message.reply_text(
+            f"Brand reset complete.\n"
+            f"Deleted: {summary}\n"
+            f"guidelines.md backed up to guidelines.md.bak\n\n"
+            f"Run /onboard to set up again.",
+        )
+    else:
+        await update.message.reply_text(
+            "This will wipe your brand config and start fresh.\n\n"
+            "Type <code>/reset_brand RESET</code> to confirm.",
+            parse_mode="HTML",
+        )
+
+
+async def upload_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /upload — set flag to receive photos as brand assets."""
+    if not _authorized(update.effective_user.id):
+        return
+
+    context.user_data["awaiting_asset_upload"] = True
+    context.user_data["_asset_upload_count"] = 0
+    await update.message.reply_text(
+        "Send me images to add to your brand library.\n"
+        "I'll index them automatically. Send /done when finished.",
+    )
+
+
+async def done_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /done — clear the asset upload flag."""
+    if not _authorized(update.effective_user.id):
+        return
+
+    was_uploading = context.user_data.pop("awaiting_asset_upload", False)
+    count = context.user_data.pop("_asset_upload_count", 0)
+
+    if was_uploading:
+        await update.message.reply_text(
+            f"Asset upload complete. {count} image(s) added to your library.\n"
+            f"Use /library to browse your assets.",
+        )
+    else:
+        await update.message.reply_text("Nothing to finish.")
+
+
+async def preview_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /preview [topic] — generate a sample post without rate limits or history."""
+    if not _authorized(update.effective_user.id):
+        return
+
+    topic = " ".join(context.args) if context.args else ""
+    if not topic:
+        await update.message.reply_text(
+            "Usage: /preview <topic>\n\n"
+            "Example: /preview weekly product update"
+        )
+        return
+
+    await update.message.chat.send_action("typing")
+
+    try:
+        brand_context = guidelines.get_brand_context()
+        result = await brain.pipeline_generate(
+            request=topic,
+            brand_context=brand_context,
+        )
+        draft = result.draft
+
+        if not draft.get("caption"):
+            await update.message.reply_text("Preview generation failed — no caption produced.")
+            return
+
+        lines = [
+            "<b>Preview</b>\n",
+            f"{_esc(draft['caption'])}",
+        ]
+        hashtags = draft.get("hashtags", [])
+        if hashtags:
+            lines.append(f"\n{' '.join('#' + h for h in hashtags)}")
+        if draft.get("content_type"):
+            lines.append(f"\n<i>Type: {_esc(draft['content_type'])}</i>")
+        if draft.get("image_prompt"):
+            lines.append(f"<i>Image prompt: {_esc(draft['image_prompt'][:150])}</i>")
+
+        lines.append("\n<i>This is a preview — not saved or tracked.</i>")
+
+        await update.message.reply_text("\n".join(lines), parse_mode="HTML")
+
+    except Exception as e:
+        logger.error("Preview error: %s", e)
+        await update.message.reply_text(
+            f"Preview failed: {_esc(str(e))}",
+            parse_mode="HTML",
+        )

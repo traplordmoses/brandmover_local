@@ -1,7 +1,8 @@
-"""Tests for agent.onboarding — state machine transitions and persistence."""
+"""Tests for agent.onboarding — smart discovery + state machine transitions."""
 
+import asyncio
 import json
-from unittest.mock import patch
+from unittest.mock import patch, AsyncMock, MagicMock
 
 import pytest
 
@@ -12,8 +13,11 @@ from agent.onboarding import (
     save_session,
     delete_session,
     advance,
+    advance_async,
     finalize_audit,
     finalize_strategy,
+    _apply_collected_fields,
+    REQUIRED_FIELDS,
 )
 
 
@@ -35,27 +39,218 @@ def _session(state=OnboardingState.IDLE.value, **kwargs):
 
 
 # ---------------------------------------------------------------------------
-# State transitions
+# IDLE → DISCOVERY transition
 # ---------------------------------------------------------------------------
 
-class TestAdvance:
-    def test_idle_to_project_name(self):
+class TestIdleToDiscovery:
+    def test_idle_starts_discovery(self):
         s = _session(OnboardingState.IDLE.value)
         s, msg = advance(s, None)
-        assert s.state == OnboardingState.PROJECT_NAME.value
-        assert "brand name" in msg.lower()
+        assert s.state == OnboardingState.DISCOVERY.value
+        assert "brand" in msg.lower()
 
+    def test_discovery_returns_async_marker(self):
+        s = _session(OnboardingState.DISCOVERY.value)
+        s, msg = advance(s, "hello")
+        assert msg == "_NEEDS_ASYNC_"
+
+
+# ---------------------------------------------------------------------------
+# Smart discovery (mocked Claude)
+# ---------------------------------------------------------------------------
+
+class TestSmartDiscovery:
+    def _mock_claude_response(self, message, fields=None, complete=False, suggest_upload=False):
+        mock_response = MagicMock()
+        mock_response.content = [MagicMock(text=json.dumps({
+            "message": message,
+            "fields_collected": fields or {},
+            "all_required_complete": complete,
+            "suggest_upload": suggest_upload,
+        }))]
+        return mock_response
+
+    def test_extracts_fields_from_conversation(self):
+        s = _session(OnboardingState.DISCOVERY.value)
+        response = self._mock_claude_response(
+            "Great name! What does ACME do?",
+            fields={"project_name": "ACME Corp"},
+        )
+
+        async def _run():
+            with patch("agent.onboarding.anthropic.AsyncAnthropic") as mock_cls:
+                mock_client = AsyncMock()
+                mock_client.messages.create = AsyncMock(return_value=response)
+                mock_cls.return_value = mock_client
+                return await advance_async(s, "We're called ACME Corp")
+
+        s, msg = asyncio.run(_run())
+        assert s.state == OnboardingState.DISCOVERY.value
+        assert s.brand_name == "ACME Corp"
+        assert s.collected_fields["project_name"] == "ACME Corp"
+        assert "ACME" in msg
+
+    def test_multiple_fields_in_one_turn(self):
+        s = _session(OnboardingState.DISCOVERY.value)
+        response = self._mock_claude_response(
+            "Got it! Do you have brand assets?",
+            fields={
+                "project_name": "TestBrand",
+                "description": "A test product",
+                "platforms": ["x", "telegram"],
+            },
+        )
+
+        async def _run():
+            with patch("agent.onboarding.anthropic.AsyncAnthropic") as mock_cls:
+                mock_client = AsyncMock()
+                mock_client.messages.create = AsyncMock(return_value=response)
+                mock_cls.return_value = mock_client
+                return await advance_async(s, "I'm building TestBrand, a test product. We post on X and Telegram")
+
+        s, msg = asyncio.run(_run())
+        assert s.brand_name == "TestBrand"
+        assert s.description == "A test product"
+        assert s.platforms == ["x", "telegram"]
+
+    def test_discovery_complete_with_assets(self):
+        s = _session(OnboardingState.DISCOVERY.value, collected_fields={
+            "project_name": "Test", "description": "A test",
+            "platforms": ["x"], "visual_preference": "modern",
+        })
+        s.brand_name = "Test"
+        response = self._mock_claude_response(
+            "Let's get those uploaded!",
+            fields={"has_assets": True},
+            complete=True,
+            suggest_upload=True,
+        )
+
+        async def _run():
+            with patch("agent.onboarding.anthropic.AsyncAnthropic") as mock_cls:
+                mock_client = AsyncMock()
+                mock_client.messages.create = AsyncMock(return_value=response)
+                mock_cls.return_value = mock_client
+                return await advance_async(s, "yes I have logos")
+
+        s, msg = asyncio.run(_run())
+        assert s.state == OnboardingState.UPLOADS.value
+
+    def test_discovery_complete_no_assets_with_visual_pref(self):
+        s = _session(OnboardingState.DISCOVERY.value)
+        s.visual_preferences = {"style": "modern"}
+        response = self._mock_claude_response(
+            "Perfect!",
+            fields={
+                "project_name": "Test", "description": "A test",
+                "platforms": ["x"], "has_assets": False,
+                "visual_preference": "modern",
+            },
+            complete=True,
+        )
+
+        async def _run():
+            with patch("agent.onboarding.anthropic.AsyncAnthropic") as mock_cls:
+                mock_client = AsyncMock()
+                mock_client.messages.create = AsyncMock(return_value=response)
+                mock_cls.return_value = mock_client
+                return await advance_async(s, "no assets, modern style")
+
+        s, msg = asyncio.run(_run())
+        assert s.state == OnboardingState.STRATEGY.value
+
+    def test_discovery_complete_no_assets_no_visual_pref(self):
+        s = _session(OnboardingState.DISCOVERY.value)
+        response = self._mock_claude_response(
+            "Almost there!",
+            fields={
+                "project_name": "Test", "description": "A test",
+                "platforms": ["x"], "has_assets": False,
+            },
+            complete=True,
+        )
+
+        async def _run():
+            with patch("agent.onboarding.anthropic.AsyncAnthropic") as mock_cls:
+                mock_client = AsyncMock()
+                mock_client.messages.create = AsyncMock(return_value=response)
+                mock_cls.return_value = mock_client
+                return await advance_async(s, "no assets")
+
+        s, msg = asyncio.run(_run())
+        assert s.state == OnboardingState.VISUAL_PREF.value
+
+    def test_conversation_history_stored(self):
+        s = _session(OnboardingState.DISCOVERY.value)
+        response = self._mock_claude_response("Tell me more!")
+
+        async def _run():
+            with patch("agent.onboarding.anthropic.AsyncAnthropic") as mock_cls:
+                mock_client = AsyncMock()
+                mock_client.messages.create = AsyncMock(return_value=response)
+                mock_cls.return_value = mock_client
+                return await advance_async(s, "hello")
+
+        s, _ = asyncio.run(_run())
+        assert len(s.conversation_history) == 2
+        assert s.conversation_history[0]["role"] == "user"
+        assert s.conversation_history[1]["role"] == "assistant"
+
+    def test_handles_non_json_response(self):
+        s = _session(OnboardingState.DISCOVERY.value)
+        mock_response = MagicMock()
+        mock_response.content = [MagicMock(text="Just a plain text response")]
+
+        async def _run():
+            with patch("agent.onboarding.anthropic.AsyncAnthropic") as mock_cls:
+                mock_client = AsyncMock()
+                mock_client.messages.create = AsyncMock(return_value=mock_response)
+                mock_cls.return_value = mock_client
+                return await advance_async(s, "hello")
+
+        s, msg = asyncio.run(_run())
+        assert s.state == OnboardingState.DISCOVERY.value
+        assert msg == "Just a plain text response"
+
+
+# ---------------------------------------------------------------------------
+# _apply_collected_fields
+# ---------------------------------------------------------------------------
+
+class TestApplyCollectedFields:
+    def test_applies_project_name(self):
+        s = _session()
+        _apply_collected_fields(s, {"project_name": "ACME"})
+        assert s.brand_name == "ACME"
+        assert s.collected_fields["project_name"] == "ACME"
+
+    def test_applies_platforms_list(self):
+        s = _session()
+        _apply_collected_fields(s, {"platforms": ["x", "telegram"]})
+        assert s.platforms == ["x", "telegram"]
+
+    def test_applies_platforms_string(self):
+        s = _session()
+        _apply_collected_fields(s, {"platforms": "x, telegram"})
+        assert s.platforms == ["x", "telegram"]
+
+    def test_applies_visual_preference(self):
+        s = _session()
+        _apply_collected_fields(s, {"visual_preference": "retro neon"})
+        assert s.visual_preferences["style"] == "custom"
+        assert "retro neon" in s.visual_preferences["description"]
+
+
+# ---------------------------------------------------------------------------
+# Legacy state transitions (backward compat)
+# ---------------------------------------------------------------------------
+
+class TestLegacyAdvance:
     def test_project_name_to_description(self):
         s = _session(OnboardingState.PROJECT_NAME.value)
         s, msg = advance(s, "ACME Corp")
         assert s.state == OnboardingState.DESCRIPTION.value
         assert s.brand_name == "ACME Corp"
-        assert "ACME Corp" in msg
-
-    def test_empty_brand_name_stays(self):
-        s = _session(OnboardingState.PROJECT_NAME.value)
-        s, msg = advance(s, "")
-        assert s.state == OnboardingState.PROJECT_NAME.value
 
     def test_description_to_platforms(self):
         s = _session(OnboardingState.DESCRIPTION.value, brand_name="ACME")
@@ -79,6 +274,12 @@ class TestAdvance:
         s, msg = advance(s, "no")
         assert s.state == OnboardingState.VISUAL_PREF.value
 
+
+# ---------------------------------------------------------------------------
+# Non-discovery states (shared by both paths)
+# ---------------------------------------------------------------------------
+
+class TestSharedStates:
     def test_uploads_skip_with_assets_to_auditing(self):
         s = _session(OnboardingState.UPLOADS.value, uploaded_assets=[{"path": "/tmp/logo.png"}])
         s, msg = advance(s, "/onboard_skip")
@@ -112,61 +313,16 @@ class TestAdvance:
         s, msg = advance(s, "yes")
         assert s.state == OnboardingState.COMPLETE.value
 
-    def test_confirm_no_restarts(self):
+    def test_confirm_no_restarts_to_discovery(self):
         s = _session(OnboardingState.CONFIRM.value, brand_name="Test")
         s, msg = advance(s, "no")
-        assert s.state == OnboardingState.PROJECT_NAME.value
+        assert s.state == OnboardingState.DISCOVERY.value
         assert s.brand_name == ""
+        assert s.collected_fields == {}
 
     def test_complete_state_is_terminal(self):
         s = _session(OnboardingState.COMPLETE.value)
         s, msg = advance(s, "anything")
-        assert s.state == OnboardingState.COMPLETE.value
-
-
-# ---------------------------------------------------------------------------
-# Full flow test
-# ---------------------------------------------------------------------------
-
-class TestFullFlow:
-    def test_full_no_assets_flow(self):
-        s = _session()
-
-        # idle → project_name
-        s, msg = advance(s, None)
-        assert s.state == OnboardingState.PROJECT_NAME.value
-
-        # project_name → description
-        s, msg = advance(s, "TestBrand")
-        assert s.state == OnboardingState.DESCRIPTION.value
-
-        # description → platforms
-        s, msg = advance(s, "A test product")
-        assert s.state == OnboardingState.PLATFORMS.value
-
-        # platforms → asset_check
-        s, msg = advance(s, "twitter")
-        assert s.state == OnboardingState.ASSET_CHECK.value
-
-        # asset_check (no) → visual_pref
-        s, msg = advance(s, "no")
-        assert s.state == OnboardingState.VISUAL_PREF.value
-
-        # visual_pref → strategy
-        s, msg = advance(s, "minimal")
-        assert s.state == OnboardingState.STRATEGY.value
-
-        # strategy → confirm (via finalize_strategy)
-        s, msg = finalize_strategy(s, {
-            "archetype": "starting_fresh",
-            "compositor_enabled": False,
-            "default_mode": "image_optional",
-            "recommended_content_types": ["announcement"],
-        })
-        assert s.state == OnboardingState.CONFIRM.value
-
-        # confirm → complete
-        s, msg = advance(s, "yes")
         assert s.state == OnboardingState.COMPLETE.value
 
 
@@ -202,13 +358,13 @@ class TestFinalizeAudit:
 
 class TestPersistence:
     def test_save_and_load(self, state_path):
-        s = OnboardingSession(user_id=99, state="project_name", brand_name="Test")
+        s = OnboardingSession(user_id=99, state="discovery", brand_name="Test")
         save_session(s)
 
         loaded = get_session(99)
         assert loaded is not None
         assert loaded.brand_name == "Test"
-        assert loaded.state == "project_name"
+        assert loaded.state == "discovery"
 
     def test_get_missing_returns_none(self, state_path):
         assert get_session(999) is None
@@ -221,15 +377,24 @@ class TestPersistence:
 
     def test_resume_after_restart(self, state_path):
         """Session persists across save/load cycles (simulating restart)."""
-        s = _session(OnboardingState.DESCRIPTION.value, brand_name="Persisted")
+        s = _session(OnboardingState.DISCOVERY.value, brand_name="Persisted")
+        s.collected_fields = {"project_name": "Persisted"}
         save_session(s)
 
-        # Simulate bot restart — load fresh
         loaded = get_session(12345)
         assert loaded is not None
         assert loaded.brand_name == "Persisted"
-        assert loaded.state == OnboardingState.DESCRIPTION.value
+        assert loaded.state == OnboardingState.DISCOVERY.value
+        assert loaded.collected_fields["project_name"] == "Persisted"
 
-        # Continue
-        loaded, msg = advance(loaded, "A description")
-        assert loaded.state == OnboardingState.PLATFORMS.value
+    def test_conversation_history_persists(self, state_path):
+        s = _session(OnboardingState.DISCOVERY.value)
+        s.conversation_history = [
+            {"role": "user", "content": "hello"},
+            {"role": "assistant", "content": "hi there"},
+        ]
+        save_session(s)
+
+        loaded = get_session(12345)
+        assert len(loaded.conversation_history) == 2
+        assert loaded.conversation_history[0]["content"] == "hello"

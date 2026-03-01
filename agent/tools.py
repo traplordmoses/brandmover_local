@@ -254,20 +254,28 @@ async def _handle_generate_image(
 
     content_type = input_dict.get("content_type", "announcement")
 
+    # Check visual source preference from config.json
+    from agent.compositor_config import _load_config_json
+    _vs_config = _load_config_json()
+    _visual_source = (_vs_config.get("visual_source", {}).get("primary", "ai_generated")
+                      if _vs_config else "ai_generated")
+
     # Check asset library for a reusable match before generating
-    existing = asset_library.suggest(prompt, content_type)
-    if existing:
-        lib_path = asset_library.get_library_path(existing)
-        if lib_path:
-            asset_library.mark_used(existing.id)
-            logger.info("Reusing library asset %s instead of generating", existing.id)
-            return json.dumps({
-                "image_url": str(lib_path),
-                "model": "library",
-                "reason": f"reused library asset {existing.id}",
-                "prompt_used": prompt,
-                "library_entry_id": existing.id,
-            })
+    # (skip for ai_generated mode — always generate fresh)
+    if _visual_source in ("client_assets", "hybrid"):
+        existing = asset_library.suggest(prompt, content_type)
+        if existing:
+            lib_path = asset_library.get_library_path(existing)
+            if lib_path:
+                asset_library.mark_used(existing.id)
+                logger.info("Reusing library asset %s (%s mode)", existing.id, _visual_source)
+                return json.dumps({
+                    "image_url": str(lib_path),
+                    "model": "library",
+                    "reason": f"reused library asset {existing.id} ({_visual_source} mode)",
+                    "prompt_used": prompt,
+                    "library_entry_id": existing.id,
+                })
 
     # 0. brand_3d — dedicated 3D asset pipeline
     # Always: master prompt splice + category refs + optional logo refs
