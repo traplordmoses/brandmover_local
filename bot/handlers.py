@@ -35,6 +35,34 @@ def _authorized(user_id: int) -> bool:
     return user_id == settings.TELEGRAM_ALLOWED_USER_ID
 
 
+# Patterns that indicate the user wants to generate a template from their reference image
+_TEMPLATE_FROM_REF_PATTERNS = [
+    "make a template",
+    "make template",
+    "create a template",
+    "create template",
+    "generate a template",
+    "generate template",
+    "use this layout",
+    "use this as a template",
+    "use this as template",
+    "turn this into a template",
+    "template from this",
+    "template this",
+    "copy this layout",
+    "replicate this layout",
+    "recreate this layout",
+    "use this format",
+    "copy this format",
+]
+
+
+def _is_template_from_ref_intent(caption: str) -> bool:
+    """Check if a photo caption expresses intent to generate a template from reference."""
+    lower = caption.lower().strip()
+    return any(p in lower for p in _TEMPLATE_FROM_REF_PATTERNS)
+
+
 def _rate_limited(user_id: int) -> bool:
     """Check if user is sending requests too fast. Returns True if blocked."""
     now = time.time()
@@ -370,6 +398,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         "/apply — Apply extracted brand info to guidelines\n"
         "/template — Toggle image composition on/off\n"
         "/template_upload — Upload a custom visual template\n"
+        "/template_from_reference — Generate a branded template from a reference image\n"
         "/onboard — Start conversational brand onboarding\n"
         "/onboard_cancel — Cancel onboarding\n"
         "/library — List or search the asset library\n"
@@ -1279,6 +1308,12 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         await _handle_template_upload(update, context, tmp_path)
         return
 
+    # --- Template from reference intercept ---
+    if user_data.get("awaiting_template_from_ref"):
+        state.clear_reference_image()
+        await _handle_template_from_reference(update, context, tmp_path)
+        return
+
     # --- /upload asset library intercept ---
     if user_data.get("awaiting_asset_upload"):
         try:
@@ -1377,6 +1412,15 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         await _handle_template_upload(update, context, tmp_path)
         return
 
+    # Caption-based /template_from_reference — image sent with "/template_from_reference [name]"
+    if caption.lower().startswith("/template_from_reference"):
+        template_name = caption[len("/template_from_reference"):].strip()
+        if context:
+            context.user_data["template_from_ref_name"] = template_name
+        state.clear_reference_image()
+        await _handle_template_from_reference(update, context, tmp_path)
+        return
+
     # Caption-based /brand_check — image sent with "/brand_check" as caption
     if caption.lower().startswith("/brand_check"):
         await update.message.chat.send_action("typing")
@@ -1389,6 +1433,14 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         except Exception as e:
             logger.error("Brand check failed: %s", e)
             await update.message.reply_text(f"Brand check failed: {_esc(str(e))}", parse_mode="HTML")
+        return
+
+    # Natural language template-from-reference intent detection
+    if caption and _is_template_from_ref_intent(caption):
+        state.clear_reference_image()
+        if context:
+            context.user_data["template_from_ref_name"] = ""
+        await _handle_template_from_reference(update, context, tmp_path)
         return
 
     # Check if caption matches a style profile name (e.g. "3d_card" or "style 3d_card")
@@ -1928,7 +1980,8 @@ async def template_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             f"Mode: <code>{_esc(mode)}</code>\n\n"
             f"<code>/template on</code> — enable\n"
             f"<code>/template off</code> — disable\n"
-            f"<code>/template_upload</code> — upload a custom template"
+            f"<code>/template_upload</code> — upload a custom template\n"
+            f"<code>/template_from_reference</code> — generate template from reference"
             f"{tpl_lines}",
             parse_mode="HTML",
         )
@@ -1992,6 +2045,64 @@ async def template_upload_command(update: Update, context: ContextTypes.DEFAULT_
         "I'll analyze it and register it for future posts.",
         parse_mode="HTML",
     )
+
+
+async def template_from_reference_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /template_from_reference [name] — generate a branded template from a reference image."""
+    if not _authorized(update.effective_user.id):
+        return
+
+    template_name = " ".join(context.args) if context.args else ""
+    context.user_data["awaiting_template_from_ref"] = True
+    context.user_data["template_from_ref_name"] = template_name
+    name_note = f" (name: <b>{_esc(template_name)}</b>)" if template_name else ""
+    await update.message.reply_text(
+        f"Send me a reference image (screenshot, post, layout you like).{name_note}\n"
+        "I'll analyze the layout and recreate it as a branded template using your colors, fonts, and logo.",
+        parse_mode="HTML",
+    )
+
+
+async def _handle_template_from_reference(update: Update, context: ContextTypes.DEFAULT_TYPE, tmp_path: str) -> None:
+    """Generate a branded template from a reference image."""
+    from agent import template_generator as _tg
+
+    context.user_data["awaiting_template_from_ref"] = False
+    await update.message.chat.send_action("typing")
+    await update.message.reply_text("Analyzing layout and generating branded template...")
+
+    try:
+        user_name = (context.user_data or {}).get("template_from_ref_name", "")
+        template, rendered_img = await _tg.generate_template_from_reference(
+            tmp_path,
+            name=user_name or None,
+        )
+
+        # Send the rendered template as a photo
+        buf = io.BytesIO()
+        rendered_img.convert("RGB").save(buf, "PNG")
+        buf.seek(0)
+
+        regions_str = ", ".join(f"{r.type} ({r.width}x{r.height})" for r in template.regions)
+        await update.message.reply_photo(
+            photo=buf,
+            caption=(
+                f"<b>Template Generated from Reference</b>\n\n"
+                f"Name: <b>{_esc(template.name)}</b>\n"
+                f"ID: <code>{_esc(template.id)}</code>\n"
+                f"Size: {template.width}x{template.height} ({template.aspect_ratio})\n"
+                f"Regions: {_esc(regions_str) or 'none detected'}\n"
+                f"Notes: {_esc(template.analysis_notes or 'none')}\n\n"
+                f"This template will be used for future posts."
+            ),
+            parse_mode="HTML",
+        )
+    except Exception as e:
+        logger.error("Template generation from reference failed: %s", e)
+        await update.message.reply_text(
+            f"Template generation failed: {_esc(str(e))}",
+            parse_mode="HTML",
+        )
 
 
 async def _handle_template_upload(update: Update, context: ContextTypes.DEFAULT_TYPE, tmp_path: str) -> None:
