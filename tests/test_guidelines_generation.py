@@ -89,6 +89,60 @@ def _mock_context():
 # ---------------------------------------------------------------------------
 
 class TestAuditDataPassthrough:
+    def test_run_onboarding_audit_includes_entries_creative(self):
+        """_run_onboarding_audit should pass entries_creative to session."""
+        import tempfile, os
+        from bot.handlers import _run_onboarding_audit
+        from agent.asset_audit import AssetInventory, AssetAuditEntry
+
+        async def _run():
+            with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as f:
+                tmp_path = f.name
+                f.write(b"fake image data")
+
+            try:
+                entry = AssetAuditEntry(
+                    path=tmp_path, category="logo",
+                    first_impression="Striking and bold",
+                    creative_dna=["geometric precision"],
+                    overall_energy="quiet confidence",
+                    what_makes_it_special="The negative space",
+                    never_do=["Never add drop shadows"],
+                    character_system="A minimalist architect",
+                )
+                inventory = AssetInventory(
+                    entries=[entry],
+                    consolidated_colors=[],
+                    consolidated_style=["bold"],
+                    archetype="has_identity",
+                )
+
+                captured = {}
+                def capture_finalize(s, data):
+                    captured.update(data)
+                    return s, "done"
+
+                session = MagicMock()
+                session.uploaded_assets = [{"path": tmp_path, "type": "reference"}]
+
+                with patch("agent.asset_audit.audit_batch", AsyncMock(return_value=inventory)), \
+                     patch("agent.asset_audit.save_inventory"), \
+                     patch("agent.onboarding.finalize_audit", side_effect=capture_finalize), \
+                     patch("agent.onboarding.save_session"):
+                    update = _mock_update()
+                    await _run_onboarding_audit(update, session)
+
+                return captured
+            finally:
+                os.unlink(tmp_path)
+
+        result = asyncio.run(_run())
+        assert "entries_creative" in result
+        assert len(result["entries_creative"]) == 1
+        assert result["entries_creative"][0]["first_impression"] == "Striking and bold"
+        assert result["entries_creative"][0]["creative_dna"] == ["geometric precision"]
+        assert result["entries_creative"][0]["never_do"] == ["Never add drop shadows"]
+
     def test_run_onboarding_audit_includes_collection_analysis(self):
         """_run_onboarding_audit should pass collection_analysis and brand_insights to session."""
         import tempfile, os
@@ -279,6 +333,81 @@ class TestGenerateGuidelinesFromAudit:
                     assert "FallbackBrand" in content
 
         asyncio.run(_run())
+
+    def test_prompt_contains_creative_brief_instructions(self):
+        """The prompt template should contain instructions for CREATIVE BRIEF and NEVER DO."""
+        from agent.onboarding import _GUIDELINES_PROMPT
+        assert "CREATIVE BRIEF" in _GUIDELINES_PROMPT
+        assert "NEVER DO" in _GUIDELINES_PROMPT
+
+    def test_creative_section_built_from_entries(self):
+        """Creative section should be built from entries_creative in audit data."""
+        async def _run():
+            from agent.onboarding import generate_guidelines_from_audit
+
+            audit = _sample_audit_data()
+            audit["entries_creative"] = [
+                {
+                    "first_impression": "Bold and electric",
+                    "creative_dna": ["neon energy", "digital native"],
+                    "overall_energy": "cyberpunk optimism",
+                    "what_makes_it_special": "The color contrast is unmistakable",
+                    "never_do": ["Never use pastels", "Avoid serif fonts"],
+                    "character_system": "A rebellious hacker with a heart of gold",
+                }
+            ]
+            session = _mock_session(audit=audit)
+            rec = _mock_strategy()
+
+            captured_prompt = {}
+            mock_response = MagicMock()
+            mock_response.content = [MagicMock(text="# Guidelines\n")]
+
+            with patch("agent.onboarding.anthropic.AsyncAnthropic") as mock_cls:
+                mock_client = AsyncMock()
+                async def capture_create(**kwargs):
+                    captured_prompt["messages"] = kwargs.get("messages", [])
+                    return mock_response
+                mock_client.messages.create = capture_create
+                mock_cls.return_value = mock_client
+                await generate_guidelines_from_audit(session, rec)
+
+            return captured_prompt
+
+        result = asyncio.run(_run())
+        user_msg = result["messages"][0]["content"]
+        assert "cyberpunk optimism" in user_msg
+        assert "neon energy" in user_msg
+        assert "Never use pastels" in user_msg
+
+    def test_empty_creative_entries_gracefully_omitted(self):
+        """When no entries_creative, prompt should not contain CREATIVE AUDIT DATA."""
+        async def _run():
+            from agent.onboarding import generate_guidelines_from_audit
+
+            audit = _sample_audit_data()
+            # No entries_creative key
+            session = _mock_session(audit=audit)
+            rec = _mock_strategy()
+
+            captured_prompt = {}
+            mock_response = MagicMock()
+            mock_response.content = [MagicMock(text="# Guidelines\n")]
+
+            with patch("agent.onboarding.anthropic.AsyncAnthropic") as mock_cls:
+                mock_client = AsyncMock()
+                async def capture_create(**kwargs):
+                    captured_prompt["messages"] = kwargs.get("messages", [])
+                    return mock_response
+                mock_client.messages.create = capture_create
+                mock_cls.return_value = mock_client
+                await generate_guidelines_from_audit(session, rec)
+
+            return captured_prompt
+
+        result = asyncio.run(_run())
+        user_msg = result["messages"][0]["content"]
+        assert "CREATIVE AUDIT DATA" not in user_msg
 
     def test_strips_code_fences(self):
         """Code fences around Claude's response should be stripped."""

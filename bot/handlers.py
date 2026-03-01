@@ -1745,6 +1745,18 @@ async def _run_onboarding_audit(update: Update, session: onboarding.OnboardingSe
         inventory = await asset_audit.audit_batch(paths)
         asset_audit.save_inventory(inventory)
 
+        entries_creative = [
+            {
+                "first_impression": e.first_impression,
+                "creative_dna": e.creative_dna,
+                "overall_energy": e.overall_energy,
+                "what_makes_it_special": e.what_makes_it_special,
+                "never_do": e.never_do,
+                "character_system": e.character_system,
+            }
+            for e in inventory.entries
+            if e.first_impression
+        ]
         audit_data = {
             "archetype": inventory.archetype,
             "consolidated_colors": inventory.consolidated_colors,
@@ -1753,6 +1765,7 @@ async def _run_onboarding_audit(update: Update, session: onboarding.OnboardingSe
             "entry_count": len(inventory.entries),
             "collection_analysis": inventory.collection_analysis,
             "brand_insights": inventory.brand_insights,
+            "entries_creative": entries_creative,
         }
         session, response = onboarding.finalize_audit(session, audit_data)
         onboarding.save_session(session)

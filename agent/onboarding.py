@@ -539,6 +539,7 @@ ASSET AUDIT DATA:
 
 {collection_section}
 {insights_section}
+{creative_section}
 
 STRATEGY:
 - Compositor enabled: {compositor_enabled}
@@ -572,6 +573,18 @@ Generate a Markdown document with EXACTLY these sections (use ## headers):
    | Enabled | {compositor_enabled} |
    | Badge text | {badge_text} |
    | Default mode | {default_mode} |
+
+6. ## CREATIVE BRIEF (only if creative audit data is provided)
+   Synthesize the creative_dna, overall_energy, and first_impression data from the creative \
+   audit into a vivid 2-3 sentence creative direction statement. This should read like a \
+   creative director's brief — not a list of keywords. Capture what makes this brand FEEL \
+   different. Include character_system insights if present.
+
+7. ## NEVER DO (only if creative audit data is provided)
+   Bulleted list of creative prohibitions. Source from:
+   - The never_do fields in the creative audit data
+   - Any voice/tone contradictions (e.g. if brand is playful, never use corporate jargon)
+   Keep each bullet actionable and specific. 3-6 items.
 
 Rules:
 - Every color hex in the COLOR PALETTE must come from the audit data. Do NOT invent colors.
@@ -607,6 +620,12 @@ async def generate_guidelines_from_audit(
     if insights:
         insights_section = f"BRAND INSIGHTS:\n{_json.dumps(insights, indent=2)}"
 
+    # Build creative section from entries_creative (Commit C)
+    entries_creative = audit.get("entries_creative", [])
+    creative_section = ""
+    if entries_creative:
+        creative_section = f"CREATIVE AUDIT DATA:\n{_json.dumps(entries_creative, indent=2)}"
+
     prompt = _GUIDELINES_PROMPT.format(
         brand_name=session.brand_name,
         description=session.description,
@@ -616,6 +635,7 @@ async def generate_guidelines_from_audit(
         visual_prefs=_json.dumps(visual_prefs) if visual_prefs else "(none stated)",
         collection_section=collection_section,
         insights_section=insights_section,
+        creative_section=creative_section,
         compositor_enabled="true" if strategy_rec.compositor_enabled else "false",
         badge_text=strategy_rec.badge_text or "(none)",
         default_mode=strategy_rec.default_mode,
