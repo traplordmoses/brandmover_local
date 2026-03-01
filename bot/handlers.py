@@ -927,20 +927,67 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             )
         return
 
-    if not context.user_data.get("awaiting_setup_pdf"):
-        await update.message.reply_text(
-            "Use /setup first if you want to bootstrap brand guidelines from a PDF.",
-        )
-        return
-
     document = update.message.document
     if not document:
         return
 
-    # Check file type
     file_name = document.file_name or ""
-    if not file_name.lower().endswith(".pdf"):
-        await update.message.reply_text("Please send a PDF file (.pdf).")
+    is_pdf = file_name.lower().endswith(".pdf")
+
+    if not is_pdf:
+        await update.message.reply_text(
+            "I can accept PDFs and image files. send a PDF or image to add to your brand."
+        )
+        return
+
+    # Smart PDF handling — save to references, auto-extract if no guidelines exist
+    if not context.user_data.get("awaiting_setup_pdf"):
+        await update.message.chat.send_action("typing")
+        try:
+            tg_file = await document.get_file()
+            refs_dir = Path(settings.BRAND_FOLDER) / "references"
+            refs_dir.mkdir(parents=True, exist_ok=True)
+            ref_path = refs_dir / file_name
+            await tg_file.download_to_drive(str(ref_path))
+
+            guidelines_path = Path(settings.BRAND_FOLDER) / "guidelines.md"
+            if not guidelines_path.exists():
+                # No guidelines yet — auto-extract from PDF
+                await update.message.reply_text(
+                    f"saved <code>{_esc(file_name)}</code> — extracting brand guidelines...",
+                    parse_mode="HTML",
+                )
+                guidelines_md = await guidelines.extract_brand_from_pdf(str(ref_path))
+                if guidelines_md:
+                    guidelines_path.write_text(guidelines_md, encoding="utf-8")
+                    compositor_config.invalidate_cache()
+                    compositor.clear_font_cache()
+                    guidelines.invalidate_brand_context()
+                    preview = guidelines_md[:1500]
+                    if len(guidelines_md) > 1500:
+                        preview += "\n\n[... truncated ...]"
+                    await update.message.reply_text(
+                        f"<b>Guidelines Generated</b> ({len(guidelines_md)} chars)\n\n"
+                        f"<pre>{_esc(preview)}</pre>\n\n"
+                        "you're all set! send me a content request to try it out.",
+                        parse_mode="HTML",
+                    )
+                else:
+                    await update.message.reply_text(
+                        "saved PDF to references but couldn't extract guidelines. try /setup for manual setup."
+                    )
+            else:
+                await update.message.reply_text(
+                    f"saved <code>{_esc(file_name)}</code> to brand references.\n\n"
+                    "you already have brand guidelines. use /setup to rebuild from this PDF.",
+                    parse_mode="HTML",
+                )
+        except Exception as e:
+            logger.error("PDF handling failed: %s", e)
+            await update.message.reply_text(
+                f"failed to process PDF: {_esc(str(e))}",
+                parse_mode="HTML",
+            )
         return
 
     await update.message.chat.send_action("typing")
@@ -950,7 +997,6 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         # Download the PDF
         tg_file = await document.get_file()
         import tempfile
-        from pathlib import Path
 
         with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
             tmp_path = tmp.name
@@ -1017,6 +1063,126 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         )
 
 
+def _merge_extracted(results: list[dict]) -> dict:
+    """Merge multiple ingest extraction results into one deduplicated set."""
+    colors: dict[str, dict] = {}
+    fonts: dict[str, dict] = {}
+    style_keywords: set[str] = set()
+    logo_descriptions: list[str] = []
+
+    for r in results:
+        for c in r.get("colors", []):
+            h = c.get("hex", "")
+            if h and h not in colors:
+                colors[h] = c
+        for f in r.get("fonts", []):
+            family = f.get("family", "")
+            if family and family not in fonts:
+                fonts[family] = f
+        for kw in r.get("style_keywords", []):
+            style_keywords.add(kw)
+        desc = r.get("logo_description", "")
+        if desc and desc not in logo_descriptions:
+            logo_descriptions.append(desc)
+
+    return {
+        "colors": list(colors.values()),
+        "fonts": list(fonts.values()),
+        "style_keywords": sorted(style_keywords),
+        "logo_description": " | ".join(logo_descriptions) if logo_descriptions else "",
+    }
+
+
+async def _process_bulk_upload(context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Process batched photo uploads — auto-ingest if multiple, prompt if single."""
+    job = context.job
+    chat_id = job.chat_id
+    user_id = job.user_id
+
+    batch = context.user_data.pop("_bulk_uploads", [])
+    if not batch:
+        return
+
+    if len(batch) == 1:
+        # Single image — ask what to do
+        await context.bot.send_message(
+            chat_id,
+            "got it. what should i do with this? reply with:\n"
+            "reference / mascot / style <name> / background",
+        )
+        return
+
+    # Multiple images — auto-ingest all
+    count = len(batch)
+    await context.bot.send_message(
+        chat_id,
+        f"received {count} images — analyzing with AI vision...",
+    )
+
+    from agent import ingest
+    import json
+    import shutil
+
+    all_extracted = []
+    for i, path in enumerate(batch, 1):
+        try:
+            await context.bot.send_chat_action(chat_id, "typing")
+            extracted = await ingest.extract_brand_from_image(path)
+            all_extracted.append(extracted)
+        except Exception as e:
+            logger.warning("Ingest failed for image %d: %s", i, e)
+
+    # Save images to brand/references/
+    refs_dir = Path(settings.BRAND_FOLDER) / "references"
+    refs_dir.mkdir(parents=True, exist_ok=True)
+    for i, path in enumerate(batch, 1):
+        try:
+            dest = refs_dir / f"ref_{time.time_ns()}_{i}.jpg"
+            shutil.copy2(path, str(dest))
+        except Exception as e:
+            logger.warning("Failed to save reference image %d: %s", i, e)
+
+    if not all_extracted:
+        await context.bot.send_message(
+            chat_id,
+            f"saved {count} images to brand/references/ but couldn't analyze them.\n"
+            "try /ingest to analyze one at a time.",
+        )
+        return
+
+    merged = _merge_extracted(all_extracted)
+    extracted_text = json.dumps(merged, indent=2)
+    if len(extracted_text) > 3000:
+        extracted_text = extracted_text[:3000] + "\n..."
+
+    await context.bot.send_message(
+        chat_id,
+        f"<b>analyzed {count} images — extracted brand elements:</b>\n"
+        f"<pre>{_esc(extracted_text)}</pre>",
+        parse_mode="HTML",
+    )
+
+    # Diff against guidelines
+    try:
+        report = await ingest.diff_against_guidelines(merged)
+        await context.bot.send_message(
+            chat_id,
+            f"<b>Compliance report:</b>\n{_esc(report)}",
+            parse_mode="HTML",
+        )
+    except Exception as e:
+        logger.warning("Diff against guidelines failed: %s", e)
+
+    # Store for /apply
+    context.user_data["last_ingest_extracted"] = merged
+
+    await context.bot.send_message(
+        chat_id,
+        f"saved {count} images to brand/references/\n"
+        "reply /apply to update your guidelines with the extracted info.",
+    )
+
+
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle photo uploads and image documents as reference images."""
     if not _authorized(update.effective_user.id):
@@ -1036,8 +1202,7 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     else:
         return
 
-    timestamp = int(time.time())
-    tmp_path = str(Path(tempfile.gettempdir()) / f"brandmover_upload_{timestamp}.jpg")
+    tmp_path = str(Path(tempfile.gettempdir()) / f"brandmover_upload_{time.time_ns()}.jpg")
 
     try:
         await tg_file.download_to_drive(tmp_path)
@@ -1206,9 +1371,23 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         else:
             await _handle_pipeline_mode(update, caption)
     else:
-        await update.message.reply_text(
-            "got it. what should i do with this? reply with:\n"
-            "reference / mascot / style <name> / background"
+        # Batch uploads: collect images for 3 seconds, then auto-ingest if bulk
+        batch = context.user_data.setdefault("_bulk_uploads", [])
+        batch.append(tmp_path)
+        chat_id = update.message.chat_id
+        user_id = update.effective_user.id
+
+        # Cancel existing batch timer and reschedule
+        job_name = f"bulk_upload_{user_id}"
+        for job in context.job_queue.get_jobs_by_name(job_name):
+            job.schedule_removal()
+
+        context.job_queue.run_once(
+            _process_bulk_upload,
+            when=3,
+            name=job_name,
+            chat_id=chat_id,
+            user_id=user_id,
         )
 
 
