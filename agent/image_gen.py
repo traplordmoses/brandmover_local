@@ -264,10 +264,6 @@ def select_model(content_type: str, prompt: str) -> tuple[str, str]:
     if _TEXT_OVERLAY_KEYWORDS.search(prompt):
         return _MODELS["nano-banana"], "text overlay requested"
 
-    # Brand assets
-    if ct == "brand_asset" or any(kw in prompt.lower() for kw in ("icon", "logo", "svg")):
-        return _MODELS["recraft-svg"], "brand asset / icon"
-
     # Lifestyle / event photography
     if ct in ("lifestyle", "event") or "photography" in prompt.lower():
         return _MODELS["seedream"], "lifestyle / photography"

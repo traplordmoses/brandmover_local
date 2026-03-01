@@ -265,9 +265,9 @@ class TestSelectModel:
         model, reason = select_model("announcement", "Product launch image")
         assert model == _MODELS["flux"]
 
-    def test_brand_asset_routes_to_recraft(self):
+    def test_brand_asset_routes_to_flux(self):
         model, reason = select_model("brand_asset", "A brand icon")
-        assert model == _MODELS["recraft-svg"]
+        assert model == _MODELS["flux"]
 
     def test_lifestyle_routes_to_seedream(self):
         model, reason = select_model("lifestyle", "Coffee shop scene")
