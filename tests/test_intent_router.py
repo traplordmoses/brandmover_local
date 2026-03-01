@@ -222,6 +222,25 @@ class TestHaikuClassification:
         assert result.intent == "unknown"
         assert result.routed_via == "haiku"
 
+    def test_strips_markdown_code_fences(self):
+        """Haiku sometimes wraps JSON in ```json ... ``` — should still parse."""
+        fenced = '```json\n{"intent": "generate_content", "confidence": 0.85, "parameters": {"topic": "brand vision"}}\n```'
+
+        async def _run():
+            with patch("agent.intent_router.anthropic.AsyncAnthropic") as mock_cls:
+                mock_client = AsyncMock()
+                mock_resp = MagicMock()
+                mock_resp.content = [MagicMock(text=fenced)]
+                mock_client.messages.create = AsyncMock(return_value=mock_resp)
+                mock_cls.return_value = mock_client
+                return await classify_intent("help me with brand vision", _ctx())
+
+        result = asyncio.run(_run())
+        assert result.intent == "generate_content"
+        assert result.confidence == 0.85
+        assert result.parameters.get("topic") == "brand vision"
+        assert result.routed_via == "haiku"
+
     def test_haiku_context_aware_approve_without_draft(self):
         """Haiku returns approve but no draft pending → remap to casual_chat."""
         async def _run():

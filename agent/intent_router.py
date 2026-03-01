@@ -329,6 +329,15 @@ async def _call_haiku(message: str, context: ConversationContext) -> RoutingResu
 
     raw_text = response.content[0].text.strip()
 
+    # Strip markdown code fences (Haiku often wraps JSON in ```json ... ```)
+    if raw_text.startswith("```"):
+        lines = raw_text.split("\n")
+        if lines[0].startswith("```"):
+            lines = lines[1:]
+        if lines and lines[-1].strip() == "```":
+            lines = lines[:-1]
+        raw_text = "\n".join(lines).strip()
+
     try:
         data = json.loads(raw_text)
     except json.JSONDecodeError:
