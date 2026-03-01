@@ -51,6 +51,7 @@ def create_bot() -> Application:
     app.add_handler(CommandHandler("history", handlers.history_command))
     app.add_handler(CommandHandler("analytics", handlers.analytics_command))
     app.add_handler(CommandHandler("template", handlers.template_command))
+    app.add_handler(CommandHandler("template_upload", handlers.template_upload_command))
     app.add_handler(CommandHandler("onboard", handlers.onboard_command))
     app.add_handler(CommandHandler("onboard_cancel", handlers.onboard_cancel_command))
     app.add_handler(CommandHandler("onboard_skip", handlers.onboard_skip_command))

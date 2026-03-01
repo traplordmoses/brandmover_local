@@ -369,6 +369,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         "/analytics — Show approval rates by content type and model\n"
         "/apply — Apply extracted brand info to guidelines\n"
         "/template — Toggle image composition on/off\n"
+        "/template_upload — Upload a custom visual template\n"
         "/onboard — Start conversational brand onboarding\n"
         "/onboard_cancel — Cancel onboarding\n"
         "/library — List or search the asset library\n"
@@ -642,7 +643,9 @@ async def _handle_pipeline_revision(update: Update, pending: dict, feedback_text
         if draft.get("image_prompt") != pending.get("image_prompt"):
             await update.message.chat.send_action("upload_photo")
             content_type = draft.get("content_type", "announcement")
-            image_url = await image_gen.generate_image(draft["image_prompt"], content_type=content_type)
+            from agent import template_memory as _tm
+            template_aspect = _tm.get_aspect_ratio_for_content_type(content_type)
+            image_url = await image_gen.generate_image(draft["image_prompt"], content_type=content_type, aspect_ratio=template_aspect)
 
         # Save revised draft (carry forward auto-post metadata through revisions)
         state.save_pending(
@@ -1235,6 +1238,33 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     # --- Onboarding upload intercept ---
     ob_session = onboarding.get_session(update.effective_user.id)
     if ob_session and ob_session.state == onboarding.OnboardingState.UPLOADS.value:
+        # Check if this looks like a template
+        from agent import template_memory as _tm
+        try:
+            is_tpl = await _tm.detect_if_template(tmp_path)
+        except Exception:
+            is_tpl = False
+        if is_tpl:
+            try:
+                template = await _tm.register_template(tmp_path, name=f"Onboarding Template")
+                regions_str = ", ".join(f"{r.type}" for r in template.regions)
+                await update.message.reply_text(
+                    f"That looks like a template! Registered as <code>{_esc(template.id)}</code> "
+                    f"({template.aspect_ratio}, regions: {_esc(regions_str) or 'none'}).\n"
+                    f"Send more assets, or /onboard_skip when done.",
+                    parse_mode="HTML",
+                )
+            except Exception as e:
+                logger.warning("Onboarding template registration failed: %s", e)
+                # Fall through to normal asset handling
+                ob_session.uploaded_assets.append({"path": tmp_path, "type": "image"})
+                onboarding.save_session(ob_session)
+                count = len(ob_session.uploaded_assets)
+                await update.message.reply_text(
+                    f"Asset {count} received. Send more, or /onboard_skip when done.",
+                )
+            return
+
         ob_session.uploaded_assets.append({"path": tmp_path, "type": "image"})
         onboarding.save_session(ob_session)
         count = len(ob_session.uploaded_assets)
@@ -1243,8 +1273,13 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         )
         return
 
-    # --- /upload asset library intercept ---
+    # --- Template upload intercept ---
     user_data = context.user_data if context else {}
+    if user_data.get("awaiting_template"):
+        await _handle_template_upload(update, context, tmp_path)
+        return
+
+    # --- /upload asset library intercept ---
     if user_data.get("awaiting_asset_upload"):
         try:
             from agent import asset_audit
@@ -1824,7 +1859,24 @@ async def _run_onboarding_strategy(update: Update, session: onboarding.Onboardin
 
 
 async def _maybe_compose(draft: dict, image_url: str, content_type: str):
-    """Compositor guard. Returns (photo_to_send, composed_bytes_or_None)."""
+    """Compositor guard. Returns (photo_to_send, composed_bytes_or_None).
+
+    Priority chain: template > compositor > raw.
+    """
+    from agent import template_memory as _tm
+
+    # Priority 1: Template
+    try:
+        memory = _tm.TemplateMemory()
+        template = memory.get_template_for_content_type(content_type)
+        if template:
+            composed = await _tm.apply_template(template, image_url, draft)
+            if composed:
+                return composed, composed
+    except Exception as e:
+        logger.debug("Template composition failed, falling through: %s", e)
+
+    # Priority 2: Compositor
     cfg = _cc.get_config()
     if not cfg.compositor_enabled:
         return image_url, None
@@ -1848,13 +1900,27 @@ async def template_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         status = "ON" if cfg.compositor_enabled else "OFF"
         badge = cfg.badge_text or "(none)"
         mode = cfg.default_mode
+
+        # Show active templates
+        from agent import template_memory as _tm
+        memory = _tm.TemplateMemory()
+        templates = memory.list_templates()
+        tpl_lines = ""
+        if templates:
+            tpl_lines = "\n\n<b>Active Templates:</b>\n"
+            for t in templates:
+                types_str = ", ".join(t.content_types) if t.content_types else "all"
+                tpl_lines += f"- <code>{_esc(t.id)}</code> {_esc(t.name)} ({t.aspect_ratio}, {types_str})\n"
+
         await update.message.reply_text(
             f"<b>Compositor Status</b>\n\n"
             f"Enabled: <b>{status}</b>\n"
             f"Badge: <code>{_esc(badge)}</code>\n"
             f"Mode: <code>{_esc(mode)}</code>\n\n"
             f"<code>/template on</code> — enable\n"
-            f"<code>/template off</code> — disable",
+            f"<code>/template off</code> — disable\n"
+            f"<code>/template_upload</code> — upload a custom template"
+            f"{tpl_lines}",
             parse_mode="HTML",
         )
         return
@@ -1903,6 +1969,57 @@ async def template_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     )
 
 
+async def template_upload_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /template_upload — start template upload flow."""
+    if not _authorized(update.effective_user.id):
+        return
+
+    context.user_data["awaiting_template"] = True
+    await update.message.reply_text(
+        "Send me a template image (frame, mockup, bordered layout).\n"
+        "I'll analyze it and register it for future posts.",
+    )
+
+
+async def _handle_template_upload(update: Update, context: ContextTypes.DEFAULT_TYPE, tmp_path: str) -> None:
+    """Process a template image upload — analyze and register."""
+    from agent import template_memory as _tm
+
+    context.user_data["awaiting_template"] = False
+    await update.message.chat.send_action("typing")
+    await update.message.reply_text("Analyzing template...")
+
+    # Copy to templates dir
+    templates_dir = Path(settings.BRAND_FOLDER) / "templates"
+    templates_dir.mkdir(parents=True, exist_ok=True)
+    dest = templates_dir / f"template_{int(time.time())}.png"
+    try:
+        _PILImage.open(tmp_path).convert("RGBA").save(str(dest), "PNG")
+    except Exception as e:
+        await update.message.reply_text(f"Failed to process image: {_esc(str(e))}", parse_mode="HTML")
+        return
+
+    try:
+        template = await _tm.register_template(
+            str(dest),
+            name=f"Template {int(time.time()) % 10000}",
+        )
+
+        regions_str = ", ".join(f"{r.type} ({r.width}x{r.height})" for r in template.regions)
+        await update.message.reply_text(
+            f"<b>Template Registered</b>\n\n"
+            f"ID: <code>{_esc(template.id)}</code>\n"
+            f"Size: {template.width}x{template.height} ({template.aspect_ratio})\n"
+            f"Regions: {_esc(regions_str) or 'none detected'}\n"
+            f"Notes: {_esc(template.analysis_notes or 'none')}\n\n"
+            f"This template will be used for future posts.",
+            parse_mode="HTML",
+        )
+    except Exception as e:
+        logger.error("Template registration failed: %s", e)
+        await update.message.reply_text(f"Template analysis failed: {_esc(str(e))}", parse_mode="HTML")
+
+
 async def _handle_pipeline_mode(update: Update, request: str) -> None:
     """Run the existing multi-step pipeline for a content request."""
     await update.message.chat.send_action("typing")
@@ -1943,7 +2060,9 @@ async def _handle_pipeline_mode(update: Update, request: str) -> None:
         if should_gen:
             await update.message.chat.send_action("upload_photo")
             content_type = draft.get("content_type", "announcement")
-            image_url = await image_gen.generate_image(draft["image_prompt"], content_type=content_type)
+            from agent import template_memory as _tm
+            template_aspect = _tm.get_aspect_ratio_for_content_type(content_type)
+            image_url = await image_gen.generate_image(draft["image_prompt"], content_type=content_type, aspect_ratio=template_aspect)
             if not image_url:
                 await update.message.reply_text(
                     "Image generation failed — sending text draft only.",
