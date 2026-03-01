@@ -460,42 +460,99 @@ def _draw_accent_zone(
 
 
 # ---------------------------------------------------------------------------
-# Template generation — full pipeline
+# Layout serialization — convert to/from dicts for context storage
 # ---------------------------------------------------------------------------
 
-async def generate_template_from_reference(
-    image_path: str,
-    name: str | None = None,
-) -> tuple[BrandTemplate, Image.Image]:
-    """Analyze a reference image layout, render a branded template, and register it.
+def layout_to_dict(layout: LayoutAnalysis) -> dict:
+    """Serialize LayoutAnalysis to a JSON-safe dict for storing in user_data."""
+    return {
+        "canvas_width": layout.canvas_width,
+        "canvas_height": layout.canvas_height,
+        "layout_pattern": layout.layout_pattern,
+        "zones": [
+            {
+                "type": z.type, "x": z.x, "y": z.y,
+                "width": z.width, "height": z.height,
+                "description": z.description, "style_notes": z.style_notes,
+            }
+            for z in layout.zones
+        ],
+    }
 
-    Returns (BrandTemplate, rendered_image).
-    """
-    # 1. Analyze layout
-    layout = await analyze_layout(image_path)
-    if not layout.zones:
-        raise ValueError("Could not detect any layout zones in the reference image.")
 
-    logger.info(
-        "Layout analysis: %dx%d, %d zones, pattern: %s",
-        layout.canvas_width, layout.canvas_height,
-        len(layout.zones), layout.layout_pattern,
+def layout_from_dict(d: dict) -> LayoutAnalysis:
+    """Deserialize a dict back into LayoutAnalysis."""
+    return LayoutAnalysis(
+        canvas_width=d.get("canvas_width", 1280),
+        canvas_height=d.get("canvas_height", 720),
+        layout_pattern=d.get("layout_pattern", ""),
+        zones=[LayoutZone(**z) for z in d.get("zones", [])],
     )
 
-    # 2. Render branded template
-    template_img = render_template(layout)
 
-    # 3. Save template image
-    templates_dir = Path(settings.BRAND_FOLDER) / "templates"
-    templates_dir.mkdir(parents=True, exist_ok=True)
-    tid = str(uuid.uuid4())[:8]
-    template_path = templates_dir / f"generated_{tid}.png"
-    template_img.convert("RGB").save(str(template_path), "PNG")
+# ---------------------------------------------------------------------------
+# Layout adjustment — Claude modifies zones based on user feedback
+# ---------------------------------------------------------------------------
 
-    # 4. Build regions list for TemplateMemory from layout zones
+_ADJUST_PROMPT = """\
+You are adjusting a template layout based on user feedback.
+
+Current layout (JSON):
+{layout_json}
+
+User feedback: "{feedback}"
+
+Apply the user's requested changes to the layout. You may:
+- Move zones (change x, y)
+- Resize zones (change width, height)
+- Add new zones
+- Remove zones
+- Change zone types
+- Modify canvas dimensions
+
+Return the COMPLETE updated layout as valid JSON with the same structure.
+Return ONLY the JSON, no markdown formatting."""
+
+
+async def adjust_layout(layout: LayoutAnalysis, feedback: str) -> LayoutAnalysis:
+    """Use Claude to adjust a layout based on user feedback text."""
+    layout_json = json.dumps(layout_to_dict(layout), indent=2)
+    prompt = _ADJUST_PROMPT.format(layout_json=layout_json, feedback=feedback)
+
+    client = anthropic.AsyncAnthropic(api_key=settings.ANTHROPIC_API_KEY)
+    response = await client.messages.create(
+        model="claude-sonnet-4-20250514",
+        max_tokens=2000,
+        messages=[{"role": "user", "content": prompt}],
+    )
+
+    raw = response.content[0].text.strip()
+    try:
+        parsed = _parse_json_response(raw)
+    except (json.JSONDecodeError, IndexError):
+        logger.warning("Layout adjustment returned non-JSON: %s", raw[:200])
+        return layout  # Return unchanged on failure
+
+    zones = [LayoutZone(**z) for z in parsed.get("zones", [])]
+    if not zones:
+        return layout  # Don't wipe zones on bad response
+
+    return LayoutAnalysis(
+        canvas_width=parsed.get("canvas_width", layout.canvas_width),
+        canvas_height=parsed.get("canvas_height", layout.canvas_height),
+        layout_pattern=parsed.get("layout_pattern", layout.layout_pattern),
+        zones=zones,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Helpers — region building and aspect ratio
+# ---------------------------------------------------------------------------
+
+def _build_regions(layout: LayoutAnalysis) -> list[TemplateRegion]:
+    """Map layout zones to TemplateMemory regions."""
     regions = []
     for z in layout.zones:
-        # Map zone types to template region types
         if z.type == "image":
             regions.append(TemplateRegion(
                 type="image", x=z.x, y=z.y,
@@ -514,43 +571,102 @@ async def generate_template_from_reference(
                 width=z.width, height=z.height,
                 description=z.description,
             ))
+    return regions
 
-    # 5. Compute aspect ratio
+
+def _compute_aspect_ratio(width: int, height: int) -> str:
+    """Compute a human-readable aspect ratio string."""
+    if not width or not height:
+        return ""
+    ratio = width / height
+    if abs(ratio - 16 / 9) < 0.1:
+        return "16:9"
+    if abs(ratio - 9 / 16) < 0.1:
+        return "9:16"
+    if abs(ratio - 1.0) < 0.1:
+        return "1:1"
+    if abs(ratio - 4 / 3) < 0.1:
+        return "4:3"
+    return f"{width}:{height}"
+
+
+# ---------------------------------------------------------------------------
+# Template generation — split into analyze+render and register phases
+# ---------------------------------------------------------------------------
+
+async def analyze_and_render(image_path: str) -> tuple[LayoutAnalysis, Image.Image]:
+    """Phase 1: Analyze reference image and render a branded template preview.
+
+    Returns (layout, rendered_image) without registering anything.
+    """
+    layout = await analyze_layout(image_path)
+    if not layout.zones:
+        raise ValueError("Could not detect any layout zones in the reference image.")
+
+    logger.info(
+        "Layout analysis: %dx%d, %d zones, pattern: %s",
+        layout.canvas_width, layout.canvas_height,
+        len(layout.zones), layout.layout_pattern,
+    )
+
+    template_img = render_template(layout)
+    return layout, template_img
+
+
+def render_and_save(layout: LayoutAnalysis) -> tuple[Image.Image, str]:
+    """Re-render a layout and save to disk. Returns (image, path)."""
+    template_img = render_template(layout)
+    templates_dir = Path(settings.BRAND_FOLDER) / "templates"
+    templates_dir.mkdir(parents=True, exist_ok=True)
+    save_path = templates_dir / f"preview_{uuid.uuid4().hex[:8]}.png"
+    template_img.convert("RGB").save(str(save_path), "PNG")
+    return template_img, str(save_path)
+
+
+def register_layout(
+    layout: LayoutAnalysis,
+    image_path: str,
+    name: str | None = None,
+) -> BrandTemplate:
+    """Phase 2: Register a finalized layout as a template in TemplateMemory."""
+    tid = str(uuid.uuid4())[:8]
     cw, ch = layout.canvas_width, layout.canvas_height
-    if cw and ch:
-        ratio = cw / ch
-        if abs(ratio - 16 / 9) < 0.1:
-            aspect_ratio = "16:9"
-        elif abs(ratio - 9 / 16) < 0.1:
-            aspect_ratio = "9:16"
-        elif abs(ratio - 1.0) < 0.1:
-            aspect_ratio = "1:1"
-        elif abs(ratio - 4 / 3) < 0.1:
-            aspect_ratio = "4:3"
-        else:
-            aspect_ratio = f"{cw}:{ch}"
-    else:
-        aspect_ratio = ""
-
     template_name = name or f"Generated {tid}"
+
     template = BrandTemplate(
         id=tid,
         name=template_name,
-        path=str(template_path),
+        path=image_path,
         width=cw,
         height=ch,
-        regions=regions,
-        aspect_ratio=aspect_ratio,
+        regions=_build_regions(layout),
+        aspect_ratio=_compute_aspect_ratio(cw, ch),
         content_types=[],  # Universal
         analysis_notes=f"Generated from reference. Layout: {layout.layout_pattern}",
     )
 
-    # 6. Register
     memory = TemplateMemory()
     memory.add_template(template)
 
     logger.info(
-        "Generated template '%s' (%dx%d, %d regions) from reference",
-        template_name, cw, ch, len(regions),
+        "Registered template '%s' (%dx%d, %d regions) from reference",
+        template_name, cw, ch, len(template.regions),
     )
+    return template
+
+
+async def generate_template_from_reference(
+    image_path: str,
+    name: str | None = None,
+) -> tuple[BrandTemplate, Image.Image]:
+    """Full pipeline: analyze, render, register. Used by non-interactive callers."""
+    layout, template_img = await analyze_and_render(image_path)
+
+    templates_dir = Path(settings.BRAND_FOLDER) / "templates"
+    templates_dir.mkdir(parents=True, exist_ok=True)
+    tid = str(uuid.uuid4())[:8]
+    template_path = templates_dir / f"generated_{tid}.png"
+    template_img.convert("RGB").save(str(template_path), "PNG")
+
+    template = register_layout(layout, str(template_path), name)
     return template, template_img

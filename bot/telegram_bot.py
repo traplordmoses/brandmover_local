@@ -70,6 +70,9 @@ def create_bot() -> Application:
     # Draft inline buttons (Approve/Reject/Edit/Reroll)
     app.add_handler(CallbackQueryHandler(handlers.draft_callback, pattern=r"^draft_"))
 
+    # Template-from-reference inline buttons (Save/Adjust/Discard)
+    app.add_handler(CallbackQueryHandler(handlers.tplref_callback, pattern=r"^tplref_"))
+
     # Photo uploads (reference images)
     app.add_handler(
         MessageHandler(filters.PHOTO, handlers.handle_photo)

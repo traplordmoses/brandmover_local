@@ -1509,6 +1509,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     if not request:
         return
 
+    # Template-from-reference adjustment intercept
+    tplref = (context.user_data or {}).get("tplref_pending") if context else None
+    if isinstance(tplref, dict) and "layout" in tplref:
+        await _handle_tplref_adjustment(update, context, request)
+        return
+
     # Onboarding intercept — handle messages during onboarding flow (highest priority)
     session = onboarding.get_session(update.effective_user.id)
     if session and session.state not in (
@@ -2064,7 +2070,7 @@ async def template_from_reference_command(update: Update, context: ContextTypes.
 
 
 async def _handle_template_from_reference(update: Update, context: ContextTypes.DEFAULT_TYPE, tmp_path: str) -> None:
-    """Generate a branded template from a reference image."""
+    """Generate a branded template preview from a reference image (no registration yet)."""
     from agent import template_generator as _tg
 
     context.user_data["awaiting_template_from_ref"] = False
@@ -2072,36 +2078,184 @@ async def _handle_template_from_reference(update: Update, context: ContextTypes.
     await update.message.reply_text("Analyzing layout and generating branded template...")
 
     try:
-        user_name = (context.user_data or {}).get("template_from_ref_name", "")
-        template, rendered_img = await _tg.generate_template_from_reference(
-            tmp_path,
-            name=user_name or None,
-        )
+        layout, rendered_img = await _tg.analyze_and_render(tmp_path)
 
-        # Send the rendered template as a photo
-        buf = io.BytesIO()
-        rendered_img.convert("RGB").save(buf, "PNG")
-        buf.seek(0)
+        # Store layout and metadata in user_data for adjustments
+        context.user_data["tplref_pending"] = {
+            "layout": _tg.layout_to_dict(layout),
+            "name": (context.user_data or {}).get("template_from_ref_name", ""),
+            "image_path": None,  # Will be set on save
+        }
 
-        regions_str = ", ".join(f"{r.type} ({r.width}x{r.height})" for r in template.regions)
-        await update.message.reply_photo(
-            photo=buf,
-            caption=(
-                f"<b>Template Generated from Reference</b>\n\n"
-                f"Name: <b>{_esc(template.name)}</b>\n"
-                f"ID: <code>{_esc(template.id)}</code>\n"
-                f"Size: {template.width}x{template.height} ({template.aspect_ratio})\n"
-                f"Regions: {_esc(regions_str) or 'none detected'}\n"
-                f"Notes: {_esc(template.analysis_notes or 'none')}\n\n"
-                f"This template will be used for future posts."
-            ),
-            parse_mode="HTML",
-        )
+        await _send_template_preview(update, context, layout, rendered_img)
     except Exception as e:
         logger.error("Template generation from reference failed: %s", e)
+        context.user_data.pop("tplref_pending", None)
         await update.message.reply_text(
             f"Template generation failed: {_esc(str(e))}",
             parse_mode="HTML",
+        )
+
+
+async def _send_template_preview(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    layout,
+    rendered_img,
+) -> None:
+    """Send a template preview with inline save/adjust/discard buttons."""
+    from agent import template_generator as _tg
+
+    buf = io.BytesIO()
+    rendered_img.convert("RGB").save(buf, "PNG")
+    buf.seek(0)
+
+    regions = _tg._build_regions(layout)
+    regions_str = ", ".join(f"{r.type} ({r.width}x{r.height})" for r in regions)
+    aspect = _tg._compute_aspect_ratio(layout.canvas_width, layout.canvas_height)
+    name = (context.user_data.get("tplref_pending") or {}).get("name", "")
+
+    caption = (
+        f"<b>Template Preview</b>\n\n"
+        f"Size: {layout.canvas_width}x{layout.canvas_height} ({aspect})\n"
+        f"Regions: {_esc(regions_str) or 'none detected'}\n"
+        f"Layout: {_esc(layout.layout_pattern or 'detected')}\n"
+    )
+    if name:
+        caption += f"Name: <b>{_esc(name)}</b>\n"
+    caption += "\nTap <b>Save</b> to register, <b>Adjust</b> to modify, or reply with feedback."
+
+    buttons = InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("Save Template", callback_data="tplref_save"),
+            InlineKeyboardButton("Adjust", callback_data="tplref_adjust"),
+            InlineKeyboardButton("Discard", callback_data="tplref_discard"),
+        ]
+    ])
+
+    await update.message.reply_photo(
+        photo=buf,
+        caption=caption,
+        parse_mode="HTML",
+        reply_markup=buttons,
+    )
+
+
+async def _handle_tplref_adjustment(update: Update, context: ContextTypes.DEFAULT_TYPE, feedback: str) -> None:
+    """Apply user feedback to the pending template-from-reference layout."""
+    from agent import template_generator as _tg
+
+    pending = context.user_data.get("tplref_pending")
+    if not pending:
+        return
+
+    # "looks good" / "save" / "done" → treat as save
+    lower = feedback.lower().strip()
+    if lower in ("looks good", "save", "save it", "done", "perfect", "yes", "keep it", "ok", "okay"):
+        layout = _tg.layout_from_dict(pending["layout"])
+        name = pending.get("name") or None
+        rendered_img, saved_path = _tg.render_and_save(layout)
+        template = _tg.register_layout(layout, saved_path, name)
+        context.user_data.pop("tplref_pending", None)
+
+        regions_str = ", ".join(f"{r.type} ({r.width}x{r.height})" for r in template.regions)
+        await update.message.reply_text(
+            f"<b>Template Saved</b>\n\n"
+            f"Name: <b>{_esc(template.name)}</b>\n"
+            f"ID: <code>{_esc(template.id)}</code>\n"
+            f"Size: {template.width}x{template.height} ({template.aspect_ratio})\n"
+            f"Regions: {_esc(regions_str) or 'none detected'}\n\n"
+            f"This template will be used for future posts.",
+            parse_mode="HTML",
+        )
+        return
+
+    # "discard" / "cancel" → discard
+    if lower in ("discard", "cancel", "nevermind", "never mind", "nah", "no"):
+        context.user_data.pop("tplref_pending", None)
+        await update.message.reply_text("Template discarded.")
+        return
+
+    # Otherwise treat as adjustment feedback
+    await update.message.chat.send_action("typing")
+    await update.message.reply_text("Adjusting template...")
+
+    try:
+        layout = _tg.layout_from_dict(pending["layout"])
+        adjusted = await _tg.adjust_layout(layout, feedback)
+
+        # Re-render
+        rendered_img = _tg.render_template(adjusted)
+
+        # Update stored layout
+        pending["layout"] = _tg.layout_to_dict(adjusted)
+        context.user_data["tplref_pending"] = pending
+
+        await _send_template_preview(update, context, adjusted, rendered_img)
+    except Exception as e:
+        logger.error("Template adjustment failed: %s", e)
+        await update.message.reply_text(
+            f"Adjustment failed: {_esc(str(e))}\nYou can try again or tap Save/Discard.",
+            parse_mode="HTML",
+        )
+
+
+async def tplref_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle inline button presses for template-from-reference previews."""
+    from agent import template_generator as _tg
+
+    query = update.callback_query
+    await query.answer()
+
+    if not _authorized(query.from_user.id):
+        return
+
+    action = query.data.replace("tplref_", "")
+    pending = (context.user_data or {}).get("tplref_pending")
+
+    if not pending:
+        await query.message.reply_text("No template preview pending.")
+        return
+
+    if action == "save":
+        layout = _tg.layout_from_dict(pending["layout"])
+        name = pending.get("name") or None
+
+        # Render final version and save
+        rendered_img, saved_path = _tg.render_and_save(layout)
+        template = _tg.register_layout(layout, saved_path, name)
+
+        context.user_data.pop("tplref_pending", None)
+
+        regions_str = ", ".join(f"{r.type} ({r.width}x{r.height})" for r in template.regions)
+        await query.edit_message_caption(
+            caption=(
+                f"<b>Template Saved</b>\n\n"
+                f"Name: <b>{_esc(template.name)}</b>\n"
+                f"ID: <code>{_esc(template.id)}</code>\n"
+                f"Size: {template.width}x{template.height} ({template.aspect_ratio})\n"
+                f"Regions: {_esc(regions_str) or 'none detected'}\n\n"
+                f"This template will be used for future posts."
+            ),
+            parse_mode="HTML",
+            reply_markup=None,
+        )
+
+    elif action == "adjust":
+        await query.message.reply_text(
+            "What should I adjust? Reply with your feedback, e.g.:\n"
+            "<i>make the image area larger</i>\n"
+            "<i>move the text higher</i>\n"
+            "<i>add a footer bar</i>",
+            parse_mode="HTML",
+        )
+
+    elif action == "discard":
+        context.user_data.pop("tplref_pending", None)
+        await query.edit_message_caption(
+            caption="<b>Template discarded.</b>",
+            parse_mode="HTML",
+            reply_markup=None,
         )
 
 
