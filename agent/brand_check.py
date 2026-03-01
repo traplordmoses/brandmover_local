@@ -109,20 +109,45 @@ def _build_inventory_context() -> str:
     return "\n\n".join(parts) if parts else ""
 
 
-def _build_check_prompt(guidelines_context: str, inventory_context: str = "") -> str:
+def _load_raw_guidelines() -> str:
+    """Load the full raw guidelines.md text (includes CREATIVE BRIEF, NEVER DO, MASCOT, etc.)."""
+    guidelines_path = Path(settings.BRAND_FOLDER) / "guidelines.md"
+    if not guidelines_path.exists():
+        return ""
+    try:
+        return guidelines_path.read_text(encoding="utf-8")
+    except OSError:
+        return ""
+
+
+def _build_check_prompt(guidelines_context: str, inventory_context: str = "",
+                        raw_guidelines: str = "") -> str:
     """Build the structured prompt for the single Claude Vision compliance call."""
     inventory_block = ""
     if inventory_context:
         inventory_block = (
             f"\n\nASSET LIBRARY CONTEXT:\n{inventory_context}\n\n"
-            "When checking compliance, consider that this image may be from the brand's own "
-            "asset library. Assets that match the brand's established visual patterns should "
-            "score higher even if guidelines.md descriptions are approximate."
+            "The brand guidelines were derived from the brand's own uploaded assets. "
+            "If this image shares visual DNA with the brand's established identity "
+            "(same character designs, same color relationships, same artistic style), "
+            "it IS brand-compliant."
+        )
+
+    raw_guidelines_block = ""
+    if raw_guidelines:
+        raw_guidelines_block = (
+            f"\n\nFULL BRAND GUIDELINES DOCUMENT:\n{raw_guidelines}\n\n"
+            "Use ALL sections above (including CREATIVE BRIEF, NEVER DO, MASCOT, "
+            "CHARACTER SYSTEM) when evaluating brand compliance — not just colors and fonts."
         )
 
     return (
         "You are a brand compliance auditor. Analyze this image against the brand "
         "guidelines below and return a structured JSON compliance report.\n\n"
+        "IMPORTANT: Brand compliance means 'does this look like it belongs with the rest "
+        "of the brand's visual identity' — not 'does every pixel match a hex code.' "
+        "Evaluate the overall visual DNA: character designs, color relationships, "
+        "artistic style, and energy.\n\n"
         f"BRAND GUIDELINES:\n{guidelines_context}\n\n"
         "Analyze the image and return ONLY valid JSON with this exact structure:\n"
         "{\n"
@@ -164,12 +189,17 @@ def _build_check_prompt(guidelines_context: str, inventory_context: str = "") ->
         '- "pass": fully on-brand for this dimension\n'
         '- "partial": mostly on-brand with minor deviations\n'
         '- "fail": significant deviation from brand guidelines\n'
-        "- For colors, compare found hex values against the brand palette hex values. "
-        "A color is on-palette if it's within a close perceptual range of any brand color.\n"
-        "- For typography, if no text is visible, verdict is \"pass\" with a note.\n"
-        "- For brand_elements, if no logo or text is expected/visible, verdict is \"pass\".\n\n"
+        "- For colors, a color is on-palette if it's within a close perceptual range "
+        "of any brand color OR if it's a natural variation of the brand's color family. "
+        "Do not fail colors for minor shade differences.\n"
+        "- For typography, if no text is visible, verdict is \"pass\" with a note. "
+        "If guidelines say \"defined by brand assets\" for typography, verdict is \"pass\".\n"
+        "- For brand_elements, if no logo or text is expected/visible, verdict is \"pass\".\n"
+        "- For visual_style, evaluate whether the image shares the same artistic DNA "
+        "as described in the guidelines (character style, illustration approach, energy).\n\n"
         "Return ONLY the JSON, no markdown formatting or code fences."
         + inventory_block
+        + raw_guidelines_block
     )
 
 
@@ -354,7 +384,8 @@ async def check_brand_compliance(image_path: str) -> dict:
     cfg = compositor_config.get_config()
     guidelines_context = _build_guidelines_context(cfg)
     inventory_context = _build_inventory_context()
-    prompt = _build_check_prompt(guidelines_context, inventory_context)
+    raw_guidelines = _load_raw_guidelines()
+    prompt = _build_check_prompt(guidelines_context, inventory_context, raw_guidelines)
 
     image_data, media_type = _encode_image(image_path)
 

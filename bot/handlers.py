@@ -2982,7 +2982,11 @@ async def _run_brand_check(update: Update, tg_file) -> None:
 # ---------------------------------------------------------------------------
 
 async def regen_guidelines_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Handle /regen_guidelines — regenerate guidelines.md from asset_inventory.json."""
+    """Handle /regen_guidelines — regenerate guidelines.md from asset_inventory.json.
+
+    If no asset_inventory.json exists, auto-scans brand/references/ and brand/assets/
+    for images, runs audit_batch() to create the inventory, then regenerates.
+    """
     if not _authorized(update.effective_user.id):
         return
 
@@ -2990,17 +2994,73 @@ async def regen_guidelines_command(update: Update, context: ContextTypes.DEFAULT
     from agent.strategy import StrategyRecommendation
 
     inv_path = Path(settings.BRAND_FOLDER) / "asset_inventory.json"
-    if not inv_path.exists():
-        await update.message.reply_text(
-            "No asset inventory found. Upload brand assets first via /upload or /onboard."
-        )
-        return
 
-    await update.message.chat.send_action("typing")
+    # Auto-audit if no inventory exists but reference images are available
+    if not inv_path.exists():
+        image_exts = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".tiff"}
+        scan_dirs = [
+            Path(settings.BRAND_FOLDER) / "references",
+            Path(settings.BRAND_FOLDER) / "assets",
+        ]
+        image_paths: list[str] = []
+        for scan_dir in scan_dirs:
+            if scan_dir.exists():
+                for f in scan_dir.rglob("*"):
+                    if f.is_file() and f.suffix.lower() in image_exts:
+                        image_paths.append(str(f))
+
+        if not image_paths:
+            await update.message.reply_text(
+                "No asset inventory found and no images in brand/references/ or brand/assets/.\n"
+                "Upload brand assets first via /upload or /onboard."
+            )
+            return
+
+        await update.message.chat.send_action("typing")
+        await update.message.reply_text(
+            f"No asset inventory found. Auto-auditing {len(image_paths)} image(s) "
+            f"from brand references..."
+        )
+
+        try:
+            inventory = await asset_audit.audit_batch(image_paths)
+            asset_audit.save_inventory(inventory)
+        except Exception as e:
+            logger.error("Auto-audit failed during regen_guidelines: %s", e)
+            await update.message.reply_text(
+                f"Auto-audit failed: {_esc(str(e))}", parse_mode="HTML"
+            )
+            return
+    else:
+        await update.message.chat.send_action("typing")
+        inventory = asset_audit.load_inventory()
+        if inventory is None:
+            await update.message.reply_text(
+                "Asset inventory file exists but couldn't be loaded. Try /upload to re-audit."
+            )
+            return
+
     await update.message.reply_text("Regenerating guidelines from your asset inventory...")
 
     try:
-        inventory = asset_audit.load_inventory()
+        # Build entries_creative from inventory entries
+        entries_creative = []
+        for entry in inventory.entries:
+            ec: dict = {}
+            if entry.first_impression:
+                ec["first_impression"] = entry.first_impression
+            if entry.creative_dna:
+                ec["creative_dna"] = entry.creative_dna
+            if entry.overall_energy:
+                ec["overall_energy"] = entry.overall_energy
+            if entry.what_makes_it_special:
+                ec["what_makes_it_special"] = entry.what_makes_it_special
+            if entry.never_do:
+                ec["never_do"] = entry.never_do
+            if entry.character_system:
+                ec["character_system"] = entry.character_system
+            if ec:
+                entries_creative.append(ec)
 
         # Build a minimal session with inventory data
         session = onboarding.OnboardingSession(
@@ -3016,6 +3076,7 @@ async def regen_guidelines_command(update: Update, context: ContextTypes.DEFAULT
                 "entry_count": len(inventory.entries),
                 "collection_analysis": inventory.collection_analysis,
                 "brand_insights": inventory.brand_insights,
+                "entries_creative": entries_creative,
             },
         )
 
