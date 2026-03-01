@@ -1415,10 +1415,19 @@ async def _handle_agent_mode(update: Update, request: str) -> None:
         )
 
         if not result.draft:
+            # Agent gave a conversational response (strategy, advice, etc.)
+            # rather than a structured social media draft — show it cleanly
+            text = result.final_text or "I processed your request but didn't generate a draft."
+            # Truncate for Telegram's 4096 char limit, leaving room for footer
+            max_len = 3900
+            if len(text) > max_len:
+                text = text[:max_len] + "..."
+            footer = (
+                f"\n\n<i>({result.turns_used} turns, {result.total_time:.1f}s"
+                f"{', tools: ' + ', '.join(result.tool_calls_made) if result.tool_calls_made else ''})</i>"
+            )
             await update.message.reply_text(
-                f"Agent finished but couldn't produce a structured draft.\n\n"
-                f"<pre>{_esc(result.final_text[:1000])}</pre>\n\n"
-                f"({result.turns_used} turns, {result.total_time}s, tools: {', '.join(result.tool_calls_made)})",
+                f"{text}{footer}",
                 parse_mode="HTML",
             )
             return
