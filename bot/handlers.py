@@ -3098,13 +3098,25 @@ async def regen_guidelines_command(update: Update, context: ContextTypes.DEFAULT
             platforms=["x"],
         )
 
-        guidelines_md = await onboarding.generate_guidelines_from_audit(session, rec)
+        # Load existing guidelines for merge (preserves voice/tone/positioning)
         guidelines_path = Path(settings.BRAND_FOLDER) / "guidelines.md"
+        existing_guidelines = ""
+        if guidelines_path.exists():
+            try:
+                existing_guidelines = guidelines_path.read_text(encoding="utf-8")
+            except OSError:
+                pass
+
+        guidelines_md = await onboarding.generate_guidelines_from_audit(
+            session, rec, existing_guidelines=existing_guidelines,
+        )
         guidelines_path.write_text(guidelines_md, encoding="utf-8")
         compositor_config.invalidate_cache()
 
+        mode = "merged with" if existing_guidelines else "generated from"
         await update.message.reply_text(
-            "guidelines.md has been regenerated from your asset inventory.\n\n"
+            f"guidelines.md has been {mode} your asset inventory.\n"
+            f"Voice/tone/positioning preserved, visuals updated from assets.\n\n"
             "Use /brand to review the updated config.",
         )
     except Exception as e:

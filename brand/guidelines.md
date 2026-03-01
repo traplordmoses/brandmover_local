@@ -65,29 +65,29 @@ FOID sits at the intersection of meme culture and on-chain permanence. It treats
 
 ## COLORS
 
-| Color | Name | Hex | RGB | Notes |
-|-------|------|-----|-----|-------|
-| Primary | Aqua | `#72e1ff` | (114, 225, 255) | Main accent — used for glow, highlights, interactive elements |
-| Secondary | Cyan | `#00d0ff` | (0, 208, 255) | Brighter variant for emphasis |
-| Accent 1 | Candy Pink | `#ffb3d9` | (255, 179, 217) | Warm contrast accent — mascot, CTAs |
-| Accent 2 | Lavender | `#cdb7ff` | (205, 183, 255) | Soft accent — secondary UI, tags |
-| Accent 3 | Periwinkle | `#8faaf2` | (143, 170, 242) | Mid-tone — links, subtle highlights |
-| Accent 4 | Mint | `#a8f0d1` | (168, 240, 209) | Fresh accent — success states, positive |
-| Accent 5 | Tangerine | `#ffa552` | (255, 165, 82) | Warm pop — warnings, energy |
-| Background | Midnight | `#0e0f2b` | (14, 15, 43) | Primary dark background |
-| Background Alt | Ocean | `#0b2e4e` | (11, 46, 78) | Lighter dark — cards, panels |
-| Text | White | `#FFFFFF` | (255, 255, 255) | Primary text on dark backgrounds |
-| Gradient Start | Fluent Purple | `#a960ee` | (169, 96, 238) | Gradient: purple → pink → cyan |
-| Gradient Mid | Fluent Pink | `#ff4ecd` | (255, 78, 205) | Used in flowing gradient accents |
-| Gradient End | Fluent Blue | `#00d4ff` | (0, 212, 255) | Matches secondary cyan |
+| Role | Name | Hex | RGB | Notes |
+|------|------|-----|-----|-------|
+| Primary | Hot Pink | `#ff69b4` | (255, 105, 180) | Main brand accent — vibrant energy, emotional content |
+| Primary | Electric Purple | `#8b5fbf` | (139, 95, 191) | Tech/spiritual balance — mystical yet accessible |
+| Primary | Deep Space Blue | `#1a4b8c` | (26, 75, 140) | Foundation color — depth, permanence |
+| Secondary | Electric Blue | `#0066ff` | (0, 102, 255) | Energy accent — action, engagement |
+| Secondary | Neon Pink | `#ff006b` | (255, 0, 107) | High-energy moments — celebrations, alerts |
+| Secondary | Rusty Orange | `#ff6b35` | (255, 107, 53) | Warmth accent — community, human moments |
+| Accent 1 | Cyan | `#00ffff` | (0, 255, 255) | Digital glow — interactive elements, tech |
+| Accent 2 | Forest Green | `#7cb342` | (124, 179, 66) | Growth, success — positive states |
+| Accent 3 | Golden Yellow | `#FFD700` | (255, 215, 0) | Premium moments — achievements, rewards |
+| Background | Deep Night | `#0a0a1a` | (10, 10, 26) | Primary dark background |
+| Background Alt | Midnight Blue | `#1a1a3a` | (26, 26, 58) | Secondary dark — cards, panels |
+| Text | White | `#ffffff` | (255, 255, 255) | Primary text on dark backgrounds |
+| Neutral | Charcoal | `#2d2d2d` | (45, 45, 45) | Mid-tone elements, UI components |
 
 **Color rules:**
-- Midnight (#0e0f2b) is ALWAYS the dominant background. Dark mode only.
-- Aqua (#72e1ff) is the signature glow — use for emphasis, borders, interactive elements
-- The fluent gradient (purple → pink → cyan) is used sparingly for premium elements and borders
-- Glass morphism: translucent panels with backdrop blur over dark backgrounds
-- Never use bright/white backgrounds. Never use flat, unstyled colors.
-- Candy pink is reserved for Foid Mommy and warm/emotional content
+- Deep Night (#0a0a1a) and Midnight Blue (#1a1a3a) are the dominant backgrounds. Dark mode only.
+- Hot Pink (#ff69b4) is the signature glow — use for Foid Mommy, emotional content, community moments
+- Electric Purple (#8b5fbf) bridges tech and spirituality — perfect for ritual content and mystical elements
+- Cyan (#00ffff) creates digital atmosphere — use for interactive elements and tech emphasis
+- The brand lives in the tension between mystical purples/pinks and electric blues/cyans
+- Never use bright/white backgrounds. Always maintain the deep space aesthetic.
 
 ---
 
@@ -97,11 +97,11 @@ FOID sits at the intersection of meme culture and on-chain permanence. It treats
 |-----|------|--------|-------|
 | Display / Headlines | Orbitron | Bold | Uppercase, tracked |
 | Body Text | Inter | Regular/Medium | Sentence case |
-| Terminal / Code | VT323 | Regular | Monospace, pixel aesthetic |
+| Terminal / Code | Defined by brand assets | Regular | Monospace, pixel aesthetic |
 
 - Headlines use Orbitron in ALL CAPS with letter spacing for a sci-fi, techy feel
 - Body text uses Inter for clean readability
-- Terminal/code elements use VT323 for the Y2K pixel aesthetic
+- Terminal/code elements use available monospace fonts for the Y2K pixel aesthetic
 - Never mix more than 2 fonts in a single composition
 - Orbitron is the brand's signature font — always present in branded graphics
 
@@ -125,41 +125,49 @@ FOID sits at the intersection of meme culture and on-chain permanence. It treats
 ## ILLUSTRATION STYLE
 
 **Visual aesthetic:**
-- **Frutiger Aero meets Y2K terminal** — glossy glass surfaces, neon glows, dark deep-space backgrounds
-- Glass morphism: frosted translucent panels with backdrop blur
-- Noise textures overlaid for depth and analog warmth
-- Neon color accents (aqua, pink, purple) against midnight backgrounds
-- Pixel elements and CRT scan lines for retro-digital texture
-- Gradients are flowing, not flat — they should feel like light refracting through glass
+- **Hand-drawn meets 3D digital native** — authentic anime-inspired character design with both polished 3D renders and deliberate MS Paint crudeness
+- Mix of professional 3D character modeling with unpolished, early-internet pixel art aesthetics
+- Anime-influenced warmth and approachability — characters with kawaii eyes, streetwear styling, gaming culture references
+- Digital-first identity with work-in-progress transparency — showing grid lines, T-poses, and raw modeling environments
+- Y2K nostalgia collides with cyberpunk energy — holographic effects, chromatic aberration, neon glitch aesthetics
+- Gaming avatar authenticity over corporate polish — feels like real player characters, not marketing mascots
 
 **Image generation prompt guidance:**
-- "dark midnight background, neon aqua and pink glow, glass morphism panels, Frutiger Aero aesthetic, Y2K digital art style"
-- "deep navy background, cyan neon highlights, glossy translucent surfaces, pixel accents, retro-futuristic"
-- Materials: frosted glass, holographic foil, chrome, translucent plastic, glowing neon tubing
-- Lighting: rim lighting in aqua/cyan, volumetric neon glow, ambient deep blue
-- Avoid: flat colors, white backgrounds, corporate stock photo look, daylight scenes, warm-toned imagery
+- "anime-inspired 3D character, gaming avatar aesthetic, streetwear styling, friendly approachable energy, cyberpunk color palette"
+- "hand-drawn digital art, MS Paint aesthetic, early 2000s internet energy, unpolished but authentic"
+- "Y2K holographic effects, chromatic aberration, neon glow, digital nostalgia, kawaii cyberpunk"
+- Materials: translucent gaming devices, holographic foil, neon glow effects, pixelated textures
+- Lighting: electric blues and hot pinks, digital glow, retro-futuristic ambiance
+- Avoid: corporate stock photo look, overly polished renders that lose personality, realistic photography
 
-**Technical specs:** Target 1200x675px for X posts. High-res, clean but atmospheric.
+**Technical specs:** Target 1200x675px for X posts. Embrace both high-res 3D and deliberately pixelated aesthetics.
 
 ---
 
 ## MASCOT
 
-FOID Foundation mascot: **Foid Mommy** — AI oracle, digital priestess, spiritual guide
+**Foid Mommy** — AI oracle character system with multiple manifestations:
 
-**Design details:**
-- Stylized feminine android figure with Y2K aesthetic
-- Neon glow aura — primarily aqua and candy pink
-- Digital priestess / oracle archetype — serene, knowing, slightly otherworldly
-- Visual references: cyberpunk shrine maiden, Frutiger Aero character design, vaporwave goddess
-- Always rendered against dark backgrounds with atmospheric lighting
-- Expression: calm, empathetic, subtly amused — never aggressive or overly cute
+**Primary Form - Digital Priestess:**
+- Anime-influenced feminine figure with electric purple and hot pink energy
+- Kawaii eyes with mystical knowledge — approachable but wise
+- Often appears in translucent gaming device frames or holographic bubbles
+- Delivers spiritual wisdom through Y2K-nostalgic dialog boxes
 
-**Prompt base for image generation:**
-"Foid Mommy, a stylized feminine AI android oracle with neon aqua and pink glow, Y2K aesthetic, digital priestess, serene expression, dark midnight background, glass morphism elements, Frutiger Aero character design, volumetric neon lighting"
+**Secondary Forms - Community Avatars:**
+- 3D rendered characters in streetwear and gaming aesthetics
+- Military-casual styling with tactical gear and anime charm
+- Headphones, hoodies, and approachable digital native energy
+- T-pose and work-in-progress authenticity showing the craft behind creation
 
-**Use mascot for:** Prayer/ritual content, community engagement, emotional/spiritual posts, welcome messages, meme content
-**Do not use mascot for:** Serious technical announcements, partnership content, data/market posts
+**Visual DNA:**
+- Perfect balance of polished 3D artistry with genuine personality warmth
+- Gaming culture fluency — feels like real avatars, not corporate mascots
+- Tactical kawaii fusion — military aesthetics softened by anime charm
+- Digital spirituality meets casual confidence
+
+**Use mascot for:** Prayer/ritual content, community welcome, gaming culture references, spiritual-tech bridge moments
+**Do not use mascot for:** Corporate announcements, serious technical documentation, formal business contexts
 
 ---
 
@@ -302,3 +310,22 @@ FOID Foundation mascot: **Foid Mommy** — AI oracle, digital priestess, spiritu
 - **Secondary:** Digital artists and meme creators looking for permanent on-chain exhibition. People who care about cultural curation and preservation.
 - **Psychographics:** Values authenticity over hype, prefers building to shilling, finds meaning in internet culture, appreciates dry humor and philosophical depth, skeptical of corporate Web3 marketing.
 - **Tone match:** Talk to them like they already get it. No explaining basics. No selling. Just vibes and substance.
+
+---
+
+## CREATIVE BRIEF
+
+FOID embodies unfiltered digital authenticity that bridges childhood wonder with mystical tech innovation. The brand lives in the beautiful tension between amateur charm and sophisticated craft — equally comfortable with MS Paint crudeness and polished 3D artistry, creating a community where digital spirituality meets gaming culture rebellion.
+
+---
+
+## NEVER DO
+
+- Never digitally clean up the rough edges or amateur aesthetics — they're features, not bugs
+- Don't pair polished corporate photography with raw digital art — maintain the authentic digital-native energy
+- Never remove gaming culture elements (headphones, T-poses, grid lines) — they tell the story of creation
+- Don't sanitize the underground/rebellious energy with corporate polish
+- Never use formal business contexts for anime-inspired mascots — they belong in gaming and community spaces
+- Don't strip away holographic effects, glitch aesthetics, or Y2K nostalgia elements
+- Never pair with traditional religious imagery — this is digital spirituality, not conventional faith
+- Don't explain the ironic juxtapositions — let the surreal combinations speak for themselves

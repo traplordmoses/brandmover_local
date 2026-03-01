@@ -335,10 +335,10 @@ class TestGenerateGuidelinesFromAudit:
         asyncio.run(_run())
 
     def test_prompt_contains_creative_brief_instructions(self):
-        """The asset-first prompt template should contain instructions for CREATIVE BRIEF and NEVER DO."""
-        from agent.onboarding import _GUIDELINES_PROMPT_ASSET_FIRST
-        assert "CREATIVE BRIEF" in _GUIDELINES_PROMPT_ASSET_FIRST
-        assert "NEVER DO" in _GUIDELINES_PROMPT_ASSET_FIRST
+        """The merge prompt template should contain instructions for CREATIVE BRIEF and NEVER DO."""
+        from agent.onboarding import _GUIDELINES_MERGE_PROMPT
+        assert "CREATIVE BRIEF" in _GUIDELINES_MERGE_PROMPT
+        assert "NEVER DO" in _GUIDELINES_MERGE_PROMPT
 
     def test_creative_section_built_from_entries(self):
         """Creative section should be built from entries_creative in audit data."""
@@ -521,8 +521,8 @@ class TestRegenGuidelines:
 
         asyncio.run(_run())
 
-    def test_regen_success(self):
-        """Command should regenerate guidelines from inventory."""
+    def test_regen_success_with_merge(self):
+        """Command should merge existing guidelines with inventory data."""
         import tempfile, os
         from bot.handlers import regen_guidelines_command
         from agent.asset_audit import AssetInventory, AssetAuditEntry
@@ -544,6 +544,12 @@ class TestRegenGuidelines:
                 inv_path = os.path.join(tmpdir, "asset_inventory.json")
                 with open(inv_path, "w") as f:
                     json.dump(inv_data, f)
+
+                # Create existing guidelines.md to be merged
+                existing_guidelines = "# TestBrand\n## VOICE & TONE\nLowercase energy.\n"
+                guidelines_path = os.path.join(tmpdir, "guidelines.md")
+                with open(guidelines_path, "w") as f:
+                    f.write(existing_guidelines)
 
                 inventory = AssetInventory(
                     entries=[AssetAuditEntry(path="/tmp/img.jpg", category="logo")],
@@ -570,11 +576,12 @@ class TestRegenGuidelines:
                     ctx = _mock_context()
                     await regen_guidelines_command(update, ctx)
 
-                    # Should have called generate_guidelines_from_audit
+                    # Should have called generate_guidelines_from_audit with existing_guidelines
                     mock_gen.assert_called_once()
+                    call_kwargs = mock_gen.call_args
+                    assert call_kwargs.kwargs.get("existing_guidelines") == existing_guidelines
 
                     # Should have written guidelines.md
-                    guidelines_path = os.path.join(tmpdir, "guidelines.md")
                     assert os.path.exists(guidelines_path)
 
                     # Should have invalidated cache
@@ -649,55 +656,67 @@ class TestRegenGuidelines:
 # Fix: Asset-first prompt prohibits invention
 # ---------------------------------------------------------------------------
 
-class TestAssetFirstPromptRules:
-    def test_asset_first_prompt_prohibits_font_invention(self):
-        """Asset-first prompt must prohibit inventing font names."""
-        from agent.onboarding import _GUIDELINES_PROMPT_ASSET_FIRST
-        assert "DO NOT invent font names" in _GUIDELINES_PROMPT_ASSET_FIRST
+class TestMergePromptRules:
+    def test_merge_prompt_prohibits_color_invention(self):
+        """Merge prompt must prohibit inventing colors."""
+        from agent.onboarding import _GUIDELINES_MERGE_PROMPT
+        assert "ZERO old colors" in _GUIDELINES_MERGE_PROMPT
 
-    def test_asset_first_prompt_prohibits_color_invention(self):
-        """Asset-first prompt must prohibit inventing colors."""
-        from agent.onboarding import _GUIDELINES_PROMPT_ASSET_FIRST
-        assert "ZERO invented colors" in _GUIDELINES_PROMPT_ASSET_FIRST
+    def test_merge_prompt_preserves_voice_tone(self):
+        """Merge prompt must instruct to preserve VOICE & TONE verbatim."""
+        from agent.onboarding import _GUIDELINES_MERGE_PROMPT
+        assert "VOICE & TONE" in _GUIDELINES_MERGE_PROMPT
+        assert "VERBATIM" in _GUIDELINES_MERGE_PROMPT or "verbatim" in _GUIDELINES_MERGE_PROMPT
 
-    def test_asset_first_prompt_requires_faithful_style(self):
-        """Asset-first prompt must require faithful style description."""
-        from agent.onboarding import _GUIDELINES_PROMPT_ASSET_FIRST
-        assert "ACTUAL" in _GUIDELINES_PROMPT_ASSET_FIRST or "actual" in _GUIDELINES_PROMPT_ASSET_FIRST
+    def test_merge_prompt_replaces_colors(self):
+        """Merge prompt must instruct to replace COLORS section."""
+        from agent.onboarding import _GUIDELINES_MERGE_PROMPT
+        assert "REPLACE" in _GUIDELINES_MERGE_PROMPT.upper()
+        assert "COLOR" in _GUIDELINES_MERGE_PROMPT.upper()
 
-    def test_no_asset_mode_used_when_no_colors(self):
-        """When no audit colors, no-asset prompt template should be used."""
+    def test_merge_prompt_includes_available_fonts(self):
+        """Merge prompt must reference available_fonts."""
+        from agent.onboarding import _GUIDELINES_MERGE_PROMPT
+        assert "available_fonts" in _GUIDELINES_MERGE_PROMPT
+
+    def test_merge_mode_used_when_existing_guidelines_provided(self):
+        """When existing_guidelines is provided, merge prompt should be used."""
         async def _run():
             from agent.onboarding import generate_guidelines_from_audit
 
-            # Empty audit — no colors or styles
-            session = _mock_session(audit={})
+            session = _mock_session(audit=_sample_audit_data())
             rec = _mock_strategy()
+            existing = "## VOICE & TONE\nLowercase energy.\n## COLORS\n| old | #000 |"
 
             captured_prompt = {}
             mock_response = MagicMock()
             mock_response.content = [MagicMock(text="# Guidelines\n")]
 
-            with patch("agent.onboarding.anthropic.AsyncAnthropic") as mock_cls:
+            with patch("agent.onboarding.anthropic.AsyncAnthropic") as mock_cls, \
+                 patch("agent.onboarding._detect_available_fonts", return_value=["Orbitron", "Inter"]):
                 mock_client = AsyncMock()
                 async def capture_create(**kwargs):
                     captured_prompt["messages"] = kwargs.get("messages", [])
                     return mock_response
                 mock_client.messages.create = capture_create
                 mock_cls.return_value = mock_client
-                await generate_guidelines_from_audit(session, rec)
+                await generate_guidelines_from_audit(session, rec, existing_guidelines=existing)
 
             return captured_prompt
 
         result = asyncio.run(_run())
         user_msg = result["messages"][0]["content"]
-        # No-asset mode should NOT contain asset-first prohibitions
-        assert "DO NOT invent font names" not in user_msg
-        # Should contain no-asset mode indicators
-        assert "no asset audit data" in user_msg.lower() or "visual preferences" in user_msg.lower()
+        # Merge mode should contain the existing guidelines
+        assert "Lowercase energy" in user_msg
+        # Should contain merge instructions
+        assert "PRESERVE" in user_msg.upper()
+        # Should contain audit colors
+        assert "#ff5500" in user_msg
+        # Should list available fonts
+        assert "Orbitron" in user_msg
 
-    def test_asset_first_mode_used_when_colors_present(self):
-        """When audit has colors, asset-first prompt with prohibitions should be used."""
+    def test_fresh_mode_used_when_no_existing_guidelines(self):
+        """When no existing_guidelines, fresh prompt should be used."""
         async def _run():
             from agent.onboarding import generate_guidelines_from_audit
 
@@ -708,40 +727,43 @@ class TestAssetFirstPromptRules:
             mock_response = MagicMock()
             mock_response.content = [MagicMock(text="# Guidelines\n")]
 
-            with patch("agent.onboarding.anthropic.AsyncAnthropic") as mock_cls:
+            with patch("agent.onboarding.anthropic.AsyncAnthropic") as mock_cls, \
+                 patch("agent.onboarding._detect_available_fonts", return_value=[]):
                 mock_client = AsyncMock()
                 async def capture_create(**kwargs):
                     captured_prompt["messages"] = kwargs.get("messages", [])
                     return mock_response
                 mock_client.messages.create = capture_create
                 mock_cls.return_value = mock_client
-                await generate_guidelines_from_audit(session, rec)
+                await generate_guidelines_from_audit(session, rec, existing_guidelines="")
 
             return captured_prompt
 
         result = asyncio.run(_run())
         user_msg = result["messages"][0]["content"]
-        # Asset-first mode should contain invention prohibitions
-        assert "DO NOT invent font names" in user_msg
-        assert "ASSET-FIRST MODE" in user_msg
+        # Fresh mode should NOT contain merge instructions
+        assert "PRESERVE VERBATIM" not in user_msg.upper()
+        # Should contain fresh generation instructions
+        assert "BRAND INFO" in user_msg
 
 
 # ---------------------------------------------------------------------------
 # Fix: finalize_onboarding overwrites guidelines when audit data present
 # ---------------------------------------------------------------------------
 
-class TestFinalizeOnboardingOverwrite:
-    def test_overwrites_guidelines_when_audit_data_present(self):
-        """finalize_onboarding should overwrite existing guidelines.md when audit data has colors."""
+class TestFinalizeOnboardingPreservesGuidelines:
+    def test_never_overwrites_existing_guidelines(self):
+        """finalize_onboarding should NEVER overwrite existing guidelines.md, even with audit data."""
         async def _run():
             from agent.onboarding import finalize_onboarding, OnboardingSession
             import tempfile, os
 
             with tempfile.TemporaryDirectory() as tmpdir:
-                # Pre-create a stale guidelines.md
+                # Pre-create a guidelines.md
                 guidelines_path = os.path.join(tmpdir, "guidelines.md")
+                original_content = "# Existing Curated Guidelines\nDo not destroy this."
                 with open(guidelines_path, "w") as f:
-                    f.write("# Old Invented Guidelines\nOrbitron, VT323, Frutiger Aero")
+                    f.write(original_content)
 
                 session = OnboardingSession(
                     user_id=1,
@@ -762,11 +784,52 @@ class TestFinalizeOnboardingOverwrite:
                     },
                 )
 
-                new_guidelines = "# TestBrand Guidelines\n## COLOR PALETTE\n| Primary | Red | #ff0000 |"
+                with patch("agent.onboarding.settings") as mock_settings, \
+                     patch("agent.onboarding.generate_guidelines_from_audit", AsyncMock(
+                         return_value="# New Guidelines"
+                     )) as mock_gen, \
+                     patch("agent.onboarding.anthropic"), \
+                     patch("agent.onboarding._STATE_PATH", Path(tmpdir) / "onboarding.json"), \
+                     patch("agent.strategy.save_strategy"), \
+                     patch("agent.strategy.generate_content_calendar", AsyncMock()), \
+                     patch("agent.compositor_config.invalidate_cache"):
+                    mock_settings.BRAND_FOLDER = tmpdir
+                    mock_settings.ANTHROPIC_API_KEY = "test"
+
+                    await finalize_onboarding(session)
+
+                content = open(guidelines_path).read()
+                # Should still have the original content — finalize never overwrites
+                assert content == original_content
+                # generate_guidelines_from_audit should NOT have been called
+                mock_gen.assert_not_called()
+
+        asyncio.run(_run())
+
+    def test_creates_guidelines_when_none_exist(self):
+        """finalize_onboarding should create guidelines.md when none exists."""
+        async def _run():
+            from agent.onboarding import finalize_onboarding, OnboardingSession
+            import tempfile, os
+
+            with tempfile.TemporaryDirectory() as tmpdir:
+                session = OnboardingSession(
+                    user_id=1,
+                    brand_name="NewBrand",
+                    description="Test product",
+                    platforms=["x"],
+                    asset_audit={},
+                    strategy={
+                        "archetype": "starting_fresh",
+                        "compositor_enabled": False,
+                        "default_mode": "image_optional",
+                        "recommended_content_types": ["community"],
+                    },
+                )
 
                 with patch("agent.onboarding.settings") as mock_settings, \
                      patch("agent.onboarding.generate_guidelines_from_audit", AsyncMock(
-                         return_value=new_guidelines
+                         return_value="# NewBrand Guidelines\n## COLOR PALETTE\n"
                      )), \
                      patch("agent.onboarding.anthropic"), \
                      patch("agent.onboarding._STATE_PATH", Path(tmpdir) / "onboarding.json"), \
@@ -778,54 +841,10 @@ class TestFinalizeOnboardingOverwrite:
 
                     await finalize_onboarding(session)
 
-                content = open(guidelines_path).read()
-                # Should have the NEW guidelines, not the old invented ones
-                assert "Orbitron" not in content
-                assert "#ff0000" in content
-
-        asyncio.run(_run())
-
-    def test_does_not_overwrite_without_audit_data(self):
-        """finalize_onboarding should NOT overwrite existing guidelines.md when no audit colors."""
-        async def _run():
-            from agent.onboarding import finalize_onboarding, OnboardingSession
-            import tempfile, os
-
-            with tempfile.TemporaryDirectory() as tmpdir:
-                # Pre-create guidelines.md
                 guidelines_path = os.path.join(tmpdir, "guidelines.md")
-                original_content = "# Existing Guidelines\nKeep this content"
-                with open(guidelines_path, "w") as f:
-                    f.write(original_content)
-
-                session = OnboardingSession(
-                    user_id=1,
-                    brand_name="TestBrand",
-                    description="Test product",
-                    platforms=["x"],
-                    asset_audit={},  # No audit data
-                    strategy={
-                        "archetype": "starting_fresh",
-                        "compositor_enabled": False,
-                        "default_mode": "image_optional",
-                        "recommended_content_types": ["community"],
-                    },
-                )
-
-                with patch("agent.onboarding.settings") as mock_settings, \
-                     patch("agent.onboarding.anthropic"), \
-                     patch("agent.onboarding._STATE_PATH", Path(tmpdir) / "onboarding.json"), \
-                     patch("agent.strategy.save_strategy"), \
-                     patch("agent.strategy.generate_content_calendar", AsyncMock()), \
-                     patch("agent.compositor_config.invalidate_cache"):
-                    mock_settings.BRAND_FOLDER = tmpdir
-                    mock_settings.ANTHROPIC_API_KEY = "test"
-
-                    await finalize_onboarding(session)
-
+                assert os.path.exists(guidelines_path)
                 content = open(guidelines_path).read()
-                # Should still have the original content
-                assert content == original_content
+                assert "NewBrand" in content
 
         asyncio.run(_run())
 

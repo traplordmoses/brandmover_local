@@ -522,33 +522,101 @@ def finalize_strategy(session: OnboardingSession, strategy_data: dict) -> tuple[
 # Guidelines generation from audit data
 # ---------------------------------------------------------------------------
 
-_GUIDELINES_PROMPT_ASSET_FIRST = """\
-You are a brand strategist. Generate a comprehensive brand guidelines document in Markdown \
-STRICTLY from the asset audit data below.
+_GUIDELINES_MERGE_PROMPT = """\
+You are a brand strategist performing a TARGETED UPDATE of an existing brand guidelines \
+document. You have two inputs: the existing guidelines and fresh asset audit data.
 
-CRITICAL RULES — ASSET-FIRST MODE:
-- DO NOT invent font names, hex color values, or aesthetic descriptions that are not \
-supported by the asset audit data.
-- The COLOR PALETTE must contain ONLY hex values from the consolidated_colors list below. \
-Do NOT add, modify, or supplement these colors.
-- Typography: Write "Typography: defined by brand assets" unless fonts were explicitly \
-detected in the audit data. Do NOT invent font names like Orbitron, Inter, VT323, Montserrat, \
-or any other typeface.
-- ILLUSTRATION STYLE: Describe what is ACTUALLY in the assets. If the assets show \
-anime-influenced characters, say "anime-influenced." If they show hand-drawn elements, \
-say "hand-drawn." Do NOT reinterpret the visual style into a different aesthetic.
-- Use first_impression, creative_dna, overall_energy, never_do, and character_system \
-values DIRECTLY from the creative audit data when available.
+YOUR TASK: Merge the audit data INTO the existing guidelines. This is a surgical update, \
+not a rewrite. Most of the document stays exactly as-is.
+
+=== SECTIONS TO PRESERVE VERBATIM (copy word-for-word from existing guidelines) ===
+- BRAND IDENTITY (name, tagline, positioning, website, X handle, posting cadence, themes)
+- VOICE & TONE (personality traits, writing style, tone by content type, emoji rules, never-use list)
+- CONTENT CATEGORIES (all content type descriptions and examples)
+- BRAND PHRASES & SLANG (established phrases, community slang, CTAs)
+- HASHTAGS (all hashtag rules)
+- TARGET AUDIENCE (all audience descriptions)
+- VISUAL EFFECTS (compositor glass/orb/noise values — table)
+- LAYOUT PROFILES (canvas dimensions, logo position — table)
+- LAYOUT MAPPINGS (content type to profile mapping — table)
+- Any other sections NOT listed below as "replace" sections
+
+=== SECTIONS TO REPLACE WITH AUDIT DATA ===
+
+1. COLORS / COLOR PALETTE:
+   Replace the ENTIRE color table and color rules with audit-extracted colors.
+   - Use ONLY hex values from the consolidated_colors list below
+   - Format: Markdown table with | Role | Name | Hex | RGB | Notes |
+   - Assign roles (Primary, Secondary, Accent 1-3, Background, Text) from the audit role field
+   - Write new color usage rules based on the actual color relationships in the audit data
+   - DO NOT keep any hex values from the old guidelines — the old colors were incorrect
+
+2. ILLUSTRATION STYLE:
+   Replace with a description faithful to the ACTUAL assets.
+   - Describe what the audit data shows: if anime-influenced, say anime-influenced. \
+If hand-drawn, say hand-drawn. Do NOT reinterpret into a different aesthetic.
+   - Use the style keywords and collection analysis as your source
+   - Include: image generation prompt guidance based on actual asset style, avoid list
+   - Keep the Technical specs line if present in the old guidelines
+
+3. TYPOGRAPHY:
+   Replace ONLY if the existing fonts are contradicted by the available_fonts list below.
+   - If the existing guidelines list fonts that ARE in available_fonts, KEEP them
+   - If the existing guidelines list fonts NOT in available_fonts, replace with fonts \
+that ARE available, or write "Typography: defined by brand assets" if no match
+   - Keep any typography rules (hierarchy, mixing rules) that still make sense
+
+4. MASCOT / CHARACTER SYSTEM:
+   Replace with descriptions derived from the creative audit data.
+   - Describe the ACTUAL characters/mascots observed in the assets
+   - Use first_impression, creative_dna, character_system data directly
+   - Include appearance details, personality, and usage context from the audit
+
+5. Add ## CREATIVE BRIEF section (if creative audit data is provided):
+   Synthesize creative_dna, overall_energy, first_impression into a vivid 2-3 sentence \
+   creative direction statement. Include character_system insights if present.
+
+6. Add ## NEVER DO section (if creative audit data provides never_do entries):
+   Bulleted list of creative prohibitions from the audit data. \
+   Merge with any existing voice/tone contradictions. 3-8 items.
+
+=== EXISTING GUIDELINES (preserve everything not listed above) ===
+
+{existing_guidelines}
+
+=== ASSET AUDIT DATA (source for replacement sections) ===
+
+Colors extracted from assets: {colors_json}
+Style keywords from assets: {style_keywords}
+Available fonts in project: {available_fonts}
+
+{collection_section}
+{insights_section}
+{creative_section}
+
+=== RULES ===
+- EVERY color hex in the output must come from the audit data. ZERO old colors retained.
+- EVERY non-visual section must be copied VERBATIM from the existing guidelines.
+- Illustration style must faithfully describe the actual assets, not aspirational aesthetics.
+- Do NOT invent font names. Only use fonts from available_fonts or write "defined by brand assets."
+- The output is parsed by code — preserve exact table formats, section headers, and structure.
+- Output ONLY the complete Markdown document, no preamble or explanation.
+"""
+
+_GUIDELINES_FRESH_PROMPT = """\
+You are a brand strategist. Generate a comprehensive brand guidelines document in Markdown \
+from the brand information and asset audit data below.
 
 BRAND INFO:
 - Name: {brand_name}
 - Description: {description}
 - Platforms: {platforms}
+- Visual preferences (user-stated): {visual_prefs}
 
 ASSET AUDIT DATA:
 - Colors extracted from assets: {colors_json}
 - Style keywords from assets: {style_keywords}
-- Visual preferences (user-stated): {visual_prefs}
+- Available fonts in project: {available_fonts}
 
 {collection_section}
 {insights_section}
@@ -559,120 +627,62 @@ STRATEGY:
 - Badge text: {badge_text}
 - Default mode: {default_mode}
 
-Generate a Markdown document with EXACTLY these sections (use ## headers):
+Generate a Markdown document with these sections (use ## headers):
 
-1. ## BRAND IDENTITY
-   Include: Brand Name, Tagline (derive from insights or description), Product description
-
-2. ## VOICE & TONE
-   Derive personality traits and writing style from brand_insights (personality, audience, tone). \
-   If brand_insights is empty, derive from the visual style and description. \
-   Include: Core personality traits (bulleted), Writing style rules, Emoji usage, Never-use list.
-
-3. ## COLOR PALETTE
-   Use ONLY the hex values from consolidated_colors above. Format as a Markdown table:
-   | Role | Name | Hex | RGB |
-   Assign roles (Primary, Secondary, Accent 1-3, Background, Text) based on the role field \
-   in the audit data. Do NOT add any colors not present in the audit data.
-
-4. ## ILLUSTRATION STYLE
-   Describe the ACTUAL visual style observed in the audited assets. Use the style keywords \
-   and collection analysis as your source. Do NOT invent or reinterpret the aesthetic. \
-   Include: Visual aesthetic description (faithful to assets), Image generation prompt guidance, \
-   Avoid list.
-
-5. ## COMPOSITOR
-   Format as a table:
-   | Setting | Value |
-   |---------|-------|
-   | Enabled | {compositor_enabled} |
-   | Badge text | {badge_text} |
-   | Default mode | {default_mode} |
-
-6. ## CREATIVE BRIEF (only if creative audit data is provided)
-   Synthesize the creative_dna, overall_energy, and first_impression data from the creative \
-   audit into a vivid 2-3 sentence creative direction statement. This should read like a \
-   creative director's brief — not a list of keywords. Capture what makes this brand FEEL \
-   different. Include character_system insights if present.
-
-7. ## NEVER DO (only if creative audit data is provided)
-   Bulleted list of creative prohibitions. Source from:
-   - The never_do fields in the creative audit data
-   - Any voice/tone contradictions (e.g. if brand is playful, never use corporate jargon)
-   Keep each bullet actionable and specific. 3-6 items.
-
-8. ## MASCOT / CHARACTER SYSTEM (only if character_system data is present)
-   Describe the brand's character or mascot system as detected in the assets. Include \
-   appearance details, personality, and usage context.
+1. ## BRAND IDENTITY — Brand Name, Tagline, Product description
+2. ## VOICE & TONE — Core personality traits, Writing style, Emoji usage, Never-use list
+3. ## COLOR PALETTE — ONLY hex values from audit data. Table: | Role | Name | Hex | RGB |
+4. ## TYPOGRAPHY — Use ONLY fonts from available_fonts list. If empty, write "defined by brand assets."
+5. ## ILLUSTRATION STYLE — Faithful to actual assets. Prompt guidance. Avoid list.
+6. ## COMPOSITOR — Table: Enabled={compositor_enabled}, Badge={badge_text}, Mode={default_mode}
+7. ## CREATIVE BRIEF (if creative audit data provided) — 2-3 sentence creative direction
+8. ## NEVER DO (if creative audit data provided) — Bulleted prohibitions, 3-6 items
+9. ## MASCOT / CHARACTER SYSTEM (if character_system data present)
 
 Rules:
-- EVERY color in COLOR PALETTE must come from the audit data. ZERO invented colors.
-- ZERO invented font names. If fonts were not detected, say "defined by brand assets."
-- Style descriptions must faithfully represent the actual assets, not aspirational aesthetics.
-- Voice & tone should feel natural for the brand type, informed by brand_insights if available.
-- Keep it concise but complete. This file is parsed by code — follow the table formats exactly.
+- EVERY color must come from the audit data. Do NOT invent colors.
+- Do NOT invent font names. Only use fonts from available_fonts or "defined by brand assets."
+- Style descriptions must faithfully represent the actual assets.
+- Keep it concise but complete. This file is parsed by code — follow table formats exactly.
 - Output ONLY the Markdown document, no preamble or explanation.
 """
 
-_GUIDELINES_PROMPT_NO_ASSETS = """\
-You are a brand strategist. Generate a comprehensive brand guidelines document in Markdown \
-from the brand information below. Since no asset audit data is available, derive the visual \
-identity from the brand description and user-stated visual preferences.
 
-BRAND INFO:
-- Name: {brand_name}
-- Description: {description}
-- Platforms: {platforms}
-- Visual preferences (user-stated): {visual_prefs}
-
-{insights_section}
-
-STRATEGY:
-- Compositor enabled: {compositor_enabled}
-- Badge text: {badge_text}
-- Default mode: {default_mode}
-
-Generate a Markdown document with EXACTLY these sections (use ## headers):
-
-1. ## BRAND IDENTITY
-   Include: Brand Name, Tagline (derive from description), Product description
-
-2. ## VOICE & TONE
-   Derive personality traits and writing style from the description and visual preferences. \
-   Include: Core personality traits (bulleted), Writing style rules, Emoji usage, Never-use list.
-
-3. ## COLOR PALETTE
-   Suggest a palette that fits the brand description and visual preferences. Format as a table:
-   | Role | Name | Hex | RGB |
-   Assign roles (Primary, Secondary, Accent 1-3, Background, Text).
-
-4. ## ILLUSTRATION STYLE
-   Derive from visual preferences and brand description. \
-   Include: Visual aesthetic description, Image generation prompt guidance, Avoid list.
-
-5. ## COMPOSITOR
-   Format as a table:
-   | Setting | Value |
-   |---------|-------|
-   | Enabled | {compositor_enabled} |
-   | Badge text | {badge_text} |
-   | Default mode | {default_mode} |
-
-Rules:
-- Voice & tone should feel natural for the brand type.
-- Keep it concise but complete. This file is parsed by code — follow the table formats exactly.
-- Output ONLY the Markdown document, no preamble or explanation.
-"""
+def _detect_available_fonts() -> list[str]:
+    """Scan brand/assets/fonts/ and return list of font family names found."""
+    fonts_dir = Path(settings.BRAND_FOLDER) / "assets" / "fonts"
+    if not fonts_dir.exists():
+        return []
+    # Extract unique family names from filenames
+    families: set[str] = set()
+    for f in fonts_dir.iterdir():
+        if f.suffix.lower() in (".ttf", ".otf", ".woff", ".woff2"):
+            # Heuristic: strip weight/style suffixes from filename
+            name = f.stem.lower()
+            # Known patterns: "inter-variable", "orbitron-variable", "poppins-bold"
+            for known in ("poppins", "orbitron", "inter", "vt323", "aeonikextendedpro"):
+                if name.startswith(known):
+                    families.add(known.replace("aeonikextendedpro", "Aeonik Extended Pro")
+                                 .replace("poppins", "Poppins")
+                                 .replace("orbitron", "Orbitron")
+                                 .replace("inter", "Inter")
+                                 .replace("vt323", "VT323"))
+                    break
+    return sorted(families)
 
 
 async def generate_guidelines_from_audit(
     session: "OnboardingSession",
     strategy_rec: "StrategyRecommendation",
+    existing_guidelines: str = "",
 ) -> str:
-    """Call Claude to generate a comprehensive guidelines.md from audit data.
+    """Call Claude to generate/update guidelines.md using audit data.
 
-    Uses asset-first mode when audit data contains colors/styles (prohibits invention).
-    Falls back to no-asset mode when no audit data is available.
+    If existing_guidelines is provided, uses a MERGE strategy: preserves voice/tone/
+    positioning/content sections verbatim, replaces only colors/style/typography/mascot
+    with audit-derived data.
+
+    If no existing guidelines, generates fresh from audit + brand info.
     """
     import json as _json
 
@@ -682,33 +692,43 @@ async def generate_guidelines_from_audit(
     collection = audit.get("collection_analysis", {})
     insights = audit.get("brand_insights", {})
     visual_prefs = session.visual_preferences or {}
+    available_fonts = _detect_available_fonts()
 
-    # Decide mode: asset-first if we have actual audit data with colors or styles
-    has_asset_data = bool(colors or style_kw)
+    # Build common sections
+    collection_section = ""
+    if collection:
+        collection_section = f"COLLECTION ANALYSIS:\n{_json.dumps(collection, indent=2)}"
 
-    if has_asset_data:
-        # Asset-first mode — prohibit invention
-        collection_section = ""
-        if collection:
-            collection_section = f"COLLECTION ANALYSIS:\n{_json.dumps(collection, indent=2)}"
+    insights_section = ""
+    if insights:
+        insights_section = f"BRAND INSIGHTS:\n{_json.dumps(insights, indent=2)}"
 
-        insights_section = ""
-        if insights:
-            insights_section = f"BRAND INSIGHTS:\n{_json.dumps(insights, indent=2)}"
+    entries_creative = audit.get("entries_creative", [])
+    creative_section = ""
+    if entries_creative:
+        creative_section = f"CREATIVE AUDIT DATA:\n{_json.dumps(entries_creative, indent=2)}"
 
-        # Build creative section from entries_creative
-        entries_creative = audit.get("entries_creative", [])
-        creative_section = ""
-        if entries_creative:
-            creative_section = f"CREATIVE AUDIT DATA:\n{_json.dumps(entries_creative, indent=2)}"
-
-        prompt = _GUIDELINES_PROMPT_ASSET_FIRST.format(
+    if existing_guidelines:
+        # Merge mode — preserve existing, replace visual sections only
+        prompt = _GUIDELINES_MERGE_PROMPT.format(
+            existing_guidelines=existing_guidelines,
+            colors_json=_json.dumps(colors, indent=2) if colors else "(none extracted)",
+            style_keywords=", ".join(style_kw) if style_kw else "(none detected)",
+            available_fonts=", ".join(available_fonts) if available_fonts else "(none found)",
+            collection_section=collection_section,
+            insights_section=insights_section,
+            creative_section=creative_section,
+        )
+    else:
+        # Fresh mode — generate from scratch
+        prompt = _GUIDELINES_FRESH_PROMPT.format(
             brand_name=session.brand_name,
             description=session.description,
             platforms=", ".join(session.platforms or ["x"]),
-            colors_json=_json.dumps(colors, indent=2),
-            style_keywords=", ".join(style_kw) if style_kw else "(none detected)",
             visual_prefs=_json.dumps(visual_prefs) if visual_prefs else "(none stated)",
+            colors_json=_json.dumps(colors, indent=2) if colors else "(none extracted)",
+            style_keywords=", ".join(style_kw) if style_kw else "(none detected)",
+            available_fonts=", ".join(available_fonts) if available_fonts else "(none found)",
             collection_section=collection_section,
             insights_section=insights_section,
             creative_section=creative_section,
@@ -716,27 +736,14 @@ async def generate_guidelines_from_audit(
             badge_text=strategy_rec.badge_text or "(none)",
             default_mode=strategy_rec.default_mode,
         )
-    else:
-        # No-asset mode — generate from description/preferences
-        insights_section = ""
-        if insights:
-            insights_section = f"BRAND INSIGHTS:\n{_json.dumps(insights, indent=2)}"
 
-        prompt = _GUIDELINES_PROMPT_NO_ASSETS.format(
-            brand_name=session.brand_name,
-            description=session.description,
-            platforms=", ".join(session.platforms or ["x"]),
-            visual_prefs=_json.dumps(visual_prefs) if visual_prefs else "(none stated)",
-            insights_section=insights_section,
-            compositor_enabled="true" if strategy_rec.compositor_enabled else "false",
-            badge_text=strategy_rec.badge_text or "(none)",
-            default_mode=strategy_rec.default_mode,
-        )
+    # Merge mode needs more tokens since the existing guidelines are included in output
+    max_tokens = 8000 if existing_guidelines else 4000
 
     client = anthropic.AsyncAnthropic(api_key=settings.ANTHROPIC_API_KEY)
     response = await client.messages.create(
         model="claude-sonnet-4-20250514",
-        max_tokens=4000,
+        max_tokens=max_tokens,
         messages=[{"role": "user", "content": prompt}],
     )
 
@@ -848,10 +855,10 @@ async def finalize_onboarding(session: OnboardingSession) -> str:
     except Exception as e:
         logger.warning("Content calendar generation failed: %s", e)
 
-    # Generate guidelines.md — always regenerate when fresh audit data is present
+    # Generate guidelines.md ONLY if none exists — never overwrite manually curated guidelines.
+    # Use /regen_guidelines for intentional updates (which uses merge strategy).
     guidelines_path = brand_path / "guidelines.md"
-    has_audit_data = bool((session.asset_audit or {}).get("consolidated_colors"))
-    if not guidelines_path.exists() or has_audit_data:
+    if not guidelines_path.exists():
         try:
             guidelines_md = await generate_guidelines_from_audit(session, rec)
             logger.info("Generated guidelines.md from audit data for %s", session.brand_name)
