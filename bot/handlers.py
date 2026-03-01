@@ -1929,7 +1929,12 @@ async def _maybe_compose(draft: dict, image_url: str, content_type: str):
     """Compositor guard. Returns (photo_to_send, composed_bytes_or_None).
 
     Priority chain: template > compositor > raw.
+    /template off disables both templates and compositor.
     """
+    cfg = _cc.get_config()
+    if not cfg.compositor_enabled:
+        return image_url, None
+
     from agent import template_memory as _tm
 
     # Priority 1: Template
@@ -1944,9 +1949,6 @@ async def _maybe_compose(draft: dict, image_url: str, content_type: str):
         logger.debug("Template composition failed, falling through: %s", e)
 
     # Priority 2: Compositor
-    cfg = _cc.get_config()
-    if not cfg.compositor_enabled:
-        return image_url, None
     composed = await compositor.compose_branded_image(draft, image_url, content_type)
     return (composed if composed else image_url), composed
 
