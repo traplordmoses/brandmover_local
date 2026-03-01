@@ -374,6 +374,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         "/library — List or search the asset library\n"
         "/strategy — View current brand strategy and config\n"
         "/preview [topic] — Generate a sample post (no rate limit)\n"
+        "/regen_guidelines — Regenerate guidelines from asset inventory\n"
         "/reset_brand — Wipe brand config and start fresh\n"
         "/upload — Add images to your brand asset library\n"
         "/done — Finish asset upload session\n"
@@ -1750,6 +1751,8 @@ async def _run_onboarding_audit(update: Update, session: onboarding.OnboardingSe
             "consolidated_style": inventory.consolidated_style,
             "missing_items": inventory.missing_items,
             "entry_count": len(inventory.entries),
+            "collection_analysis": inventory.collection_analysis,
+            "brand_insights": inventory.brand_insights,
         }
         session, response = onboarding.finalize_audit(session, audit_data)
         onboarding.save_session(session)
@@ -2839,6 +2842,83 @@ async def _run_brand_check(update: Update, tg_file) -> None:
         logger.error("Brand check failed: %s", e)
         await update.message.reply_text(
             f"Brand check failed: {_esc(str(e))}", parse_mode="HTML"
+        )
+
+
+# ---------------------------------------------------------------------------
+# /regen_guidelines — regenerate guidelines.md from asset inventory
+# ---------------------------------------------------------------------------
+
+async def regen_guidelines_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /regen_guidelines — regenerate guidelines.md from asset_inventory.json."""
+    if not _authorized(update.effective_user.id):
+        return
+
+    from agent import asset_audit, compositor_config
+    from agent.strategy import StrategyRecommendation
+
+    inv_path = Path(settings.BRAND_FOLDER) / "asset_inventory.json"
+    if not inv_path.exists():
+        await update.message.reply_text(
+            "No asset inventory found. Upload brand assets first via /upload or /onboard."
+        )
+        return
+
+    await update.message.chat.send_action("typing")
+    await update.message.reply_text("Regenerating guidelines from your asset inventory...")
+
+    try:
+        inventory = asset_audit.load_inventory()
+
+        # Build a minimal session with inventory data
+        session = onboarding.OnboardingSession(
+            user_id=update.effective_user.id,
+            brand_name=compositor_config.get_config().brand_name or "Brand",
+            description=compositor_config.get_config().product_description or "",
+            platforms=["x"],
+            asset_audit={
+                "archetype": inventory.archetype,
+                "consolidated_colors": inventory.consolidated_colors,
+                "consolidated_style": inventory.consolidated_style,
+                "missing_items": inventory.missing_items,
+                "entry_count": len(inventory.entries),
+                "collection_analysis": inventory.collection_analysis,
+                "brand_insights": inventory.brand_insights,
+            },
+        )
+
+        # Load existing strategy if available
+        config_path = Path(settings.BRAND_FOLDER) / "config.json"
+        rec_data = {}
+        if config_path.exists():
+            try:
+                import json as _json
+                rec_data = _json.loads(config_path.read_text(encoding="utf-8"))
+            except Exception:
+                pass
+        rec = StrategyRecommendation(
+            archetype=rec_data.get("archetype", inventory.archetype),
+            compositor_enabled=rec_data.get("compositor_enabled", False),
+            badge_text=rec_data.get("badge_text"),
+            default_mode=rec_data.get("default_mode", "image_optional"),
+            recommended_content_types=rec_data.get("recommended_content_types", []),
+            platforms=["x"],
+        )
+
+        guidelines_md = await onboarding.generate_guidelines_from_audit(session, rec)
+        guidelines_path = Path(settings.BRAND_FOLDER) / "guidelines.md"
+        guidelines_path.write_text(guidelines_md, encoding="utf-8")
+        compositor_config.invalidate_cache()
+
+        await update.message.reply_text(
+            "guidelines.md has been regenerated from your asset inventory.\n\n"
+            "Use /brand to review the updated config.",
+        )
+    except Exception as e:
+        logger.error("Regen guidelines failed: %s", e)
+        await update.message.reply_text(
+            f"Failed to regenerate guidelines: {_esc(str(e))}",
+            parse_mode="HTML",
         )
 
 

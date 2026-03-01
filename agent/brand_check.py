@@ -77,8 +77,49 @@ def _build_guidelines_context(cfg: compositor_config.BrandConfig) -> str:
     return "\n\n".join(parts)
 
 
-def _build_check_prompt(guidelines_context: str) -> str:
+def _build_inventory_context() -> str:
+    """Load asset_inventory.json and format as context for compliance checking."""
+    inv_path = Path(settings.BRAND_FOLDER) / "asset_inventory.json"
+    if not inv_path.exists():
+        return ""
+    try:
+        data = json.loads(inv_path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return ""
+
+    parts: list[str] = []
+    colors = data.get("consolidated_colors", [])
+    if colors:
+        color_lines = [f"  {c.get('name', '?')} {c.get('hex', '?')} ({c.get('role', '?')})" for c in colors[:8]]
+        parts.append("Asset library colors:\n" + "\n".join(color_lines))
+
+    styles = data.get("consolidated_style", [])
+    if styles:
+        parts.append(f"Asset library style: {', '.join(styles[:10])}")
+
+    entries = data.get("entries", [])
+    if entries:
+        cats = {}
+        for e in entries:
+            cat = e.get("category", "other")
+            cats[cat] = cats.get(cat, 0) + 1
+        cat_str = ", ".join(f"{k}: {v}" for k, v in cats.items())
+        parts.append(f"Asset library contents: {cat_str}")
+
+    return "\n\n".join(parts) if parts else ""
+
+
+def _build_check_prompt(guidelines_context: str, inventory_context: str = "") -> str:
     """Build the structured prompt for the single Claude Vision compliance call."""
+    inventory_block = ""
+    if inventory_context:
+        inventory_block = (
+            f"\n\nASSET LIBRARY CONTEXT:\n{inventory_context}\n\n"
+            "When checking compliance, consider that this image may be from the brand's own "
+            "asset library. Assets that match the brand's established visual patterns should "
+            "score higher even if guidelines.md descriptions are approximate."
+        )
+
     return (
         "You are a brand compliance auditor. Analyze this image against the brand "
         "guidelines below and return a structured JSON compliance report.\n\n"
@@ -128,6 +169,7 @@ def _build_check_prompt(guidelines_context: str) -> str:
         "- For typography, if no text is visible, verdict is \"pass\" with a note.\n"
         "- For brand_elements, if no logo or text is expected/visible, verdict is \"pass\".\n\n"
         "Return ONLY the JSON, no markdown formatting or code fences."
+        + inventory_block
     )
 
 
@@ -311,7 +353,8 @@ async def check_brand_compliance(image_path: str) -> dict:
     """
     cfg = compositor_config.get_config()
     guidelines_context = _build_guidelines_context(cfg)
-    prompt = _build_check_prompt(guidelines_context)
+    inventory_context = _build_inventory_context()
+    prompt = _build_check_prompt(guidelines_context, inventory_context)
 
     image_data, media_type = _encode_image(image_path)
 

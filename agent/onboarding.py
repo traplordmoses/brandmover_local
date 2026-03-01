@@ -514,6 +514,168 @@ def finalize_strategy(session: OnboardingSession, strategy_data: dict) -> tuple[
 
 
 # ---------------------------------------------------------------------------
+# Guidelines generation from audit data
+# ---------------------------------------------------------------------------
+
+_GUIDELINES_PROMPT = """\
+You are a brand strategist. Generate a comprehensive brand guidelines document in Markdown \
+from the audit data below. The guidelines must be DERIVED from the actual asset analysis — \
+do NOT invent colors, styles, or traits that are not supported by the data.
+
+BRAND INFO:
+- Name: {brand_name}
+- Description: {description}
+- Platforms: {platforms}
+
+ASSET AUDIT DATA:
+- Colors extracted from assets: {colors_json}
+- Style keywords from assets: {style_keywords}
+- Visual preferences (user-stated): {visual_prefs}
+
+{collection_section}
+{insights_section}
+
+STRATEGY:
+- Compositor enabled: {compositor_enabled}
+- Badge text: {badge_text}
+- Default mode: {default_mode}
+
+Generate a Markdown document with EXACTLY these sections (use ## headers):
+
+1. ## BRAND IDENTITY
+   Include: Brand Name, Tagline (derive from insights or description), Product description
+
+2. ## VOICE & TONE
+   Derive personality traits and writing style from brand_insights (personality, audience, tone). \
+   If brand_insights is empty, derive from the visual style and description. \
+   Include: Core personality traits (bulleted), Writing style rules, Emoji usage, Never-use list.
+
+3. ## COLOR PALETTE
+   Use ONLY the colors from the asset audit. Format as a Markdown table:
+   | Role | Name | Hex | RGB |
+   Assign roles (Primary, Secondary, Accent 1-3, Background, Text) based on frequency and the \
+   color roles from the audit data.
+
+4. ## ILLUSTRATION STYLE
+   Derive from the consolidated style keywords and collection analysis. \
+   Include: Visual aesthetic description, Image generation prompt guidance, Avoid list.
+
+5. ## COMPOSITOR
+   Format as a table:
+   | Setting | Value |
+   |---------|-------|
+   | Enabled | {compositor_enabled} |
+   | Badge text | {badge_text} |
+   | Default mode | {default_mode} |
+
+Rules:
+- Every color hex in the COLOR PALETTE must come from the audit data. Do NOT invent colors.
+- Style keywords must come from the audit data. You may expand on them but not contradict them.
+- Voice & tone should feel natural for the brand type, informed by brand_insights if available.
+- Keep it concise but complete. This file is parsed by code — follow the table formats exactly.
+- Output ONLY the Markdown document, no preamble or explanation.
+"""
+
+
+async def generate_guidelines_from_audit(
+    session: "OnboardingSession",
+    strategy_rec: "StrategyRecommendation",
+) -> str:
+    """Call Claude to generate a comprehensive guidelines.md from audit data.
+
+    Falls back to None on failure so the caller can use the template approach.
+    """
+    import json as _json
+
+    audit = session.asset_audit or {}
+    colors = audit.get("consolidated_colors", [])
+    style_kw = audit.get("consolidated_style", [])
+    collection = audit.get("collection_analysis", {})
+    insights = audit.get("brand_insights", {})
+    visual_prefs = session.visual_preferences or {}
+
+    collection_section = ""
+    if collection:
+        collection_section = f"COLLECTION ANALYSIS:\n{_json.dumps(collection, indent=2)}"
+
+    insights_section = ""
+    if insights:
+        insights_section = f"BRAND INSIGHTS:\n{_json.dumps(insights, indent=2)}"
+
+    prompt = _GUIDELINES_PROMPT.format(
+        brand_name=session.brand_name,
+        description=session.description,
+        platforms=", ".join(session.platforms or ["x"]),
+        colors_json=_json.dumps(colors, indent=2),
+        style_keywords=", ".join(style_kw) if style_kw else "(none detected)",
+        visual_prefs=_json.dumps(visual_prefs) if visual_prefs else "(none stated)",
+        collection_section=collection_section,
+        insights_section=insights_section,
+        compositor_enabled="true" if strategy_rec.compositor_enabled else "false",
+        badge_text=strategy_rec.badge_text or "(none)",
+        default_mode=strategy_rec.default_mode,
+    )
+
+    client = anthropic.AsyncAnthropic(api_key=settings.ANTHROPIC_API_KEY)
+    response = await client.messages.create(
+        model="claude-sonnet-4-20250514",
+        max_tokens=4000,
+        messages=[{"role": "user", "content": prompt}],
+    )
+
+    text = response.content[0].text.strip()
+    # Strip code fences if present
+    if text.startswith("```"):
+        lines = text.split("\n")
+        if lines[0].startswith("```"):
+            lines = lines[1:]
+        if lines and lines[-1].strip() == "```":
+            lines = lines[:-1]
+        text = "\n".join(lines).strip()
+
+    return text
+
+
+def _guidelines_template_fallback(
+    session: "OnboardingSession",
+    rec: "StrategyRecommendation",
+) -> str:
+    """Minimal template-based guidelines.md — used when Claude generation fails."""
+    style_info = session.visual_preferences.get(
+        "description", session.visual_preferences.get("style", "modern")
+    )
+    audit_colors = session.asset_audit.get("consolidated_colors", [])
+    color_rows = ""
+    for i, c in enumerate(audit_colors[:6]):
+        role = ["Primary", "Accent 1", "Accent 2", "Background", "Text", "Accent 3"][min(i, 5)]
+        color_rows += f"| {role} | {c.get('name', 'Color')} | {c.get('hex', '#000000')} | |\n"
+
+    md = (
+        f"# {session.brand_name} Brand Guidelines\n\n"
+        f"**Brand Name:** {session.brand_name}\n"
+        f"**Product:** {session.description}\n\n"
+        f"## VOICE & TONE\n\n"
+        f"**Core personality traits:**\n"
+        f"- Authentic and approachable\n"
+        f"- Clear and concise\n\n"
+        f"## COLOR PALETTE\n\n"
+        f"| Role | Name | Hex | RGB |\n"
+        f"|------|------|-----|-----|\n"
+        f"{color_rows}\n"
+        f"## ILLUSTRATION STYLE\n\n"
+        f"- **{style_info.title()}** aesthetic\n\n"
+        f"## COMPOSITOR\n\n"
+        f"| Setting | Value |\n"
+        f"|---------|-------|\n"
+        f"| Enabled | {'true' if rec.compositor_enabled else 'false'} |\n"
+    )
+    if rec.badge_text:
+        md += f"| Badge text | {rec.badge_text} |\n"
+    md += f"| Default mode | {rec.default_mode} |\n"
+    return md
+
+
+# ---------------------------------------------------------------------------
 # Finalize onboarding (writes guidelines.md + config.json)
 # ---------------------------------------------------------------------------
 
@@ -555,41 +717,17 @@ async def finalize_onboarding(session: OnboardingSession) -> str:
     except Exception as e:
         logger.warning("Content calendar generation failed: %s", e)
 
-    # Generate minimal guidelines.md if not present
+    # Generate guidelines.md from audit data if not present
     guidelines_path = brand_path / "guidelines.md"
     if not guidelines_path.exists():
-        style_info = session.visual_preferences.get("description", session.visual_preferences.get("style", "modern"))
-        audit_colors = session.asset_audit.get("consolidated_colors", [])
-        color_rows = ""
-        for i, c in enumerate(audit_colors[:6]):
-            role = ["Primary", "Accent 1", "Accent 2", "Background", "Text", "Accent 3"][min(i, 5)]
-            color_rows += f"| {role} | {c.get('name', 'Color')} | {c.get('hex', '#000000')} | |\n"
-
-        guidelines_md = (
-            f"# {session.brand_name} Brand Guidelines\n\n"
-            f"**Brand Name:** {session.brand_name}\n"
-            f"**Product:** {session.description}\n\n"
-            f"## VOICE & TONE\n\n"
-            f"**Core personality traits:**\n"
-            f"- Authentic and approachable\n"
-            f"- Clear and concise\n\n"
-            f"## COLOR PALETTE\n\n"
-            f"| Role | Name | Hex | RGB |\n"
-            f"|------|------|-----|-----|\n"
-            f"{color_rows}\n"
-            f"## ILLUSTRATION STYLE\n\n"
-            f"- **{style_info.title()}** aesthetic\n\n"
-            f"## COMPOSITOR\n\n"
-            f"| Setting | Value |\n"
-            f"|---------|-------|\n"
-            f"| Enabled | {'true' if rec.compositor_enabled else 'false'} |\n"
-        )
-        if rec.badge_text:
-            guidelines_md += f"| Badge text | {rec.badge_text} |\n"
-        guidelines_md += f"| Default mode | {rec.default_mode} |\n"
+        try:
+            guidelines_md = await generate_guidelines_from_audit(session, rec)
+            logger.info("Generated guidelines.md from audit data for %s", session.brand_name)
+        except Exception as e:
+            logger.warning("Claude guidelines generation failed, using template: %s", e)
+            guidelines_md = _guidelines_template_fallback(session, rec)
 
         guidelines_path.write_text(guidelines_md, encoding="utf-8")
-        logger.info("Generated guidelines.md for %s", session.brand_name)
 
     # Invalidate caches
     compositor_config.invalidate_cache()
