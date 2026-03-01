@@ -64,6 +64,9 @@ def create_bot() -> Application:
     # Inline button callbacks (e.g. /generate approve/reject buttons)
     app.add_handler(CallbackQueryHandler(handlers.generate_callback, pattern=r"^gen_"))
 
+    # Draft inline buttons (Approve/Reject/Edit/Reroll)
+    app.add_handler(CallbackQueryHandler(handlers.draft_callback, pattern=r"^draft_"))
+
     # Photo uploads (reference images)
     app.add_handler(
         MessageHandler(filters.PHOTO, handlers.handle_photo)

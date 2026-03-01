@@ -15,7 +15,7 @@ from PIL import Image as _PILImage
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import ContextTypes
 
-from agent import asset_gen, asset_library, auto_state, brain, compositor, compositor_config, engine, feedback, generation_history, guidelines, image_gen, onboarding, publisher, scheduler, state
+from agent import asset_gen, asset_library, auto_state, brain, chat, compositor, compositor_config, conversation_context, engine, feedback, generation_history, guidelines, image_gen, intent_router, onboarding, publisher, scheduler, state
 from agent import compositor_config as _cc
 from config import settings
 
@@ -39,6 +39,267 @@ def _rate_limited(user_id: int) -> bool:
         return True
     _last_request_time[user_id] = now
     return False
+
+
+# ---------------------------------------------------------------------------
+# Shared core logic — used by slash commands, NL router, and inline buttons
+# ---------------------------------------------------------------------------
+
+async def _do_approve(update: Update, context: ContextTypes.DEFAULT_TYPE, option_num: int = 1, source: str = "command") -> None:
+    """Core approve logic shared by /approve, NL router, and inline buttons."""
+    pending = state.get_pending()
+    if not pending:
+        await update.message.reply_text("Nothing to approve. Send me a content request first.")
+        return
+
+    # If multiple image options exist, select the chosen one
+    image_urls = pending.get("image_urls", [])
+    if image_urls and 1 <= option_num <= len(image_urls):
+        pending["image_url"] = image_urls[option_num - 1]
+        logger.info("Approve (%s): selected option %d of %d", source, option_num, len(image_urls))
+    elif image_urls and option_num > len(image_urls):
+        await update.message.reply_text(
+            f"Only {len(image_urls)} options available. Use /approve 1-{len(image_urls)}."
+        )
+        return
+
+    await update.message.chat.send_action("typing")
+
+    # Log feedback
+    count = await feedback.async_log_feedback(
+        request=pending.get("original_request", ""),
+        draft=pending,
+        accepted=True,
+        resources_used=pending.get("resources_used", []),
+    )
+
+    # Update generation history status
+    try:
+        ts = pending.get("timestamp", 0)
+        if ts:
+            await generation_history.async_update_generation_status(ts, "approved")
+    except Exception as e:
+        logger.debug("Generation history update failed: %s", e)
+
+    # Save approved composed image to brand/references/ for style consistency
+    composed_path, composed_ct = state.get_last_composed()
+    if composed_path and Path(composed_path).exists():
+        try:
+            refs_dir = Path(settings.BRAND_FOLDER) / "references"
+            refs_dir.mkdir(parents=True, exist_ok=True)
+            ts = int(time.time())
+            save_name = f"approved_{composed_ct}_{ts}.png"
+            save_path = refs_dir / save_name
+            import shutil
+            shutil.copy2(composed_path, save_path)
+            logger.info("Saved approved reference: %s", save_path)
+
+            # Cap at 5 per content_type — delete oldest
+            existing = sorted(refs_dir.glob(f"approved_{composed_ct}_*.png"))
+            if len(existing) > 5:
+                for old in existing[:-5]:
+                    old.unlink(missing_ok=True)
+                    logger.info("Pruned old reference: %s", old.name)
+        except Exception as e:
+            logger.warning("Failed to save approved reference: %s", e)
+
+        # Save into active style profile if one is set for this content_type
+        try:
+            active_profile = state.get_active_profile(composed_ct)
+            if active_profile:
+                count_p = state.add_profile_image(active_profile, composed_path)
+                logger.info(
+                    "Saved approved image to profile %s (%d images)",
+                    active_profile, count_p,
+                )
+        except Exception as e:
+            logger.warning("Failed to save to style profile: %s", e)
+
+        # Add to asset library
+        try:
+            asset_library.add(
+                composed_path, "approved", composed_ct or "general",
+                prompt=pending.get("image_prompt", ""),
+                tags=["approved"],
+            )
+        except Exception as e:
+            logger.debug("Asset library add failed: %s", e)
+
+        # Clean up temp composed file
+        try:
+            Path(composed_path).unlink(missing_ok=True)
+        except Exception as e:
+            logger.debug("Composed cleanup failed for %s: %s", composed_path, e)
+        state.clear_last_composed()
+
+    # Save approved mascot outputs to grow character reference library
+    _mascot_kw = re.compile(r"mascot|character", re.IGNORECASE)
+    _is_mascot_draft = (
+        _mascot_kw.search(pending.get("original_request", ""))
+        or _mascot_kw.search(pending.get("image_prompt", ""))
+    )
+    if _is_mascot_draft and pending.get("image_url"):
+        try:
+            import httpx as _httpx
+            async with _httpx.AsyncClient(timeout=20, follow_redirects=True) as _c:
+                _r = await _c.get(pending["image_url"])
+                _r.raise_for_status()
+                ts = int(time.time())
+                save_path = Path(settings.BRAND_FOLDER) / "assets" / f"mascot_approved_{ts}.png"
+                _PILImage.open(io.BytesIO(_r.content)).convert("RGB").save(str(save_path), "PNG")
+                logger.info("Saved approved mascot output: %s", save_path)
+        except Exception as e:
+            logger.warning("Failed to save mascot output: %s", e)
+
+    # Add to LoRA training set
+    if pending.get("image_url"):
+        try:
+            from agent import lora_pipeline
+            img_url = pending["image_url"]
+            img_prompt = pending.get("image_prompt", "")
+            ct = pending.get("content_type", composed_ct or "announcement")
+            lora_count, threshold_hit = await lora_pipeline.add_training_image_from_url(
+                img_url, img_prompt, ct,
+            )
+            logger.info("LoRA training image added (%d total)", lora_count)
+            if threshold_hit:
+                await update.message.reply_text(
+                    f"Training set reached {lora_count} images! "
+                    f"Use /train_lora to start LoRA training.",
+                )
+        except Exception as e:
+            logger.warning("Failed to add LoRA training image: %s", e)
+
+    # Post to X
+    tweet_url = None
+    try:
+        await update.message.chat.send_action("typing")
+        tweet_url = await publisher.post_to_x(
+            pending.get("caption", ""),
+            pending.get("hashtags", []),
+            pending.get("image_url"),
+        )
+    except Exception as e:
+        logger.error("Failed to post to X: %s", e)
+        await update.message.reply_text(
+            f"Approved, but X posting failed: {_esc(str(e))}\n"
+            f"Feedback logged ({count} total entries).",
+            parse_mode="HTML",
+        )
+        state.clear_pending()
+        state.clear_draft_history()
+        return
+
+    # If this draft came from the auto-post scheduler, record it
+    auto_slot = pending.get("auto_slot")
+    if auto_slot:
+        auto_state.record_post(
+            slot_name=auto_slot,
+            caption=pending.get("caption", ""),
+            tweet_url=tweet_url,
+            event_ids=pending.get("auto_event_ids"),
+        )
+        logger.info("Auto-post slot '%s' recorded via approve (%s)", auto_slot, source)
+
+    state.clear_pending()
+    state.clear_draft_history()
+    slot_note = f"  (auto-slot: {_esc(auto_slot)})" if auto_slot else ""
+    await update.message.reply_text(
+        f"Posted to X!{slot_note}\n"
+        f"{_esc(tweet_url)}\n\n"
+        f"Feedback logged ({count} total entries).",
+        parse_mode="HTML",
+    )
+    logger.info("Draft approved (%s) and posted: %s (feedback #%d)", source, tweet_url, count)
+
+    # Track context — draft approved, nothing pending
+    try:
+        user_id = update.effective_user.id if update.effective_user else 0
+        if user_id:
+            conversation_context.update_context(
+                user_id,
+                last_bot_action="sent_content",
+                pending_draft_exists=False,
+                last_command="/approve",
+            )
+    except Exception as e:
+        logger.debug("Context tracking failed in _do_approve: %s", e)
+
+    # Auto-summarize preferences at threshold
+    if count % settings.FEEDBACK_SUMMARIZE_EVERY == 0:
+        try:
+            await update.message.reply_text("Auto-learning preferences from feedback history...")
+            summary = await feedback.summarize_preferences()
+            await update.message.reply_text(
+                f"Learned preferences updated ({len(summary)} chars).",
+            )
+        except Exception as e:
+            logger.error("Auto-summarize failed: %s", e)
+
+
+async def _do_reject(update: Update, context: ContextTypes.DEFAULT_TYPE, feedback_text: str = "", source: str = "command") -> None:
+    """Core reject logic shared by /reject, NL router, and inline buttons."""
+    pending = state.get_pending()
+    if not pending:
+        await update.message.reply_text("Nothing to reject. Send me a content request first.")
+        return
+
+    if not feedback_text:
+        await update.message.reply_text(
+            "Please include feedback: /reject <i>make it more urgent and add a CTA</i>",
+            parse_mode="HTML",
+        )
+        return
+
+    await update.message.chat.send_action("typing")
+
+    # Log the rejection
+    count = await feedback.async_log_feedback(
+        request=pending.get("original_request", ""),
+        draft=pending,
+        accepted=False,
+        feedback_text=feedback_text,
+        resources_used=pending.get("resources_used", []),
+    )
+    logger.info("Draft rejected (%s, feedback #%d): %s", source, count, feedback_text[:100])
+
+    # Update generation history status
+    try:
+        ts = pending.get("timestamp", 0)
+        if ts:
+            await generation_history.async_update_generation_status(ts, "rejected")
+    except Exception as e:
+        logger.debug("Generation history update failed: %s", e)
+
+    # Auto-summarize at threshold
+    if count % settings.FEEDBACK_SUMMARIZE_EVERY == 0:
+        try:
+            await feedback.summarize_preferences()
+            logger.info("Auto-summarized preferences after %d entries", count)
+        except Exception as e:
+            logger.error("Auto-summarize failed: %s", e)
+
+    # Clear the old pending before running revision
+    state.clear_pending()
+
+    # Track context — draft rejected, revision incoming
+    try:
+        user_id = update.effective_user.id if update.effective_user else 0
+        if user_id:
+            conversation_context.update_context(
+                user_id,
+                last_bot_action="idle",
+                pending_draft_exists=False,
+                last_command="/reject",
+            )
+    except Exception as e:
+        logger.debug("Context tracking failed in _do_reject: %s", e)
+
+    # Branch: agent mode re-runs with revision context, pipeline mode uses revise_draft
+    if settings.AGENT_MODE == "agent":
+        await _handle_agent_revision(update, pending, feedback_text)
+    else:
+        await _handle_pipeline_revision(update, pending, feedback_text)
 
 
 def _esc(text: str) -> str:
@@ -210,11 +471,6 @@ async def approve_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     if not _authorized(update.effective_user.id):
         return
 
-    pending = state.get_pending()
-    if not pending:
-        await update.message.reply_text("Nothing to approve. Send me a content request first.")
-        return
-
     # Parse optional option number from "/approve N"
     text = (update.message.text or "").strip()
     parts = text.split()
@@ -225,177 +481,7 @@ async def approve_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         except ValueError:
             pass
 
-    # If multiple image options exist, select the chosen one
-    image_urls = pending.get("image_urls", [])
-    if image_urls and 1 <= option_num <= len(image_urls):
-        pending["image_url"] = image_urls[option_num - 1]
-        logger.info("Approve: selected option %d of %d", option_num, len(image_urls))
-    elif image_urls and option_num > len(image_urls):
-        await update.message.reply_text(
-            f"Only {len(image_urls)} options available. Use /approve 1-{len(image_urls)}."
-        )
-        return
-
-    await update.message.chat.send_action("typing")
-
-    # Log feedback
-    count = await feedback.async_log_feedback(
-        request=pending.get("original_request", ""),
-        draft=pending,
-        accepted=True,
-        resources_used=pending.get("resources_used", []),
-    )
-
-    # Update generation history status
-    try:
-        ts = pending.get("timestamp", 0)
-        if ts:
-            await generation_history.async_update_generation_status(ts,"approved")
-    except Exception as e:
-        logger.debug("Generation history update failed: %s", e)
-
-    # Save approved composed image to brand/references/ for style consistency
-    composed_path, composed_ct = state.get_last_composed()
-    if composed_path and Path(composed_path).exists():
-        try:
-            refs_dir = Path(settings.BRAND_FOLDER) / "references"
-            refs_dir.mkdir(parents=True, exist_ok=True)
-            ts = int(time.time())
-            save_name = f"approved_{composed_ct}_{ts}.png"
-            save_path = refs_dir / save_name
-            import shutil
-            shutil.copy2(composed_path, save_path)
-            logger.info("Saved approved reference: %s", save_path)
-
-            # Cap at 5 per content_type — delete oldest
-            existing = sorted(refs_dir.glob(f"approved_{composed_ct}_*.png"))
-            if len(existing) > 5:
-                for old in existing[:-5]:
-                    old.unlink(missing_ok=True)
-                    logger.info("Pruned old reference: %s", old.name)
-        except Exception as e:
-            logger.warning("Failed to save approved reference: %s", e)
-
-        # Save into active style profile if one is set for this content_type
-        try:
-            active_profile = state.get_active_profile(composed_ct)
-            if active_profile:
-                count = state.add_profile_image(active_profile, composed_path)
-                logger.info(
-                    "Saved approved image to profile %s (%d images)",
-                    active_profile, count,
-                )
-        except Exception as e:
-            logger.warning("Failed to save to style profile: %s", e)
-
-        # Add to asset library
-        try:
-            asset_library.add(
-                composed_path, "approved", composed_ct or "general",
-                prompt=pending.get("image_prompt", ""),
-                tags=["approved"],
-            )
-        except Exception as e:
-            logger.debug("Asset library add failed: %s", e)
-
-        # Clean up temp composed file
-        try:
-            Path(composed_path).unlink(missing_ok=True)
-        except Exception as e:
-            logger.debug("Composed cleanup failed for %s: %s", composed_path, e)
-        state.clear_last_composed()
-
-    # Save approved mascot outputs to grow character reference library
-    _mascot_kw = re.compile(r"mascot|character", re.IGNORECASE)
-    _is_mascot_draft = (
-        _mascot_kw.search(pending.get("original_request", ""))
-        or _mascot_kw.search(pending.get("image_prompt", ""))
-    )
-    if _is_mascot_draft and pending.get("image_url"):
-        try:
-            import httpx as _httpx
-            async with _httpx.AsyncClient(timeout=20, follow_redirects=True) as _c:
-                _r = await _c.get(pending["image_url"])
-                _r.raise_for_status()
-                ts = int(time.time())
-                save_path = Path(settings.BRAND_FOLDER) / "assets" / f"mascot_approved_{ts}.png"
-                _PILImage.open(io.BytesIO(_r.content)).convert("RGB").save(str(save_path), "PNG")
-                logger.info("Saved approved mascot output: %s", save_path)
-        except Exception as e:
-            logger.warning("Failed to save mascot output: %s", e)
-
-    # Add to LoRA training set
-    if pending.get("image_url"):
-        try:
-            from agent import lora_pipeline
-            img_url = pending["image_url"]
-            img_prompt = pending.get("image_prompt", "")
-            ct = pending.get("content_type", composed_ct or "announcement")
-            lora_count, threshold_hit = await lora_pipeline.add_training_image_from_url(
-                img_url, img_prompt, ct,
-            )
-            logger.info("LoRA training image added (%d total)", lora_count)
-            if threshold_hit:
-                await update.message.reply_text(
-                    f"Training set reached {lora_count} images! "
-                    f"Use /train_lora to start LoRA training.",
-                )
-        except Exception as e:
-            logger.warning("Failed to add LoRA training image: %s", e)
-
-    # Post to X
-    tweet_url = None
-    try:
-        await update.message.chat.send_action("typing")
-        tweet_url = await publisher.post_to_x(
-            pending.get("caption", ""),
-            pending.get("hashtags", []),
-            pending.get("image_url"),
-        )
-    except Exception as e:
-        logger.error("Failed to post to X: %s", e)
-        await update.message.reply_text(
-            f"Approved, but X posting failed: {_esc(str(e))}\n"
-            f"Feedback logged ({count} total entries).",
-            parse_mode="HTML",
-        )
-        state.clear_pending()
-        state.clear_draft_history()
-        return
-
-    # If this draft came from the auto-post scheduler, record it so the slot
-    # is marked as fulfilled for today and duplicate detection works.
-    auto_slot = pending.get("auto_slot")
-    if auto_slot:
-        auto_state.record_post(
-            slot_name=auto_slot,
-            caption=pending.get("caption", ""),
-            tweet_url=tweet_url,
-            event_ids=pending.get("auto_event_ids"),
-        )
-        logger.info("Auto-post slot '%s' recorded via /approve", auto_slot)
-
-    state.clear_pending()
-    state.clear_draft_history()
-    slot_note = f"  (auto-slot: {_esc(auto_slot)})" if auto_slot else ""
-    await update.message.reply_text(
-        f"Posted to X!{slot_note}\n"
-        f"{_esc(tweet_url)}\n\n"
-        f"Feedback logged ({count} total entries).",
-        parse_mode="HTML",
-    )
-    logger.info("Draft approved and posted: %s (feedback #%d)", tweet_url, count)
-
-    # Auto-summarize preferences at threshold
-    if count % settings.FEEDBACK_SUMMARIZE_EVERY == 0:
-        try:
-            await update.message.reply_text("Auto-learning preferences from feedback history...")
-            summary = await feedback.summarize_preferences()
-            await update.message.reply_text(
-                f"Learned preferences updated ({len(summary)} chars).",
-            )
-        except Exception as e:
-            logger.error("Auto-summarize failed: %s", e)
+    await _do_approve(update, context, option_num=option_num, source="command")
 
 
 async def edit_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -529,58 +615,11 @@ async def reject_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     if not _authorized(update.effective_user.id):
         return
 
-    pending = state.get_pending()
-    if not pending:
-        await update.message.reply_text("Nothing to reject. Send me a content request first.")
-        return
-
     # Extract feedback after "/reject"
     text = update.message.text or ""
     feedback_text = text.partition("/reject")[2].strip()
-    if not feedback_text:
-        await update.message.reply_text(
-            "Please include feedback: /reject <i>make it more urgent and add a CTA</i>",
-            parse_mode="HTML",
-        )
-        return
 
-    await update.message.chat.send_action("typing")
-
-    # Log the rejection
-    count = await feedback.async_log_feedback(
-        request=pending.get("original_request", ""),
-        draft=pending,
-        accepted=False,
-        feedback_text=feedback_text,
-        resources_used=pending.get("resources_used", []),
-    )
-    logger.info("Draft rejected (feedback #%d): %s", count, feedback_text[:100])
-
-    # Update generation history status
-    try:
-        ts = pending.get("timestamp", 0)
-        if ts:
-            await generation_history.async_update_generation_status(ts,"rejected")
-    except Exception as e:
-        logger.debug("Generation history update failed: %s", e)
-
-    # Auto-summarize at threshold
-    if count % settings.FEEDBACK_SUMMARIZE_EVERY == 0:
-        try:
-            await feedback.summarize_preferences()
-            logger.info("Auto-summarized preferences after %d entries", count)
-        except Exception as e:
-            logger.error("Auto-summarize failed: %s", e)
-
-    # Clear the old pending before running revision — prevents any stray message
-    # handlers from triggering a second generation during the revision
-    state.clear_pending()
-
-    # Branch: agent mode re-runs with revision context, pipeline mode uses revise_draft
-    if settings.AGENT_MODE == "agent":
-        await _handle_agent_revision(update, pending, feedback_text)
-    else:
-        await _handle_pipeline_revision(update, pending, feedback_text)
+    await _do_reject(update, context, feedback_text=feedback_text, source="command")
 
 
 async def _handle_pipeline_revision(update: Update, pending: dict, feedback_text: str) -> None:
@@ -1174,7 +1213,7 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Handle any plain text message as a content request — branches on AGENT_MODE."""
+    """Handle any plain text message — routes through intent router before generation."""
     if not _authorized(update.effective_user.id):
         return
 
@@ -1185,7 +1224,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     if not request:
         return
 
-    # Onboarding intercept — handle messages during onboarding flow
+    # Onboarding intercept — handle messages during onboarding flow (highest priority)
     session = onboarding.get_session(update.effective_user.id)
     if session and session.state not in (
         onboarding.OnboardingState.IDLE.value,
@@ -1210,14 +1249,22 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             await update.message.reply_text(summary, parse_mode="HTML")
         return
 
-    # Rate limit — prevent accidental double-sends from burning API credits
+    # Intent routing — classify message and dispatch if confident
+    if settings.INTENT_ROUTER_ENABLED:
+        try:
+            handled = await _route_intent(update, context, request)
+            if handled:
+                return
+        except Exception as e:
+            logger.warning("Intent router error, falling through to generation: %s", e)
+
+    # Fallback: generation path (rate limited, pending draft blocked)
     if _rate_limited(update.effective_user.id):
         await update.message.reply_text(
             f"Please wait {_RATE_LIMIT_SECONDS}s between requests."
         )
         return
 
-    # Block if there's already a pending draft
     if state.has_pending():
         await update.message.reply_text(
             "You have a pending draft. /approve, /reject, or /cancel it first.",
@@ -1229,6 +1276,119 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         await _handle_agent_mode(update, request)
     else:
         await _handle_pipeline_mode(update, request)
+
+
+async def _route_intent(update: Update, context: ContextTypes.DEFAULT_TYPE, message: str) -> bool:
+    """Classify intent and dispatch. Returns True if handled, False to fall through."""
+    user_id = update.effective_user.id
+    ctx = conversation_context.get_context(user_id)
+    # Sync pending draft state from actual state file
+    ctx.pending_draft_exists = state.has_pending()
+
+    result = await intent_router.classify_intent(message, ctx)
+    intent = result.intent
+    confidence = result.confidence
+
+    logger.info(
+        "Intent: %s (%.2f) via %s for: %s",
+        intent, confidence, result.routed_via, message[:60],
+    )
+
+    # Track classified intent
+    try:
+        recent = list(ctx.recent_intents) + [intent]
+        conversation_context.update_context(user_id, recent_intents=recent)
+    except Exception as e:
+        logger.debug("Failed to track intent: %s", e)
+
+    # High-confidence actions
+    if intent == "approve" and confidence >= 0.8:
+        await _do_approve(update, context, source="router")
+        return True
+
+    if intent == "reject" and confidence >= 0.8:
+        fb = result.parameters.get("feedback", message)
+        await _do_reject(update, context, feedback_text=fb, source="router")
+        return True
+
+    if intent == "edit_request" and confidence >= 0.5:
+        fb = result.parameters.get("feedback", message)
+        if state.has_pending():
+            await _do_reject(update, context, feedback_text=fb, source="router")
+        else:
+            return False  # Fall through to generation
+        return True
+
+    if intent == "reroll" and confidence >= 0.8:
+        pending = state.get_pending()
+        if pending:
+            original = pending.get("original_request", "")
+            state.clear_pending()
+            state.clear_draft_history()
+            await update.message.reply_text("Regenerating...")
+            if original:
+                if settings.AGENT_MODE == "agent":
+                    await _handle_agent_mode(update, original)
+                else:
+                    await _handle_pipeline_mode(update, original)
+            return True
+        return False
+
+    if intent == "modify_last" and confidence >= 0.5:
+        fb = result.parameters.get("feedback", message)
+        modified = await chat.handle_modify_last(fb, ctx)
+        if modified:
+            # Save modified draft and re-send
+            state.save_pending(
+                caption=modified.get("caption", ""),
+                hashtags=modified.get("hashtags", []),
+                image_url=modified.get("image_url"),
+                alt_text=modified.get("alt_text", ""),
+                image_prompt=modified.get("image_prompt", ""),
+                original_request=modified.get("original_request", ""),
+            )
+            await _send_draft(update, modified, modified.get("image_url"))
+            return True
+        return False
+
+    # Info commands
+    if intent == "show_status" and confidence >= 0.8:
+        await status_command(update, context)
+        return True
+
+    if intent == "show_help" and confidence >= 0.8:
+        await help_command(update, context)
+        return True
+
+    if intent == "show_analytics" and confidence >= 0.8:
+        await analytics_command(update, context)
+        return True
+
+    if intent == "show_history" and confidence >= 0.8:
+        await history_command(update, context)
+        return True
+
+    if intent == "brand_check" and confidence >= 0.8:
+        await brand_check_command(update, context)
+        return True
+
+    # Conversational
+    if intent == "greeting":
+        user = update.effective_user
+        name = user.first_name if user else ""
+        reply = await chat.handle_greeting(name)
+        await update.message.reply_text(reply)
+        conversation_context.update_context(user_id, last_bot_action="sent_content")
+        return True
+
+    if intent == "casual_chat" and confidence >= 0.5:
+        reply = await chat.handle_casual_chat(message, ctx)
+        await update.message.reply_text(reply)
+        conversation_context.update_context(user_id, last_bot_action="sent_content")
+        return True
+
+    # generate_content or unknown / low confidence → fall through to generation
+    return False
 
 
 async def _handle_agent_mode(update: Update, request: str) -> None:
@@ -1678,6 +1838,18 @@ async def _send_draft(
     if resources:
         text_msg += f"\n\n<i>Resources: {_esc(resources.to_summary())}</i>"
 
+    # Inline keyboard for quick actions
+    keyboard = InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("Approve", callback_data="draft_approve"),
+            InlineKeyboardButton("Reject", callback_data="draft_reject"),
+        ],
+        [
+            InlineKeyboardButton("Edit", callback_data="draft_edit"),
+            InlineKeyboardButton("Reroll", callback_data="draft_reroll"),
+        ],
+    ])
+
     if image_url:
         photo, composed = await _maybe_compose(draft, image_url, content_type)
 
@@ -1697,14 +1869,84 @@ async def _send_draft(
                 photo=photo,
                 caption=text_msg[:1024],  # Telegram photo caption limit
                 parse_mode="HTML",
+                reply_markup=keyboard,
             )
             if len(text_msg) > 1024:
                 await update.message.reply_text(text_msg, parse_mode="HTML")
         except Exception as e:
             logger.warning("Failed to send image via Telegram: %s — sending text only", e)
-            await update.message.reply_text(text_msg, parse_mode="HTML")
+            await update.message.reply_text(text_msg, parse_mode="HTML", reply_markup=keyboard)
     else:
-        await update.message.reply_text(text_msg, parse_mode="HTML")
+        await update.message.reply_text(text_msg, parse_mode="HTML", reply_markup=keyboard)
+
+    # Track context — draft was sent
+    try:
+        user_id = update.effective_user.id if update.effective_user else 0
+        if user_id:
+            conversation_context.update_context(
+                user_id,
+                last_bot_action="sent_draft",
+                pending_draft_exists=True,
+                last_content_type=content_type,
+            )
+    except Exception as e:
+        logger.debug("Context tracking failed in _send_draft: %s", e)
+
+
+# ---------------------------------------------------------------------------
+# Inline draft button callbacks
+# ---------------------------------------------------------------------------
+
+
+class _CallbackProxy:
+    """Lightweight proxy so callback query responses go through query.message."""
+    def __init__(self, update, query):
+        self._update = update
+        self.message = query.message
+        self.effective_user = query.from_user
+    def __getattr__(self, name):
+        return getattr(self._update, name)
+
+
+async def draft_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle inline keyboard button presses on draft messages."""
+    query = update.callback_query
+    await query.answer()
+
+    if not _authorized(query.from_user.id):
+        return
+
+    action = query.data.split("_", 1)[1]  # approve|reject|edit|reroll
+
+    # Proxy so _do_approve/_do_reject reply via query.message
+    proxy = _CallbackProxy(update, query)
+
+    if action == "approve":
+        await _do_approve(proxy, context, source="button")
+    elif action == "reject":
+        await query.message.reply_text(
+            "What should I change? Reply with your feedback, e.g.:\n"
+            "<i>make it more urgent and add a CTA</i>",
+            parse_mode="HTML",
+        )
+    elif action == "edit":
+        await query.message.reply_text(
+            "What should I edit? Reply with your feedback, e.g.:\n"
+            "<i>change the background to blue</i>",
+            parse_mode="HTML",
+        )
+    elif action == "reroll":
+        pending = state.get_pending()
+        if pending:
+            original = pending.get("original_request", "")
+            state.clear_pending()
+            state.clear_draft_history()
+            await query.message.reply_text("Regenerating...")
+            if original:
+                if settings.AGENT_MODE == "agent":
+                    await _handle_agent_mode(proxy, original)
+                else:
+                    await _handle_pipeline_mode(proxy, original)
 
 
 # ---------------------------------------------------------------------------

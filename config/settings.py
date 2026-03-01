@@ -62,6 +62,9 @@ OPENCLAW_SCRIPTS_DIR: str = os.getenv(
     str(Path.home() / ".openclaw" / "skills" / "brand-mover" / "scripts"),
 )
 
+# --- Intent Router ---
+INTENT_ROUTER_ENABLED: bool = os.getenv("INTENT_ROUTER_ENABLED", "true").lower() in ("true", "1", "yes")
+
 # --- Auto Post ---
 AUTO_POST_ENABLED: bool = os.getenv("AUTO_POST_ENABLED", "false").lower() in ("true", "1", "yes")
 AUTO_POST_SCHEDULE_FILE: str = os.getenv(
