@@ -1368,6 +1368,15 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
     caption = (update.message.caption or "").strip()
 
+    # Caption-based /template_upload — image sent with "/template_upload [name]" as caption
+    if caption.lower().startswith("/template_upload"):
+        template_name = caption[len("/template_upload"):].strip()
+        if context:
+            context.user_data["template_name"] = template_name
+        state.clear_reference_image()  # Undo the reference save above
+        await _handle_template_upload(update, context, tmp_path)
+        return
+
     # Caption-based /brand_check — image sent with "/brand_check" as caption
     if caption.lower().startswith("/brand_check"):
         await update.message.chat.send_action("typing")
