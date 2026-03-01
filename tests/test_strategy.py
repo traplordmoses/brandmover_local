@@ -322,6 +322,76 @@ class TestGenerateContentCalendar:
         saved = (tmp_path / "content_calendar.md").read_text()
         assert saved == md
 
+    def test_includes_creative_data_in_prompt(self, tmp_path):
+        """Calendar prompt includes creative brief and never_do when provided."""
+        captured_prompt = {}
+        mock_response = MagicMock()
+        mock_response.content = [MagicMock(text=json.dumps({
+            "calendar": [], "weekly_theme": "", "notes": "",
+        }))]
+
+        rec = StrategyRecommendation(
+            archetype="has_identity",
+            recommended_content_types=["announcement"],
+        )
+
+        async def _run():
+            with patch("agent.strategy.anthropic.AsyncAnthropic") as mock_cls:
+                mock_client = AsyncMock()
+                async def capture_create(**kwargs):
+                    captured_prompt["messages"] = kwargs.get("messages", [])
+                    return mock_response
+                mock_client.messages.create = capture_create
+                mock_cls.return_value = mock_client
+                with patch("agent.strategy.settings") as mock_settings:
+                    mock_settings.BRAND_FOLDER = str(tmp_path)
+                    mock_settings.BRAND_NAME = "TestBrand"
+                    mock_settings.ANTHROPIC_API_KEY = "test-key"
+                    return await generate_content_calendar(
+                        "TestBrand", "A test brand", ["x"], rec,
+                        creative_brief="garage startup confidence. hand-drawn warmth.",
+                        never_do=["Never use stock photos", "Avoid corporate jargon"],
+                    )
+
+        asyncio.run(_run())
+        user_msg = captured_prompt["messages"][0]["content"]
+        assert "garage startup confidence" in user_msg
+        assert "Never use stock photos" in user_msg
+        assert "CREATIVE DIRECTION" in user_msg
+
+    def test_omits_creative_section_when_empty(self, tmp_path):
+        """Calendar prompt omits creative section when no creative data."""
+        captured_prompt = {}
+        mock_response = MagicMock()
+        mock_response.content = [MagicMock(text=json.dumps({
+            "calendar": [], "weekly_theme": "", "notes": "",
+        }))]
+
+        rec = StrategyRecommendation(
+            archetype="starting_fresh",
+            recommended_content_types=["announcement"],
+        )
+
+        async def _run():
+            with patch("agent.strategy.anthropic.AsyncAnthropic") as mock_cls:
+                mock_client = AsyncMock()
+                async def capture_create(**kwargs):
+                    captured_prompt["messages"] = kwargs.get("messages", [])
+                    return mock_response
+                mock_client.messages.create = capture_create
+                mock_cls.return_value = mock_client
+                with patch("agent.strategy.settings") as mock_settings:
+                    mock_settings.BRAND_FOLDER = str(tmp_path)
+                    mock_settings.BRAND_NAME = "TestBrand"
+                    mock_settings.ANTHROPIC_API_KEY = "test-key"
+                    return await generate_content_calendar(
+                        "TestBrand", "A test brand", ["x"], rec,
+                    )
+
+        asyncio.run(_run())
+        user_msg = captured_prompt["messages"][0]["content"]
+        assert "CREATIVE DIRECTION" not in user_msg
+
     def test_handles_bad_json_response(self, tmp_path):
         mock_response = MagicMock()
         mock_response.content = [MagicMock(text="Not valid JSON at all")]

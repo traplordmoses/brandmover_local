@@ -729,6 +729,18 @@ async def finalize_onboarding(session: OnboardingSession) -> str:
     # Save config.json + strategy.md
     strategy_mod.save_strategy(rec, session.brand_name)
 
+    # Extract creative data for content calendar
+    entries_creative = (session.asset_audit or {}).get("entries_creative", [])
+    creative_brief = ""
+    never_do_list: list[str] = []
+    for ec in entries_creative:
+        if ec.get("overall_energy"):
+            creative_brief += ec["overall_energy"] + ". "
+        for dna in ec.get("creative_dna", []):
+            creative_brief += dna + ". "
+        never_do_list.extend(ec.get("never_do", []))
+    creative_brief = creative_brief.strip()
+
     # Generate content calendar
     try:
         posting_freq = session.collected_fields.get("posting_frequency", "")
@@ -738,6 +750,8 @@ async def finalize_onboarding(session: OnboardingSession) -> str:
             platforms=session.platforms or ["x"],
             rec=rec,
             posting_frequency=posting_freq,
+            creative_brief=creative_brief,
+            never_do=never_do_list or None,
         )
     except Exception as e:
         logger.warning("Content calendar generation failed: %s", e)

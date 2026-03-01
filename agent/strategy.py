@@ -314,6 +314,8 @@ async def generate_content_calendar(
     platforms: list[str],
     rec: StrategyRecommendation,
     posting_frequency: str = "",
+    creative_brief: str = "",
+    never_do: list[str] | None = None,
 ) -> str:
     """Generate a weekly content calendar and return it as markdown.
 
@@ -330,6 +332,19 @@ async def generate_content_calendar(
         visual_style=rec.visual_style_notes or "modern",
         posting_frequency=posting_frequency or "daily",
     )
+
+    # Conditionally append creative direction
+    if creative_brief or never_do:
+        creative_lines = ["\n\nCREATIVE DIRECTION:"]
+        if creative_brief:
+            creative_lines.append(f"Brief: {creative_brief}")
+        if never_do:
+            creative_lines.append("Never do: " + "; ".join(never_do))
+        creative_lines.append(
+            "Use the creative brief to inform topic choices and tone. "
+            "Avoid anything in the never-do list."
+        )
+        prompt += "\n".join(creative_lines)
 
     response = await client.messages.create(
         model="claude-sonnet-4-20250514",
