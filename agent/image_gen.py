@@ -260,9 +260,9 @@ def select_model(content_type: str, prompt: str) -> tuple[str, str]:
 
     ct = content_type.lower()
 
-    # Text overlay detection
-    if ct == "announcement" or _TEXT_OVERLAY_KEYWORDS.search(prompt):
-        return _MODELS["nano-banana"], "announcement + text overlay"
+    # Text overlay detection — only when prompt explicitly requests rendered text
+    if _TEXT_OVERLAY_KEYWORDS.search(prompt):
+        return _MODELS["nano-banana"], "text overlay requested"
 
     # Brand assets
     if ct == "brand_asset" or any(kw in prompt.lower() for kw in ("icon", "logo", "svg")):

@@ -261,9 +261,9 @@ class TestBuildInput:
 # ---------------------------------------------------------------------------
 
 class TestSelectModel:
-    def test_announcement_routes_to_nano_banana(self):
+    def test_announcement_routes_to_flux(self):
         model, reason = select_model("announcement", "Product launch image")
-        assert model == _MODELS["nano-banana"]
+        assert model == _MODELS["flux"]
 
     def test_brand_asset_routes_to_recraft(self):
         model, reason = select_model("brand_asset", "A brand icon")

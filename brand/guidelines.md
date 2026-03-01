@@ -67,27 +67,29 @@ FOID sits at the intersection of meme culture and on-chain permanence. It treats
 
 | Role | Name | Hex | RGB | Notes |
 |------|------|-----|-----|-------|
-| Primary | Hot Pink | `#ff69b4` | (255, 105, 180) | Main brand accent — vibrant energy, emotional content |
-| Primary | Electric Purple | `#8b5fbf` | (139, 95, 191) | Tech/spiritual balance — mystical yet accessible |
-| Primary | Deep Space Blue | `#1a4b8c` | (26, 75, 140) | Foundation color — depth, permanence |
-| Secondary | Electric Blue | `#0066ff` | (0, 102, 255) | Energy accent — action, engagement |
-| Secondary | Neon Pink | `#ff006b` | (255, 0, 107) | High-energy moments — celebrations, alerts |
-| Secondary | Rusty Orange | `#ff6b35` | (255, 107, 53) | Warmth accent — community, human moments |
-| Accent 1 | Cyan | `#00ffff` | (0, 255, 255) | Digital glow — interactive elements, tech |
-| Accent 2 | Forest Green | `#7cb342` | (124, 179, 66) | Growth, success — positive states |
-| Accent 3 | Golden Yellow | `#FFD700` | (255, 215, 0) | Premium moments — achievements, rewards |
-| Background | Deep Night | `#0a0a1a` | (10, 10, 26) | Primary dark background |
-| Background Alt | Midnight Blue | `#1a1a3a` | (26, 26, 58) | Secondary dark — cards, panels |
-| Text | White | `#ffffff` | (255, 255, 255) | Primary text on dark backgrounds |
-| Neutral | Charcoal | `#2d2d2d` | (45, 45, 45) | Mid-tone elements, UI components |
+| Primary | Iridescent Blue | `#6B9FD4` | (107, 159, 212) | Core brand color — backgrounds, frosted glass panels, overall atmosphere |
+| Secondary | Aurora Teal | `#4AA8B8` | (74, 168, 184) | Underwater gradient streaks — ambient glow, aurora effects |
+| Accent | Hot Pink | `#FF69B4` | (255, 105, 180) | CTA buttons (PROPOSE A MEME), highlights, energy moments |
+| Accent 2 | Golden Amber | `#D4A843` | (212, 168, 67) | Section headings, nav buttons, premium elements |
+| Accent 3 | Cyan Terminal | `#3EEEC4` | (62, 238, 196) | Terminal text, tech accents, status indicators, prayer console |
+| Accent 4 | Bubble White | `#E8F0FF` | (232, 240, 255) | Sparkles, lens flares, light refractions, bubble highlights |
+| Accent 5 | Status Green | `#4CAF50` | (76, 175, 80) | Connected indicators, success badges (WON), online status |
+| Background | Sky Blue | `#5B8FC4` | (91, 143, 196) | Primary background — iridescent light blue |
+| Background Alt | Light Azure | `#8BBAE8` | (139, 186, 232) | Secondary background — gradient lighter endpoint |
+| Panel Dark | Terminal Navy | `#0D1B2A` | (13, 27, 42) | Terminal/chat dark panels — prayer console, loreboard HUD |
+| Text | White | `#FFFFFF` | (255, 255, 255) | Primary text on all backgrounds |
+| Text Alt | Dark Navy | `#1A2E44` | (26, 46, 68) | Text on light backgrounds, muted captions |
 
 **Color rules:**
-- Deep Night (#0a0a1a) and Midnight Blue (#1a1a3a) are the dominant backgrounds. Dark mode only.
-- Hot Pink (#ff69b4) is the signature glow — use for Foid Mommy, emotional content, community moments
-- Electric Purple (#8b5fbf) bridges tech and spirituality — perfect for ritual content and mystical elements
-- Cyan (#00ffff) creates digital atmosphere — use for interactive elements and tech emphasis
-- The brand lives in the tension between mystical purples/pinks and electric blues/cyans
-- Never use bright/white backgrounds. Always maintain the deep space aesthetic.
+- Sky Blue (#5B8FC4) and Light Azure (#8BBAE8) are the dominant backgrounds. Light iridescent blue is the brand's world.
+- The overall palette is ethereal, bubbly, and iridescent — like looking through water or aurora borealis.
+- Hot Pink (#FF69B4) is for CTAs and high-energy moments only — never overuse it.
+- Golden Amber (#D4A843) is for headings and navigation — gives a warm Y2K desktop feel.
+- Cyan Terminal (#3EEEC4) is exclusive to terminal/tech UI elements (prayer console, status text, code).
+- Terminal Navy (#0D1B2A) is ONLY for dark panels that sit inside the light blue world (prayer terminal, chat, HUD overlays).
+- Frosted glass panels use semi-transparent white/blue overlays on the iridescent background.
+- Never use pure dark backgrounds as the primary canvas. The light blue iridescent world is always the outer context.
+- Bubbles, sparkles, and lens flares use Bubble White (#E8F0FF) at varying opacity.
 
 ---
 
@@ -124,23 +126,25 @@ FOID sits at the intersection of meme culture and on-chain permanence. It treats
 
 ## ILLUSTRATION STYLE
 
-**Visual aesthetic:**
-- **Hand-drawn meets 3D digital native** — authentic anime-inspired character design with both polished 3D renders and deliberate MS Paint crudeness
-- Mix of professional 3D character modeling with unpolished, early-internet pixel art aesthetics
-- Anime-influenced warmth and approachability — characters with kawaii eyes, streetwear styling, gaming culture references
-- Digital-first identity with work-in-progress transparency — showing grid lines, T-poses, and raw modeling environments
-- Y2K nostalgia collides with cyberpunk energy — holographic effects, chromatic aberration, neon glitch aesthetics
-- Gaming avatar authenticity over corporate polish — feels like real player characters, not marketing mascots
+**Visual aesthetic: Frutiger Aero / Y2K Windows XP**
+- **Iridescent underwater dreamscape** — the brand lives in a luminous light-blue world with aurora gradients, bubble effects, and aquatic light refractions
+- **.EXE window chrome as design language** — every panel, card, and UI element uses the Windows XP-era title bar (colored dots: red/yellow/green, filename like GALLERY.EXE) and frosted glass body
+- **Frutiger Aero energy** — glossy, bubbly, skeuomorphic, transparent materials, soft gradients, lens flares, sparkle particles, nature-meets-technology optimism
+- Anime-influenced 3D character design (MiFOID avatars) with streetwear styling, gaming culture DNA
+- Translucent materials everywhere — clear Game Boy shells, glass panels, see-through bubbles
+- Deliberate contrast between the light ethereal world (outer) and dark terminal panels (inner) — dark UI elements sit INSIDE the iridescent blue world like windows into a machine
 
 **Image generation prompt guidance:**
-- "anime-inspired 3D character, gaming avatar aesthetic, streetwear styling, friendly approachable energy, cyberpunk color palette"
-- "hand-drawn digital art, MS Paint aesthetic, early 2000s internet energy, unpolished but authentic"
-- "Y2K holographic effects, chromatic aberration, neon glow, digital nostalgia, kawaii cyberpunk"
-- Materials: translucent gaming devices, holographic foil, neon glow effects, pixelated textures
-- Lighting: electric blues and hot pinks, digital glow, retro-futuristic ambiance
-- Avoid: corporate stock photo look, overly polished renders that lose personality, realistic photography
+- "Frutiger Aero aesthetic, iridescent light blue background, aurora gradient, underwater dreamscape, Y2K Windows XP energy"
+- "frosted glass panels, .EXE title bar with red yellow green dots, glossy bubbly transparent materials"
+- "bubble effects, lens flares, sparkle particles, light refractions, aquatic glow, aurora borealis streaks"
+- "anime-inspired 3D character, gaming avatar, streetwear, translucent Game Boy shell, holographic"
+- Materials: frosted glass, soap bubbles, aurora gradients, translucent plastic, glossy chrome
+- Lighting: soft ambient iridescent blue, teal aurora streaks, warm golden highlights, ethereal glow
+- Background: ALWAYS light iridescent blue (#5B8FC4 to #8BBAE8) with teal aurora streaks — never dark
+- Avoid: dark cyberpunk backgrounds, neon-on-black aesthetics, gritty/dystopian looks, corporate stock photos
 
-**Technical specs:** Target 1200x675px for X posts. Embrace both high-res 3D and deliberately pixelated aesthetics.
+**Technical specs:** Target 1200x675px for X posts. Embrace the bubbly, glossy, iridescent world.
 
 ---
 
@@ -315,17 +319,24 @@ FOID sits at the intersection of meme culture and on-chain permanence. It treats
 
 ## CREATIVE BRIEF
 
-FOID embodies unfiltered digital authenticity that bridges childhood wonder with mystical tech innovation. The brand lives in the beautiful tension between amateur charm and sophisticated craft — equally comfortable with MS Paint crudeness and polished 3D artistry, creating a community where digital spirituality meets gaming culture rebellion.
+FOID lives in an iridescent underwater dreamworld — a luminous light-blue universe where .EXE windows float like aquarium panels, bubbles drift through aurora-streaked skies, and frosted glass cards glow with warm golden headers. The aesthetic is pure Frutiger Aero / Y2K Windows XP nostalgia: glossy, bubbly, optimistic, translucent. Every surface catches light. Dark terminal panels (prayer console, loreboard HUD, chat) exist as windows INTO the machine, sitting inside this ethereal blue world — never as the world itself. The brand bridges childhood wonder with on-chain permanence, wrapping serious cultural infrastructure in the most inviting, sparkly, iridescent packaging imaginable.
 
 ---
 
 ## NEVER DO
 
-- Never digitally clean up the rough edges or amateur aesthetics — they're features, not bugs
-- Don't pair polished corporate photography with raw digital art — maintain the authentic digital-native energy
-- Never remove gaming culture elements (headphones, T-poses, grid lines) — they tell the story of creation
+- Never use dark/black backgrounds as the primary canvas — the iridescent light blue world IS the brand
+- Don't create dark cyberpunk, neon-on-black, or gritty dystopian imagery — FOID is ethereal and optimistic
+- Never strip away the .EXE window chrome, frosted glass, or bubble effects — they define the visual language
 - Don't sanitize the underground/rebellious energy with corporate polish
 - Never use formal business contexts for anime-inspired mascots — they belong in gaming and community spaces
-- Don't strip away holographic effects, glitch aesthetics, or Y2K nostalgia elements
-- Never pair with traditional religious imagery — this is digital spirituality, not conventional faith
+- Don't pair with traditional religious imagery — this is digital spirituality, not conventional faith
 - Don't explain the ironic juxtapositions — let the surreal combinations speak for themselves
+- Never make the terminal/dark UI panels the dominant visual — they're windows INTO a machine, sitting inside the light blue world
+- Don't use flat/matte design — everything should have gloss, transparency, refraction, or iridescence
+
+## COMPOSITOR
+
+| Setting        | Value          |
+|----------------|----------------|
+| Enabled        | false           |
