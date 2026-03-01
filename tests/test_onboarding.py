@@ -18,6 +18,8 @@ from agent.onboarding import (
     finalize_strategy,
     _apply_collected_fields,
     REQUIRED_FIELDS,
+    OPTIONAL_FIELDS,
+    _DISCOVERY_SYSTEM,
 )
 
 
@@ -386,6 +388,35 @@ class TestPersistence:
         assert loaded.brand_name == "Persisted"
         assert loaded.state == OnboardingState.DISCOVERY.value
         assert loaded.collected_fields["project_name"] == "Persisted"
+
+    def test_new_optional_fields_in_tuple(self):
+        assert "cultural_references" in OPTIONAL_FIELDS
+        assert "what_they_hate" in OPTIONAL_FIELDS
+        assert "secret_weapon" in OPTIONAL_FIELDS
+
+    def test_required_fields_unchanged(self):
+        assert "project_name" in REQUIRED_FIELDS
+        assert "description" in REQUIRED_FIELDS
+        assert "platforms" in REQUIRED_FIELDS
+        assert "has_assets" in REQUIRED_FIELDS
+        assert "visual_preference" in REQUIRED_FIELDS
+
+    def test_discovery_prompt_has_creative_framing(self):
+        assert "creative collaborator" in _DISCOVERY_SYSTEM.lower() or "creative" in _DISCOVERY_SYSTEM.lower()
+        assert "cultural_references" in _DISCOVERY_SYSTEM
+        assert "what_they_hate" in _DISCOVERY_SYSTEM
+        assert "secret_weapon" in _DISCOVERY_SYSTEM
+
+    def test_new_optional_fields_collected(self):
+        s = _session()
+        _apply_collected_fields(s, {
+            "cultural_references": "Blade Runner, synthwave",
+            "what_they_hate": "Corporate Memphis",
+            "secret_weapon": "Hand-drawn everything",
+        })
+        assert s.collected_fields["cultural_references"] == "Blade Runner, synthwave"
+        assert s.collected_fields["what_they_hate"] == "Corporate Memphis"
+        assert s.collected_fields["secret_weapon"] == "Hand-drawn everything"
 
     def test_conversation_history_persists(self, state_path):
         s = _session(OnboardingState.DISCOVERY.value)
