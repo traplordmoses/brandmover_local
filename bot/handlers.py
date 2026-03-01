@@ -1970,14 +1970,18 @@ async def template_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
 
 async def template_upload_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Handle /template_upload — start template upload flow."""
+    """Handle /template_upload [name] — start template upload flow."""
     if not _authorized(update.effective_user.id):
         return
 
+    template_name = " ".join(context.args) if context.args else ""
     context.user_data["awaiting_template"] = True
+    context.user_data["template_name"] = template_name
+    name_note = f" (name: <b>{_esc(template_name)}</b>)" if template_name else ""
     await update.message.reply_text(
-        "Send me a template image (frame, mockup, bordered layout).\n"
+        f"Send me a template image (frame, mockup, bordered layout).{name_note}\n"
         "I'll analyze it and register it for future posts.",
+        parse_mode="HTML",
     )
 
 
@@ -2000,9 +2004,10 @@ async def _handle_template_upload(update: Update, context: ContextTypes.DEFAULT_
         return
 
     try:
+        user_name = (context.user_data or {}).get("template_name", "")
         template = await _tm.register_template(
             str(dest),
-            name=f"Template {int(time.time()) % 10000}",
+            name=user_name or f"Template {int(time.time()) % 10000}",
         )
 
         regions_str = ", ".join(f"{r.type} ({r.width}x{r.height})" for r in template.regions)
@@ -2112,11 +2117,16 @@ async def _send_draft(
     # Build template section if title/subtitle present
     template_section = ""
     if draft.get("title") or draft.get("subtitle"):
+        cfg = _cc.get_config()
+        platform_line = (
+            f"<b>Platform:</b> {_esc(draft.get('platform', cfg.badge_text or ''))}\n"
+            if cfg.badge_text else ""
+        )
         template_section = (
             f"\n<b>--- Image Template ---</b>\n"
             f"<b>Title:</b> {_esc(draft.get('title', ''))}\n"
             f"<b>Subtitle:</b> {_esc(draft.get('subtitle', ''))}\n"
-            f"<b>Platform:</b> {_esc(draft.get('platform', 'WEB'))}\n"
+            + platform_line
         )
 
     # --- Multi-option path (N>1 images) ---

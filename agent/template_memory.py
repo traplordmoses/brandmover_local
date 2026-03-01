@@ -263,7 +263,7 @@ async def register_template(
         height=height,
         regions=regions,
         aspect_ratio=aspect_ratio,
-        content_types=analysis.get("suggested_content_types", []),
+        content_types=[],  # Universal — matches all content types
         analysis_notes=analysis.get("analysis_notes", ""),
     )
 
@@ -359,15 +359,24 @@ def _resize_crop(img: Image.Image, target_w: int, target_h: int) -> Image.Image:
 
 
 def _get_text_font(region_height: int) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
-    """Get a font sized for the region height."""
+    """Get a font sized for the region height, preferring brand fonts."""
     font_size = max(12, int(region_height * 0.6))
-    try:
-        return ImageFont.truetype("/System/Library/Fonts/Helvetica.ttc", font_size)
-    except (OSError, IOError):
+    # Try brand fonts first (same directory as compositor)
+    fonts_dir = Path(settings.BRAND_FOLDER) / "assets" / "fonts"
+    for candidate in ("Orbitron-Variable.ttf", "Inter-Variable.ttf"):
+        font_path = fonts_dir / candidate
+        if font_path.exists():
+            try:
+                return ImageFont.truetype(str(font_path), font_size)
+            except (OSError, IOError):
+                continue
+    # Fall back to system fonts
+    for sys_font in ("/System/Library/Fonts/Helvetica.ttc", "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"):
         try:
-            return ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", font_size)
+            return ImageFont.truetype(sys_font, font_size)
         except (OSError, IOError):
-            return ImageFont.load_default()
+            continue
+    return ImageFont.load_default()
 
 
 # ---------------------------------------------------------------------------

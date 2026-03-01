@@ -599,7 +599,7 @@ async def compose_branded_image(
 ) -> io.BytesIO | None:
     title    = (draft.get("title")    or "").strip()
     subtitle = (draft.get("subtitle") or "").strip()
-    platform = (draft.get("platform") or "WEB").strip()
+    platform = (draft.get("platform") or "").strip()
 
     if not title and not subtitle:
         return None
