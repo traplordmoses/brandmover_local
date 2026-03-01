@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from bot.handlers import _merge_extracted, _process_bulk_upload, handle_photo, handle_document
+from bot.handlers import _merge_extracted, _process_bulk_upload, _delayed_bulk_process, handle_photo, handle_document
 
 
 # ---------------------------------------------------------------------------
@@ -39,9 +39,7 @@ def _mock_update(user_id=123, has_photo=True, caption=""):
 def _mock_context(user_data=None):
     ctx = MagicMock()
     ctx.user_data = user_data or {}
-    ctx.job_queue = MagicMock()
-    ctx.job_queue.get_jobs_by_name = MagicMock(return_value=[])
-    ctx.job_queue.run_once = MagicMock()
+    ctx.bot = AsyncMock()
     return ctx
 
 
@@ -110,7 +108,8 @@ class TestBulkUploadBatching:
             with patch("bot.handlers._authorized", return_value=True), \
                  patch("bot.handlers.onboarding") as mock_onboard, \
                  patch("bot.handlers.state"), \
-                 patch("bot.handlers._PILImage") as mock_pil:
+                 patch("bot.handlers._PILImage") as mock_pil, \
+                 patch("bot.handlers._bulk_upload_tasks", {}):
                 mock_onboard.get_session.return_value = None
                 mock_img = MagicMock()
                 mock_pil.open.return_value.convert.return_value = mock_img
@@ -123,11 +122,6 @@ class TestBulkUploadBatching:
                 for call in update.message.reply_text.call_args_list:
                     assert "reference / mascot" not in str(call)
 
-                # Should have scheduled a bulk upload job
-                ctx.job_queue.run_once.assert_called_once()
-                call_kwargs = ctx.job_queue.run_once.call_args
-                assert call_kwargs.kwargs["when"] == 3
-
                 # Should have added to batch
                 assert len(ctx.user_data["_bulk_uploads"]) == 1
 
@@ -139,7 +133,8 @@ class TestBulkUploadBatching:
             with patch("bot.handlers._authorized", return_value=True), \
                  patch("bot.handlers.onboarding") as mock_onboard, \
                  patch("bot.handlers.state"), \
-                 patch("bot.handlers._PILImage") as mock_pil:
+                 patch("bot.handlers._PILImage") as mock_pil, \
+                 patch("bot.handlers._bulk_upload_tasks", {}):
                 mock_onboard.get_session.return_value = None
                 mock_img = MagicMock()
                 mock_pil.open.return_value.convert.return_value = mock_img
@@ -150,8 +145,6 @@ class TestBulkUploadBatching:
                     await handle_photo(update, ctx)
 
                 assert len(ctx.user_data["_bulk_uploads"]) == 5
-                # Timer should have been rescheduled 5 times
-                assert ctx.job_queue.run_once.call_count == 5
 
         asyncio.run(_run())
 
@@ -195,12 +188,9 @@ class TestProcessBulkUpload:
         async def _run():
             ctx = MagicMock()
             ctx.user_data = {"_bulk_uploads": ["/tmp/img1.jpg"]}
-            ctx.job = MagicMock()
-            ctx.job.chat_id = 456
-            ctx.job.user_id = 123
             ctx.bot.send_message = AsyncMock()
 
-            await _process_bulk_upload(ctx)
+            await _process_bulk_upload(ctx, user_id=123, chat_id=456)
 
             ctx.bot.send_message.assert_called_once()
             msg = ctx.bot.send_message.call_args[0][1]
@@ -215,9 +205,6 @@ class TestProcessBulkUpload:
             ctx.user_data = {
                 "_bulk_uploads": ["/tmp/img1.jpg", "/tmp/img2.jpg", "/tmp/img3.jpg"],
             }
-            ctx.job = MagicMock()
-            ctx.job.chat_id = 456
-            ctx.job.user_id = 123
             ctx.bot.send_message = AsyncMock()
             ctx.bot.send_chat_action = AsyncMock()
 
@@ -233,13 +220,12 @@ class TestProcessBulkUpload:
                  patch("shutil.copy2"), \
                  patch("bot.handlers.Path") as mock_path:
                 mock_path.return_value.mkdir = MagicMock()
-                # Make Path() / "references" work
                 mock_refs = MagicMock()
                 mock_refs.mkdir = MagicMock()
                 mock_path.return_value.__truediv__ = MagicMock(return_value=mock_refs)
                 mock_refs.__truediv__ = MagicMock(return_value=Path("/tmp/fake"))
 
-                await _process_bulk_upload(ctx)
+                await _process_bulk_upload(ctx, user_id=123, chat_id=456)
 
             # Should have sent "received 3 images" message
             first_msg = ctx.bot.send_message.call_args_list[0][0][1]
@@ -255,12 +241,9 @@ class TestProcessBulkUpload:
         async def _run():
             ctx = MagicMock()
             ctx.user_data = {"_bulk_uploads": []}
-            ctx.job = MagicMock()
-            ctx.job.chat_id = 456
-            ctx.job.user_id = 123
             ctx.bot.send_message = AsyncMock()
 
-            await _process_bulk_upload(ctx)
+            await _process_bulk_upload(ctx, user_id=123, chat_id=456)
             ctx.bot.send_message.assert_not_called()
 
         asyncio.run(_run())
@@ -270,12 +253,9 @@ class TestProcessBulkUpload:
         async def _run():
             ctx = MagicMock()
             ctx.user_data = {"_bulk_uploads": ["/tmp/img1.jpg"]}
-            ctx.job = MagicMock()
-            ctx.job.chat_id = 456
-            ctx.job.user_id = 123
             ctx.bot.send_message = AsyncMock()
 
-            await _process_bulk_upload(ctx)
+            await _process_bulk_upload(ctx, user_id=123, chat_id=456)
             assert "_bulk_uploads" not in ctx.user_data
 
         asyncio.run(_run())

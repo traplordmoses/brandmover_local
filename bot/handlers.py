@@ -25,6 +25,10 @@ logger = logging.getLogger(__name__)
 _RATE_LIMIT_SECONDS = 10
 _last_request_time: dict[int, float] = {}
 
+# Bulk upload batch tracking — maps user_id to pending asyncio task
+import asyncio as _aio
+_bulk_upload_tasks: dict[int, _aio.Task] = {}
+
 
 def _authorized(user_id: int) -> bool:
     """Check if a Telegram user is the authorized operator."""
@@ -1093,12 +1097,19 @@ def _merge_extracted(results: list[dict]) -> dict:
     }
 
 
-async def _process_bulk_upload(context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Process batched photo uploads — auto-ingest if multiple, prompt if single."""
-    job = context.job
-    chat_id = job.chat_id
-    user_id = job.user_id
+async def _delayed_bulk_process(
+    context: ContextTypes.DEFAULT_TYPE, user_id: int, chat_id: int,
+) -> None:
+    """Wait 3 seconds for more photos, then process the batch."""
+    import asyncio
+    await asyncio.sleep(3)
+    await _process_bulk_upload(context, user_id, chat_id)
 
+
+async def _process_bulk_upload(
+    context: ContextTypes.DEFAULT_TYPE, user_id: int, chat_id: int,
+) -> None:
+    """Process batched photo uploads — auto-ingest if multiple, prompt if single."""
     batch = context.user_data.pop("_bulk_uploads", [])
     if not batch:
         return
@@ -1372,22 +1383,20 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             await _handle_pipeline_mode(update, caption)
     else:
         # Batch uploads: collect images for 3 seconds, then auto-ingest if bulk
+        import asyncio as _aio
+
         batch = context.user_data.setdefault("_bulk_uploads", [])
         batch.append(tmp_path)
         chat_id = update.message.chat_id
         user_id = update.effective_user.id
 
         # Cancel existing batch timer and reschedule
-        job_name = f"bulk_upload_{user_id}"
-        for job in context.job_queue.get_jobs_by_name(job_name):
-            job.schedule_removal()
+        existing = _bulk_upload_tasks.get(user_id)
+        if existing and not existing.done():
+            existing.cancel()
 
-        context.job_queue.run_once(
-            _process_bulk_upload,
-            when=3,
-            name=job_name,
-            chat_id=chat_id,
-            user_id=user_id,
+        _bulk_upload_tasks[user_id] = _aio.create_task(
+            _delayed_bulk_process(context, user_id, chat_id)
         )
 
 
