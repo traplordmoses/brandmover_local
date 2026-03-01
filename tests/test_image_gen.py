@@ -216,7 +216,8 @@ class TestBuildInput:
         payload = _build_input(_MODELS["flux"], "test prompt")
         assert payload["prompt"] == "test prompt"
         assert payload["aspect_ratio"] == "16:9"
-        assert payload["output_format"] == "webp"
+        assert payload["output_format"] == "jpg"
+        assert payload["output_quality"] == 95
 
     def test_flux_custom_aspect(self):
         payload = _build_input(_MODELS["flux"], "test", aspect_ratio="1:1")

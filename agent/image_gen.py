@@ -23,7 +23,7 @@ _REPLICATE_BASE_URL = "https://api.replicate.com/v1/models"
 
 # Model routing table
 _MODELS = {
-    "flux": "black-forest-labs/flux-1.1-pro",
+    "flux": "black-forest-labs/flux-1.1-pro-ultra",
     "nano-banana": "google/nano-banana-pro",
     "recraft-svg": "recraft-ai/recraft-v3-svg",
     "seedream": "bytedance/seedream-4.5",
@@ -300,7 +300,9 @@ def _build_input(
         base = {
             "prompt": prompt,
             "aspect_ratio": aspect_ratio or "16:9",
-            "output_format": "webp",
+            "output_format": "jpg",
+            "output_quality": 95,
+            "safety_tolerance": 5,
         }
     elif model_id == _MODELS["nano-banana"]:
         base = {
