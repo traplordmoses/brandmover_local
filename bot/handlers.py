@@ -1551,6 +1551,14 @@ async def _route_intent(update: Update, context: ContextTypes.DEFAULT_TYPE, mess
         await brand_check_command(update, context)
         return True
 
+    if intent == "upload_assets":
+        await update.message.reply_text(
+            "go ahead — send your images or PDFs and I'll analyze them automatically.\n\n"
+            "bulk uploads are auto-ingested with AI vision. "
+            "single images can be tagged as reference / mascot / style / background.",
+        )
+        return True
+
     # Conversational
     if intent == "greeting":
         user = update.effective_user

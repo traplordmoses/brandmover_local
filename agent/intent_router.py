@@ -30,6 +30,7 @@ KNOWN_INTENTS = (
     "generate_content",
     "change_style",
     "modify_last",
+    "upload_assets",
     "show_status",
     "show_help",
     "show_analytics",
@@ -97,6 +98,9 @@ _SHORT_MESSAGE_TABLE: dict[str, str] = {
     "sup": "greeting",
     "gm": "greeting",
     "good morning": "greeting",
+    # Upload
+    "upload": "upload_assets",
+    "ingest": "upload_assets",
     # Utility
     "help": "show_help",
     "status": "show_status",
@@ -206,6 +210,7 @@ Available intents:
 - show_help: User wants help or command list
 - show_analytics: User wants analytics/stats
 - show_history: User wants generation history
+- upload_assets: User wants to upload, share, or update brand assets, logos, images, or files
 - brand_check: User wants to check brand compliance
 - casual_chat: User is making conversation, not a command
 - greeting: User is saying hello

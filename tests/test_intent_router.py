@@ -402,6 +402,6 @@ class TestKnownIntents:
             assert intent in KNOWN_INTENTS
 
     def test_known_intents_tuple(self):
-        assert len(KNOWN_INTENTS) == 15
+        assert len(KNOWN_INTENTS) == 16
         assert "approve" in KNOWN_INTENTS
         assert "unknown" in KNOWN_INTENTS
