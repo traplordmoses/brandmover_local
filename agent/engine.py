@@ -291,6 +291,15 @@ async def run_agent(
     if draft:
         result.draft = _sanitize_draft(draft)
 
+    # Backfill content_type from generate_image tool call if missing from draft
+    if result.draft and not result.draft.get("content_type"):
+        for entry in reversed(tool_call_log):
+            if entry["name"] == "generate_image" and isinstance(entry.get("input"), dict):
+                ct = entry["input"].get("content_type")
+                if ct:
+                    result.draft["content_type"] = ct
+                    break
+
     # Extract image URL from tool calls
     result.image_url = _extract_image_url(tool_call_log)
     result.image_urls = _extract_image_urls(tool_call_log)

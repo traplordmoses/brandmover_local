@@ -38,6 +38,10 @@ COMPOSITOR_PROFILE_TYPES = {
 # Types the agent can select in its JSON output
 AGENT_SELECTABLE_TYPES = (
     "announcement",
+    "campaign",
+    "meme",
+    "engagement",
+    "advice",
     "lifestyle",
     "event",
     "educational",

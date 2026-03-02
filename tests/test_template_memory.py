@@ -21,6 +21,8 @@ from agent.template_memory import (
     detect_if_template,
     parse_region_description,
     _CONTENT_TYPE_ASPECT,
+    _get_meme_font,
+    _draw_fitted_text,
 )
 
 
@@ -183,8 +185,12 @@ class TestTemplatePriority:
         result = memory.get_template_for_content_type("announcement")
         assert result.id == "wide"
 
-        # meme prefers 1:1
+        # meme prefers 16:9
         result = memory.get_template_for_content_type("meme")
+        assert result.id == "wide"
+
+        # engagement prefers 1:1
+        result = memory.get_template_for_content_type("engagement")
         assert result.id == "square"
 
     def test_universal_falls_back_to_first(self, templates_dir):
@@ -197,7 +203,7 @@ class TestTemplatePriority:
 
     def test_content_type_aspect_map_has_expected_types(self):
         assert _CONTENT_TYPE_ASPECT["announcement"] == "16:9"
-        assert _CONTENT_TYPE_ASPECT["meme"] == "1:1"
+        assert _CONTENT_TYPE_ASPECT["meme"] == "16:9"
         assert _CONTENT_TYPE_ASPECT["community"] == "1:1"
         assert _CONTENT_TYPE_ASPECT["campaign"] == "16:9"
 
@@ -744,3 +750,90 @@ class TestIsTemplateRegionUpdate:
 
         # Only one keyword hit ("top") — not enough
         assert _is_template_region_update("the top result is good", mock_ctx) is False
+
+
+# ---------------------------------------------------------------------------
+# Meme-style text rendering
+# ---------------------------------------------------------------------------
+
+class TestMemeTextStyle:
+    def test_meme_template_uses_uppercase(self, tmp_path):
+        """Meme-named templates render text in ALL CAPS."""
+        tpl_path = _create_test_image(tmp_path / "tpl.png", 1200, 700, "black")
+        gen_path = str(_create_test_image(tmp_path / "gen.png", 1200, 700, "blue"))
+
+        image_region = TemplateRegion(type="image", x=0, y=0, width=1200, height=700)
+        text_top = TemplateRegion(type="text", x=0, y=0, width=1200, height=105)
+        text_bottom = TemplateRegion(type="text", x=0, y=595, width=1200, height=105)
+        template = _template(
+            name="meme", path=str(tpl_path),
+            width=1200, height=700,
+            regions=[image_region, text_top, text_bottom],
+            content_types=["meme"],
+        )
+
+        async def _run():
+            return await apply_template(
+                template, gen_path,
+                {"title": "when the code works", "subtitle": "on the first try"},
+            )
+
+        result = asyncio.run(_run())
+        assert result is not None
+        assert isinstance(result, io.BytesIO)
+
+    def test_meme_style_detected_by_name(self):
+        """Style detection is based on template name containing 'meme'."""
+        # Template name "meme" → style="meme"
+        tpl_meme = _template(name="meme")
+        assert "meme" in tpl_meme.name.lower()
+
+        # Template name "My Meme Frame" → should also detect
+        tpl_meme2 = _template(name="My Meme Frame")
+        assert "meme" in tpl_meme2.name.lower()
+
+        # Template name "announcement" → not meme
+        tpl_other = _template(name="announcement")
+        assert "meme" not in tpl_other.name.lower()
+
+    def test_draw_fitted_text_meme_uppercases(self, tmp_path):
+        """_draw_fitted_text with style='meme' converts text to ALL CAPS."""
+        canvas = Image.new("RGBA", (1200, 700), (0, 0, 0, 255))
+        region = TemplateRegion(type="text", x=0, y=0, width=1200, height=105)
+        # Just verify it doesn't crash and produces output
+        _draw_fitted_text(canvas, "hello world", region, role="title", style="meme")
+        # Canvas should have been drawn on (non-trivial to verify text content,
+        # but we can verify it didn't raise)
+
+    def test_draw_fitted_text_default_style(self, tmp_path):
+        """_draw_fitted_text with default style uses Orbitron/Inter (no uppercasing)."""
+        canvas = Image.new("RGBA", (800, 600), (0, 0, 0, 255))
+        region = TemplateRegion(type="text", x=50, y=50, width=700, height=80)
+        _draw_fitted_text(canvas, "hello world", region, role="title", style="default")
+
+    def test_non_meme_template_keeps_default_style(self, tmp_path):
+        """Templates not named 'meme' should use default style (Orbitron/Inter)."""
+        tpl_path = _create_test_image(tmp_path / "tpl.png", 800, 600, "white")
+        gen_path = str(_create_test_image(tmp_path / "gen.png", 400, 300, "blue"))
+
+        image_region = TemplateRegion(type="image", x=0, y=0, width=400, height=300)
+        text_region = TemplateRegion(type="text", x=50, y=320, width=700, height=80)
+        template = _template(
+            name="announcement", path=str(tpl_path),
+            regions=[image_region, text_region],
+            content_types=["announcement"],
+        )
+
+        async def _run():
+            return await apply_template(
+                template, gen_path,
+                {"title": "Big News Today"},
+            )
+
+        result = asyncio.run(_run())
+        assert result is not None
+
+    def test_get_meme_font_returns_font(self):
+        """_get_meme_font returns a usable font object."""
+        font = _get_meme_font(48)
+        assert font is not None

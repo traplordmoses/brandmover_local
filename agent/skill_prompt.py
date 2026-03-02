@@ -49,6 +49,7 @@ def _get_content_types_block() -> str:
     from agent.content_types import AGENT_SELECTABLE_TYPES
     _descriptions = {
         "announcement": "product launches, updates, news, partnerships (uses text-overlay-optimized model)",
+        "meme": "memes, humor, shitposts, viral content — uses meme template with Impact font top/bottom text",
         "lifestyle": "aspirational, day-in-the-life, culture (uses photorealistic model)",
         "event": "conferences, AMAs, meetups (uses photorealistic model)",
         "educational": "tutorials, explainers, how-tos",
@@ -117,7 +118,9 @@ The `title` and `subtitle` fields are used for the branded post template (text o
 CONTENT_TYPE values (pick the best fit for the request):
 {content_types_block}
 
-The content_type you choose determines which image generation model is used automatically.
+The content_type you choose determines which image generation model AND template are used automatically.
+
+**IMPORTANT:** When the user asks for a "meme", you MUST set content_type to `"meme"`. Do NOT use "community" for meme requests. The "meme" type triggers the meme template with Impact font top/bottom text overlay.
 
 ## BRAND_3D CONTENT TYPE
 

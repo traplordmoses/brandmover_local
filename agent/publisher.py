@@ -4,6 +4,7 @@ Publish posts to X (Twitter) using Tweepy v4+.
 
 import io
 import logging
+from pathlib import Path
 
 import httpx
 import tweepy
@@ -13,12 +14,15 @@ from config import settings
 logger = logging.getLogger(__name__)
 
 
-async def _download_image(url: str) -> bytes:
-    """Download an image from a URL and return raw bytes."""
-    async with httpx.AsyncClient(timeout=30, follow_redirects=True) as client:
-        resp = await client.get(url)
-        resp.raise_for_status()
-        return resp.content
+async def _download_image(url_or_path: str) -> bytes:
+    """Download an image from a URL or read from a local file path."""
+    if url_or_path.startswith(("http://", "https://")):
+        async with httpx.AsyncClient(timeout=30, follow_redirects=True) as client:
+            resp = await client.get(url_or_path)
+            resp.raise_for_status()
+            return resp.content
+    # Local file path
+    return Path(url_or_path).read_bytes()
 
 
 def _get_api_v1() -> tweepy.API:

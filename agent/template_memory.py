@@ -292,6 +292,22 @@ async def register_template(
     ]
 
     tid = template_id or str(uuid.uuid4())[:8]
+
+    # Auto-set content_types from template name if it matches a known type
+    from agent.content_types import ALL_CONTENT_TYPES
+    name_lower = name.lower().strip()
+    content_types: list[str] = []
+    for ct in ALL_CONTENT_TYPES:
+        if ct != "default" and ct == name_lower:
+            content_types = [ct]
+            break
+
+    # Also use suggested_content_types from analysis if we didn't match by name
+    if not content_types:
+        suggested = analysis.get("suggested_content_types", [])
+        if isinstance(suggested, list):
+            content_types = [s for s in suggested if s in ALL_CONTENT_TYPES and s != "default"]
+
     template = BrandTemplate(
         id=tid,
         name=name,
@@ -300,7 +316,7 @@ async def register_template(
         height=height,
         regions=regions,
         aspect_ratio=aspect_ratio,
-        content_types=[],  # Universal — matches all content types
+        content_types=content_types,
         analysis_notes=analysis.get("analysis_notes", ""),
     )
 
@@ -451,12 +467,14 @@ async def apply_template(
     text_regions.sort(key=lambda r: r.y)
     text_values = [draft.get("title", ""), draft.get("subtitle", "")]
     font_names = ["title", "subtitle"]
+    # Detect meme-style templates by name
+    text_style = "meme" if "meme" in template.name.lower() else "default"
     for i, region in enumerate(text_regions[:len(text_values)]):
         text = text_values[i]
         if not text:
             continue
         font_role = font_names[i] if i < len(font_names) else "subtitle"
-        _draw_fitted_text(canvas, text, region, font_role)
+        _draw_fitted_text(canvas, text, region, font_role, style=text_style)
 
     buf = io.BytesIO()
     canvas.convert("RGB").save(buf, "PNG")
@@ -502,17 +520,46 @@ def _get_text_font(font_size: int, role: str = "title") -> ImageFont.FreeTypeFon
     return ImageFont.load_default()
 
 
-def _fit_text(draw: ImageDraw.ImageDraw, text: str, font: ImageFont.FreeTypeFont | ImageFont.ImageFont, max_width: int) -> list[str]:
+def _get_meme_font(font_size: int) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
+    """Get Impact font for meme-style text rendering.
+
+    Falls back to bold condensed alternatives if Impact is unavailable.
+    """
+    # Check brand fonts dir first, then system fonts
+    fonts_dir = Path(settings.BRAND_FOLDER) / "assets" / "fonts"
+    candidates = [
+        fonts_dir / "Impact.ttf",
+        Path("/System/Library/Fonts/Supplemental/Impact.ttf"),
+        Path("/Library/Fonts/Impact.ttf"),
+        Path("/usr/share/fonts/truetype/msttcorefonts/Impact.ttf"),
+    ]
+    for font_path in candidates:
+        if font_path.exists():
+            try:
+                return ImageFont.truetype(str(font_path), font_size)
+            except (OSError, IOError):
+                continue
+    # Fallback to bold condensed alternatives
+    return _get_text_font(font_size, "title")
+
+
+def _fit_text(draw: ImageDraw.ImageDraw, text: str, font: ImageFont.FreeTypeFont | ImageFont.ImageFont, max_width: int, letter_spacing: int = 0) -> list[str]:
     """Word-wrap text into lines that each fit within max_width pixels."""
     words = text.split()
     if not words:
         return []
+
+    def _measure(s: str) -> int:
+        if letter_spacing and len(s) > 1:
+            return sum(draw.textbbox((0, 0), ch, font=font)[2] for ch in s) + letter_spacing * (len(s) - 1)
+        bbox = draw.textbbox((0, 0), s, font=font)
+        return bbox[2] - bbox[0]
+
     lines = []
     current_line = words[0]
     for word in words[1:]:
         test = f"{current_line} {word}"
-        bbox = draw.textbbox((0, 0), test, font=font)
-        if bbox[2] - bbox[0] <= max_width:
+        if _measure(test) <= max_width:
             current_line = test
         else:
             lines.append(current_line)
@@ -526,12 +573,22 @@ def _draw_fitted_text(
     text: str,
     region: TemplateRegion,
     role: str = "title",
+    style: str = "default",
 ) -> None:
-    """Draw text fitted into a region with word wrap, size fitting, and shadow.
+    """Draw text fitted into a region with word wrap, size fitting, and outline.
 
     Binary-searches from a large font size down to 16px to find the largest
     size where the word-wrapped text fits within the region.
+
+    style='meme' uses Impact font, ALL CAPS, 3px black outline, 48pt base at 1200px.
+    style='default' uses Orbitron/Inter with adaptive outline.
     """
+    is_meme = style == "meme"
+
+    # Meme style: ALL CAPS
+    if is_meme:
+        text = text.upper()
+
     draw = ImageDraw.Draw(canvas)
     padding = 8
     max_w = region.width - 2 * padding
@@ -539,16 +596,29 @@ def _draw_fitted_text(
     if max_w <= 0 or max_h <= 0:
         return
 
+    # Font getter for current style
+    def get_font(size: int) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
+        if is_meme:
+            return _get_meme_font(size)
+        return _get_text_font(size, role)
+
+    # Meme style: 48pt base scaled to canvas width (48pt at 1200px), 4px letter spacing
+    meme_spacing = 6 if is_meme else 0
+    if is_meme:
+        canvas_w = canvas.size[0]
+        base_size = max(16, int(48 * canvas_w / 1200))
+        lo, hi = 16, base_size
+    else:
+        lo, hi = 16, max(16, int(region.height * 0.7))
+
     # Binary search for best font size
-    lo, hi = 16, max(16, int(region.height * 0.7))
     best_size = lo
     best_lines: list[str] = [text]
 
     while lo <= hi:
         mid = (lo + hi) // 2
-        font = _get_text_font(mid, role)
-        lines = _fit_text(draw, text, font, max_w)
-        # Measure total height
+        font = get_font(mid)
+        lines = _fit_text(draw, text, font, max_w, letter_spacing=meme_spacing)
         line_height = draw.textbbox((0, 0), "Ay", font=font)[3]
         total_h = line_height * len(lines)
         if total_h <= max_h:
@@ -558,32 +628,49 @@ def _draw_fitted_text(
         else:
             hi = mid - 1
 
-    font = _get_text_font(best_size, role)
-    lines = _fit_text(draw, text, font, max_w)
+    font = get_font(best_size)
+    lines = _fit_text(draw, text, font, max_w, letter_spacing=meme_spacing)
     line_height = draw.textbbox((0, 0), "Ay", font=font)[3]
     total_h = line_height * len(lines)
 
     # Vertical centering
     y_offset = region.y + (region.height - total_h) // 2
 
-    # Outline thickness scales with font size — thicker for large meme text
-    outline_w = max(2, best_size // 15)
+    # Outline: meme uses fixed 3px black, default scales with font size
+    outline_w = 3 if is_meme else max(2, best_size // 15)
+    outline_fill = (0, 0, 0, 255) if is_meme else (0, 0, 0, 220)
 
     for line in lines:
-        line_bbox = draw.textbbox((0, 0), line, font=font)
-        line_w = line_bbox[2] - line_bbox[0]
+        # Measure line width (accounting for letter spacing)
+        if meme_spacing and len(line) > 1:
+            line_w = sum(draw.textbbox((0, 0), ch, font=font)[2] for ch in line) + meme_spacing * (len(line) - 1)
+        else:
+            line_bbox = draw.textbbox((0, 0), line, font=font)
+            line_w = line_bbox[2] - line_bbox[0]
         x_offset = region.x + (region.width - line_w) // 2  # center horizontally
-        # Dark outline for readability over any background (no scrim needed)
-        for dx in range(-outline_w, outline_w + 1):
-            for dy in range(-outline_w, outline_w + 1):
-                if dx == 0 and dy == 0:
-                    continue
-                draw.text(
-                    (x_offset + dx, y_offset + dy), line,
-                    fill=(0, 0, 0, 220), font=font,
-                )
-        # Main text on top
-        draw.text((x_offset, y_offset), line, fill=(255, 255, 255, 255), font=font)
+
+        if meme_spacing:
+            # Draw each character individually with spacing
+            cx = x_offset
+            for ch in line:
+                for dx in range(-outline_w, outline_w + 1):
+                    for dy in range(-outline_w, outline_w + 1):
+                        if dx == 0 and dy == 0:
+                            continue
+                        draw.text((cx + dx, y_offset + dy), ch, fill=outline_fill, font=font)
+                draw.text((cx, y_offset), ch, fill=(255, 255, 255, 255), font=font)
+                cx += draw.textbbox((0, 0), ch, font=font)[2] + meme_spacing
+        else:
+            # Default: draw whole line at once
+            for dx in range(-outline_w, outline_w + 1):
+                for dy in range(-outline_w, outline_w + 1):
+                    if dx == 0 and dy == 0:
+                        continue
+                    draw.text(
+                        (x_offset + dx, y_offset + dy), line,
+                        fill=outline_fill, font=font,
+                    )
+            draw.text((x_offset, y_offset), line, fill=(255, 255, 255, 255), font=font)
         y_offset += line_height
 
 
@@ -616,7 +703,7 @@ _CONTENT_TYPE_ASPECT = {
     "announcement": "16:9",
     "campaign": "16:9",
     "market": "16:9",
-    "meme": "1:1",
+    "meme": "16:9",
     "engagement": "1:1",
     "community": "1:1",
     "lifestyle": "16:9",

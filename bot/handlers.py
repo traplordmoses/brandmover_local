@@ -201,13 +201,6 @@ async def _do_approve(update: Update, context: ContextTypes.DEFAULT_TYPE, option
         except Exception as e:
             logger.debug("Asset library add failed: %s", e)
 
-        # Clean up temp composed file
-        try:
-            Path(composed_path).unlink(missing_ok=True)
-        except Exception as e:
-            logger.debug("Composed cleanup failed for %s: %s", composed_path, e)
-        state.clear_last_composed()
-
     # Save approved mascot outputs to grow character reference library
     _mascot_kw = re.compile(r"mascot|character", re.IGNORECASE)
     _is_mascot_draft = (
@@ -246,14 +239,17 @@ async def _do_approve(update: Update, context: ContextTypes.DEFAULT_TYPE, option
         except Exception as e:
             logger.warning("Failed to add LoRA training image: %s", e)
 
-    # Post to X
+    # Post to X — prefer composed image (template/compositor) over raw URL
     tweet_url = None
     try:
         await update.message.chat.send_action("typing")
+        publish_image = pending.get("image_url")
+        if composed_path and Path(composed_path).exists():
+            publish_image = composed_path
         tweet_url = await publisher.post_to_x(
             pending.get("caption", ""),
             pending.get("hashtags", []),
-            pending.get("image_url"),
+            publish_image,
         )
     except Exception as e:
         logger.error("Failed to post to X: %s", e)
@@ -264,6 +260,9 @@ async def _do_approve(update: Update, context: ContextTypes.DEFAULT_TYPE, option
         )
         state.clear_pending()
         state.clear_draft_history()
+        if composed_path and Path(composed_path).exists():
+            Path(composed_path).unlink(missing_ok=True)
+            state.clear_last_composed()
         return
 
     # If this draft came from the auto-post scheduler, record it
@@ -300,6 +299,14 @@ async def _do_approve(update: Update, context: ContextTypes.DEFAULT_TYPE, option
             )
     except Exception as e:
         logger.debug("Context tracking failed in _do_approve: %s", e)
+
+    # Clean up temp composed file (after publish so it's still available for X upload)
+    if composed_path and Path(composed_path).exists():
+        try:
+            Path(composed_path).unlink(missing_ok=True)
+        except Exception as e:
+            logger.debug("Composed cleanup failed for %s: %s", composed_path, e)
+        state.clear_last_composed()
 
     # Auto-summarize preferences at threshold
     if count % settings.FEEDBACK_SUMMARIZE_EVERY == 0:
@@ -1847,6 +1854,7 @@ async def _handle_agent_mode(update: Update, request: str) -> None:
             image_prompt=result.draft.get("image_prompt", ""),
             original_request=request,
             image_urls=image_urls if len(image_urls) > 1 else None,
+            content_type=result.draft.get("content_type"),
         )
 
         # Clean up reference image temp file if one was used
