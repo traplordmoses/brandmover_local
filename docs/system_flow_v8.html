@@ -1,0 +1,1341 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>BrandMover — System Architecture v8</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=Syne:wght@400;600;700;800&display=swap');
+
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --orange: #FF8800;
+    --orange-dim: #FF880033;
+    --orange-glow: #FF880066;
+    --green: #A8FF00;
+    --green-dim: #A8FF0022;
+    --red: #FF4444;
+    --red-dim: #FF444422;
+    --blue: #4488FF;
+    --blue-dim: #4488FF22;
+    --purple: #AA44FF;
+    --purple-dim: #AA44FF22;
+    --teal: #00FFCC;
+    --teal-dim: #00FFCC22;
+    --yellow: #FFE000;
+    --yellow-dim: #FFE00022;
+    --white: #FFFFFF;
+    --muted: #666666;
+    --card: #111111;
+    --card2: #161616;
+    --border: #222222;
+    --bg: #080808;
+  }
+
+  body {
+    background: var(--bg);
+    color: var(--white);
+    font-family: 'Syne', sans-serif;
+    min-height: 100vh;
+    overflow-x: hidden;
+  }
+
+  body::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)' opacity='0.04'/%3E%3C/svg%3E");
+    pointer-events: none;
+    z-index: 0;
+  }
+
+  .wrap {
+    position: relative;
+    z-index: 1;
+    padding: 48px 32px 80px;
+    max-width: 1400px;
+    margin: 0 auto;
+  }
+
+  /* HEADER */
+  .header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    margin-bottom: 56px;
+    gap: 24px;
+    flex-wrap: wrap;
+  }
+  .header-left h1 {
+    font-size: 13px;
+    letter-spacing: 0.2em;
+    color: var(--orange);
+    font-family: 'Space Mono', monospace;
+    margin-bottom: 8px;
+  }
+  .header-left h2 { font-size: 36px; font-weight: 800; line-height: 1.1; }
+  .header-left h2 span { color: var(--orange); }
+  .version-badge {
+    background: var(--orange-dim);
+    border: 1px solid var(--orange);
+    color: var(--orange);
+    font-family: 'Space Mono', monospace;
+    font-size: 11px;
+    padding: 6px 14px;
+    border-radius: 4px;
+    margin-top: 4px;
+    display: inline-block;
+  }
+  .session-stats {
+    display: flex;
+    gap: 16px;
+    margin-top: 12px;
+    flex-wrap: wrap;
+  }
+  .stat-pill {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 6px 12px;
+    font-family: 'Space Mono', monospace;
+    font-size: 10px;
+  }
+  .stat-pill span { color: var(--orange); font-weight: 700; }
+
+  /* TABS */
+  .tabs {
+    display: flex;
+    gap: 4px;
+    margin-bottom: 40px;
+    border-bottom: 1px solid var(--border);
+    padding-bottom: 0;
+    flex-wrap: wrap;
+  }
+  .tab {
+    padding: 10px 20px;
+    font-size: 13px;
+    font-weight: 600;
+    letter-spacing: 0.05em;
+    cursor: pointer;
+    border-bottom: 2px solid transparent;
+    color: var(--muted);
+    transition: all 0.2s;
+    background: none;
+    border-top: none;
+    border-left: none;
+    border-right: none;
+    font-family: 'Syne', sans-serif;
+    margin-bottom: -1px;
+  }
+  .tab:hover { color: var(--white); }
+  .tab.active { color: var(--orange); border-bottom-color: var(--orange); }
+  .tab .tab-new {
+    display: inline-block;
+    font-family: 'Space Mono', monospace;
+    font-size: 8px;
+    padding: 1px 4px;
+    border-radius: 2px;
+    margin-left: 6px;
+    vertical-align: middle;
+    background: var(--green-dim);
+    color: var(--green);
+    border: 1px solid var(--green);
+  }
+
+  .panel { display: none; }
+  .panel.active { display: block; }
+
+  /* NODES */
+  .node {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 14px 12px;
+    width: 100%;
+    position: relative;
+    transition: transform 0.2s, border-color 0.2s, box-shadow 0.2s;
+    cursor: default;
+  }
+  .node:hover { transform: translateY(-2px); box-shadow: 0 8px 32px rgba(0,0,0,0.6); }
+  .node.orange { border-color: var(--orange); background: var(--card2); }
+  .node.orange:hover { box-shadow: 0 8px 32px var(--orange-glow); }
+  .node.green { border-color: var(--green); }
+  .node.green:hover { box-shadow: 0 8px 32px #A8FF0033; }
+  .node.blue { border-color: var(--blue); }
+  .node.blue:hover { box-shadow: 0 8px 32px #4488FF33; }
+  .node.purple { border-color: var(--purple); }
+  .node.purple:hover { box-shadow: 0 8px 32px #AA44FF33; }
+  .node.teal { border-color: var(--teal); }
+  .node.teal:hover { box-shadow: 0 8px 32px #00FFCC33; }
+  .node.yellow { border-color: var(--yellow); }
+  .node.yellow:hover { box-shadow: 0 8px 32px #FFE00033; }
+  .node.red { border-color: var(--red); }
+
+  .node-icon { font-size: 18px; margin-bottom: 6px; display: block; }
+  .node-title { font-size: 12px; font-weight: 700; margin-bottom: 4px; line-height: 1.3; }
+  .node.orange .node-title { color: var(--orange); }
+  .node.green .node-title { color: var(--green); }
+  .node.blue .node-title { color: var(--blue); }
+  .node.purple .node-title { color: var(--purple); }
+  .node.teal .node-title { color: var(--teal); }
+  .node.yellow .node-title { color: var(--yellow); }
+  .node.red .node-title { color: var(--red); }
+  .node-body { font-size: 10px; color: var(--muted); line-height: 1.5; }
+
+  .node-tag {
+    display: inline-block;
+    margin-top: 8px;
+    padding: 2px 8px;
+    border-radius: 3px;
+    font-family: 'Space Mono', monospace;
+    font-size: 9px;
+    letter-spacing: 0.05em;
+  }
+  .tag-orange { background: var(--orange-dim); color: var(--orange); border: 1px solid var(--orange); }
+  .tag-green { background: var(--green-dim); color: var(--green); border: 1px solid var(--green); }
+  .tag-blue { background: var(--blue-dim); color: var(--blue); border: 1px solid var(--blue); }
+  .tag-purple { background: var(--purple-dim); color: var(--purple); border: 1px solid var(--purple); }
+  .tag-teal { background: var(--teal-dim); color: var(--teal); border: 1px solid var(--teal); }
+  .tag-yellow { background: var(--yellow-dim); color: var(--yellow); border: 1px solid var(--yellow); }
+  .tag-red { background: var(--red-dim); color: var(--red); border: 1px solid var(--red); }
+  .tag-muted { background: #1a1a1a; color: var(--muted); border: 1px solid var(--border); }
+
+  .section-head {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 16px;
+    margin-top: 32px;
+  }
+  .section-head h3 { font-size: 14px; font-weight: 700; letter-spacing: 0.1em; color: var(--white); }
+  .section-line { flex: 1; height: 1px; background: var(--border); }
+  .section-badge { font-family: 'Space Mono', monospace; font-size: 9px; padding: 2px 8px; border-radius: 3px; }
+
+  .legend {
+    display: flex;
+    gap: 20px;
+    flex-wrap: wrap;
+    margin-top: 16px;
+  }
+  .legend-item { display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--muted); }
+  .legend-dot { width: 8px; height: 8px; border-radius: 50%; }
+
+  /* AGENT LOOP ANIMATION */
+  @keyframes pulse-orange { 0%, 100% { box-shadow: 0 0 0 0 var(--orange-glow); } 50% { box-shadow: 0 0 20px 4px var(--orange-glow); } }
+  @keyframes flow-arrow { 0% { opacity: 0.3; } 50% { opacity: 1; } 100% { opacity: 0.3; } }
+  .pulse { animation: pulse-orange 3s infinite; }
+  .flow-arrow { animation: flow-arrow 2s infinite; }
+
+  /* HERO BLOCK */
+  .hero-block {
+    background: linear-gradient(135deg, #111111 0%, #1a1000 100%);
+    border: 2px solid var(--orange);
+    border-radius: 16px;
+    padding: 32px;
+    margin-bottom: 32px;
+    position: relative;
+    overflow: hidden;
+  }
+  .hero-block::before {
+    content: '';
+    position: absolute;
+    top: -50%;
+    right: -20%;
+    width: 400px;
+    height: 400px;
+    background: radial-gradient(circle, var(--orange-glow) 0%, transparent 70%);
+    pointer-events: none;
+    opacity: 0.15;
+  }
+
+  ::-webkit-scrollbar { width: 6px; height: 6px; }
+  ::-webkit-scrollbar-track { background: var(--bg); }
+  ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <!-- HEADER -->
+  <div class="header">
+    <div class="header-left">
+      <h1>BRANDMOVER LOCAL — SYSTEM ARCHITECTURE</h1>
+      <h2>Autonomous Brand<br>Content <span>Agent</span></h2>
+      <div class="session-stats">
+        <div class="stat-pill"><span>Agent</span> mode</div>
+        <div class="stat-pill"><span>35</span> modules</div>
+        <div class="stat-pill"><span>647</span> tests passing</div>
+        <div class="stat-pill"><span>14</span> content types</div>
+        <div class="stat-pill"><span>44</span> bot commands</div>
+        <div class="stat-pill"><span>8</span> agent tools</div>
+        <div class="stat-pill" style="border-color:var(--green);color:var(--green);"><span>brand-agnostic</span></div>
+        <div class="stat-pill" style="border-color:var(--teal);color:var(--teal);"><span>templates</span> deterministic</div>
+      </div>
+    </div>
+    <div>
+      <div class="version-badge">v8.0 — MAR 02 2026 — AGENT-FIRST ARCHITECTURE</div>
+      <div style="font-size:11px;color:var(--muted);margin-top:8px;font-family:'Space Mono',monospace;">Agent-first — 35 modules — 647 tests — singleton perf — security hardened</div>
+    </div>
+  </div>
+
+  <!-- TABS -->
+  <div class="tabs">
+    <button class="tab active" onclick="showTab('agent', event)">Agent Flow</button>
+    <button class="tab" onclick="showTab('templates', event)" style="color:var(--teal);">Templates <span class="tab-new" style="background:var(--teal-dim);color:var(--teal);border-color:var(--teal);">NEW</span></button>
+    <button class="tab" onclick="showTab('learning', event)">Learning Loop</button>
+    <button class="tab" onclick="showTab('brandconfig', event)">BrandConfig</button>
+    <button class="tab" onclick="showTab('models', event)">Image Models</button>
+    <button class="tab" onclick="showTab('modules', event)">Modules <span class="tab-new">35</span></button>
+    <button class="tab" onclick="showTab('commands', event)">Commands <span class="tab-new">44</span></button>
+    <button class="tab" onclick="showTab('lora', event)" style="color:var(--green);">LoRA Pipeline</button>
+    <button class="tab" onclick="showTab('security', event)" style="color:var(--red);">Security &amp; Perf <span class="tab-new" style="background:var(--red-dim);color:var(--red);border-color:var(--red);">NEW</span></button>
+    <button class="tab" onclick="showTab('eval', event)">Eval <span class="tab-new">647</span></button>
+    <button class="tab" onclick="showTab('setup', event)">Setup</button>
+    <button class="tab" onclick="showTab('video', event)" style="color:var(--yellow);">Video <span class="tab-new" style="background:var(--yellow-dim);color:var(--yellow);border-color:var(--yellow);">FUTURE</span></button>
+  </div>
+
+  <!-- ═══════════════════════════════════════════════════
+       AGENT FLOW TAB (DEFAULT — HERO)
+  ════════════════════════════════════════════════════ -->
+  <div id="panel-agent" class="panel active">
+
+    <!-- Hero -->
+    <div class="hero-block">
+      <div style="position:relative;z-index:1;">
+        <div style="font-family:'Space Mono',monospace;font-size:10px;color:var(--orange);letter-spacing:0.15em;margin-bottom:12px;">THE CORE — WHAT MAKES THIS BOT GREAT</div>
+        <div style="font-size:24px;font-weight:800;margin-bottom:12px;">Claude Opus 4.6 Tool-Use Agent</div>
+        <div style="font-size:14px;color:var(--muted);line-height:1.8;max-width:800px;">Instead of a rigid pipeline, Claude gets <strong style="color:var(--white)">8 tools</strong> and <strong style="color:var(--white)">decides dynamically</strong> what to call and in what order. It reads your brand guidelines, checks feedback history, generates images, and assembles posts — all autonomously. Each tool call sends a real-time progress update to Telegram. You just talk to it naturally and approve the result.</div>
+      </div>
+    </div>
+
+    <!-- The Loop Diagram -->
+    <div class="section-head">
+      <h3>THE AGENT LOOP</h3>
+      <div class="section-line"></div>
+      <div class="section-badge tag-orange">engine.py — max 15 turns — skill_prompt.py system prompt</div>
+    </div>
+
+    <div style="display:grid;grid-template-columns:1fr 40px 1fr 40px 1fr 40px 1fr 40px 1fr;gap:8px;align-items:start;margin-bottom:32px;">
+
+      <!-- INPUT -->
+      <div>
+        <div style="font-family:'Space Mono',monospace;font-size:10px;letter-spacing:0.15em;color:var(--muted);padding-bottom:12px;text-align:center;border-bottom:1px solid var(--border);margin-bottom:12px;">01 — INPUT</div>
+        <div class="node orange pulse">
+          <span class="node-icon">💬</span>
+          <div class="node-title">Natural Language</div>
+          <div class="node-body">"write a copy trading post"<br>"make a meme about gas fees"<br>"create something for our DEX launch"</div>
+          <span class="node-tag tag-orange">TEXT</span>
+        </div>
+        <div style="height:8px"></div>
+        <div class="node teal">
+          <span class="node-icon">🖼</span>
+          <div class="node-title">Photo Upload</div>
+          <div class="node-body">Reference image → saved to /tmp → auto-routes to img2img</div>
+          <span class="node-tag tag-teal">PHOTO</span>
+        </div>
+        <div style="height:8px"></div>
+        <div class="node blue">
+          <span class="node-icon">🤖</span>
+          <div class="node-title">Auto-Poster</div>
+          <div class="node-body">Cron scheduler generates posts from on-chain events + content themes</div>
+          <span class="node-tag tag-blue">SCHEDULED</span>
+        </div>
+      </div>
+
+      <div style="display:flex;align-items:center;justify-content:center;padding-top:40px;color:var(--orange);font-size:18px;" class="flow-arrow">→</div>
+
+      <!-- INTENT ROUTING -->
+      <div>
+        <div style="font-family:'Space Mono',monospace;font-size:10px;letter-spacing:0.15em;color:var(--muted);padding-bottom:12px;text-align:center;border-bottom:1px solid var(--border);margin-bottom:12px;">02 — INTENT ROUTER</div>
+        <div class="node purple">
+          <span class="node-icon">🧭</span>
+          <div class="node-title">intent_router.py</div>
+          <div class="node-body">Claude classifies user intent: generate content, ask question, refine draft, manage templates, chat. Routes to the right handler — no rigid command parsing needed.</div>
+          <span class="node-tag tag-purple">NL UNDERSTANDING</span>
+        </div>
+        <div style="height:8px"></div>
+        <div class="node blue">
+          <span class="node-icon">📋</span>
+          <div class="node-title">Context Assembly</div>
+          <div class="node-body">guidelines.md + learned_preferences.md + style profiles + conversation history</div>
+          <span class="node-tag tag-blue">BRAND</span>
+        </div>
+      </div>
+
+      <div style="display:flex;align-items:center;justify-content:center;padding-top:40px;color:var(--orange);font-size:18px;" class="flow-arrow">→</div>
+
+      <!-- AGENT LOOP -->
+      <div>
+        <div style="font-family:'Space Mono',monospace;font-size:10px;letter-spacing:0.15em;color:var(--muted);padding-bottom:12px;text-align:center;border-bottom:1px solid var(--border);margin-bottom:12px;">03 — AGENT LOOP</div>
+        <div class="node orange" style="border-width:2px;">
+          <span class="node-icon">🧠</span>
+          <div class="node-title">Claude Opus 4.6</div>
+          <div class="node-body">Tool-use loop — up to 15 turns. Claude decides which tools to call, in what order. Reads feedback before generating so it improves over time. Returns structured JSON draft.</div>
+          <span class="node-tag tag-orange">AUTONOMOUS</span>
+        </div>
+        <div style="height:6px"></div>
+        <div style="text-align:center;color:var(--orange);font-size:14px;padding:4px 0;" class="flow-arrow">↕ calls tools ↕</div>
+        <div style="height:6px"></div>
+        <div style="background:var(--card);border:1px dashed var(--orange);border-radius:8px;padding:10px;text-align:center;">
+          <div style="font-size:10px;color:var(--orange);font-family:'Space Mono',monospace;">8 TOOLS AVAILABLE</div>
+          <div style="font-size:9px;color:var(--muted);margin-top:4px;">See tool grid below</div>
+        </div>
+      </div>
+
+      <div style="display:flex;align-items:center;justify-content:center;padding-top:40px;color:var(--orange);font-size:18px;" class="flow-arrow">→</div>
+
+      <!-- COMPOSITOR -->
+      <div>
+        <div style="font-family:'Space Mono',monospace;font-size:10px;letter-spacing:0.15em;color:var(--muted);padding-bottom:12px;text-align:center;border-bottom:1px solid var(--border);margin-bottom:12px;">04 — COMPOSE</div>
+        <div class="node orange">
+          <span class="node-icon">🎨</span>
+          <div class="node-title">PIL Compositor</div>
+          <div class="node-body">Brand overlay: logo, glow background, text, badge. 7 layout profiles. All driven by BrandConfig.</div>
+          <span class="node-tag tag-orange">BRANDING</span>
+        </div>
+        <div style="height:8px"></div>
+        <div class="node teal">
+          <span class="node-icon">📐</span>
+          <div class="node-title">Template System</div>
+          <div class="node-body">Deterministic PIL-rendered frames. No AI drift — exact pixels every time.</div>
+          <span class="node-tag tag-teal">NEW v8</span>
+        </div>
+      </div>
+
+      <div style="display:flex;align-items:center;justify-content:center;padding-top:40px;color:var(--orange);font-size:18px;" class="flow-arrow">→</div>
+
+      <!-- REVIEW -->
+      <div>
+        <div style="font-family:'Space Mono',monospace;font-size:10px;letter-spacing:0.15em;color:var(--muted);padding-bottom:12px;text-align:center;border-bottom:1px solid var(--border);margin-bottom:12px;">05 — REVIEW</div>
+        <div class="node orange">
+          <span class="node-icon">📤</span>
+          <div class="node-title">Draft Preview</div>
+          <div class="node-body">Caption + composed image sent to Telegram with inline buttons</div>
+        </div>
+        <div style="height:8px"></div>
+        <div class="node green">
+          <span class="node-icon">✅</span>
+          <div class="node-title">/approve</div>
+          <div class="node-body">Posts to X → logs feedback → saves reference → style converges</div>
+          <span class="node-tag tag-green">APPROVED</span>
+        </div>
+        <div style="height:8px"></div>
+        <div class="node red">
+          <span class="node-icon">❌</span>
+          <div class="node-title">/reject + feedback</div>
+          <div class="node-body">Re-runs agent with your feedback. New draft in seconds.</div>
+          <span class="node-tag tag-red">REVISE</span>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- 8 TOOLS GRID -->
+    <div class="section-head">
+      <h3>8 AGENT TOOLS</h3>
+      <div class="section-line"></div>
+      <div class="section-badge tag-orange">Claude decides which to call and when</div>
+    </div>
+
+    <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin:24px 0;">
+
+      <div class="node orange" style="text-align:center;padding:16px 12px;">
+        <span style="font-size:24px;margin-bottom:8px;display:block;">📋</span>
+        <div style="font-size:11px;font-weight:700;color:var(--orange);margin-bottom:6px;font-family:'Space Mono',monospace;">read_brand_guidelines</div>
+        <div style="font-size:10px;color:var(--muted);line-height:1.5;">Loads guidelines.md + PDF refs + learned preferences. Budget-managed context window.</div>
+      </div>
+
+      <div class="node orange" style="text-align:center;padding:16px 12px;">
+        <span style="font-size:24px;margin-bottom:8px;display:block;">🗂</span>
+        <div style="font-size:11px;font-weight:700;color:var(--orange);margin-bottom:6px;font-family:'Space Mono',monospace;">read_references</div>
+        <div style="font-size:10px;color:var(--muted);line-height:1.5;">Inventory of loaded reference images, style profiles, and asset categories.</div>
+      </div>
+
+      <div class="node purple" style="text-align:center;padding:16px 12px;">
+        <span style="font-size:24px;margin-bottom:8px;display:block;">🎨</span>
+        <div style="font-size:11px;font-weight:700;color:var(--purple);margin-bottom:6px;font-family:'Space Mono',monospace;">check_figma_design</div>
+        <div style="font-size:10px;color:var(--muted);line-height:1.5;">Live colors + tokens from Figma API. Screenshots + layer metadata.</div>
+      </div>
+
+      <div class="node green" style="text-align:center;padding:16px 12px;">
+        <span style="font-size:24px;margin-bottom:8px;display:block;">🖼</span>
+        <div style="font-size:11px;font-weight:700;color:var(--green);margin-bottom:6px;font-family:'Space Mono',monospace;">generate_image</div>
+        <div style="font-size:10px;color:var(--muted);line-height:1.5;">Text-to-image via Replicate. Smart model routing by content type. SPLICE prompt enhancement.</div>
+      </div>
+
+      <div class="node teal" style="text-align:center;padding:16px 12px;">
+        <span style="font-size:24px;margin-bottom:8px;display:block;">🔄</span>
+        <div style="font-size:11px;font-weight:700;color:var(--teal);margin-bottom:6px;font-family:'Space Mono',monospace;">img2img</div>
+        <div style="font-size:10px;color:var(--muted);line-height:1.5;">flux-kontext-pro with reference grid. Character consistency. Photo edits.</div>
+      </div>
+
+      <div class="node blue" style="text-align:center;padding:16px 12px;">
+        <span style="font-size:24px;margin-bottom:8px;display:block;">💬</span>
+        <div style="font-size:11px;font-weight:700;color:var(--blue);margin-bottom:6px;font-family:'Space Mono',monospace;">read_feedback_history</div>
+        <div style="font-size:10px;color:var(--muted);line-height:1.5;">Past approvals + rejections + learned preferences. Gets smarter every cycle.</div>
+      </div>
+
+      <div class="node" style="text-align:center;padding:16px 12px;">
+        <span style="font-size:24px;margin-bottom:8px;display:block;">📊</span>
+        <div style="font-size:11px;font-weight:700;color:var(--white);margin-bottom:6px;font-family:'Space Mono',monospace;">log_resource_usage</div>
+        <div style="font-size:10px;color:var(--muted);line-height:1.5;">Tracks which brand files, refs, and tools were consulted each run.</div>
+      </div>
+
+      <div class="node" style="text-align:center;padding:16px 12px;">
+        <span style="font-size:24px;margin-bottom:8px;display:block;">⛓</span>
+        <div style="font-size:11px;font-weight:700;color:var(--white);margin-bottom:6px;font-family:'Space Mono',monospace;">execute_openclaw_script</div>
+        <div style="font-size:10px;color:var(--muted);line-height:1.5;">On-chain event fetching. Whitelisted script execution for Fluent/EVM chains.</div>
+      </div>
+
+    </div>
+
+    <!-- What makes it autonomous -->
+    <div class="section-head">
+      <h3>WHY THIS IS POWERFUL</h3>
+      <div class="section-line"></div>
+    </div>
+
+    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:16px;margin-bottom:24px;">
+      <div style="background:var(--card);border:1px solid var(--orange);border-radius:8px;padding:20px;">
+        <div style="font-family:'Space Mono',monospace;font-size:11px;color:var(--orange);margin-bottom:8px;">NATURAL CONVERSATION</div>
+        <div style="font-size:12px;color:var(--muted);line-height:1.7;">No rigid commands needed. Say "write something about our new feature" and the agent figures out the content type, gathers brand context, generates an image, and composes the final post. You can refine by just talking: "make it more casual" or "the image should have more contrast."</div>
+      </div>
+      <div style="background:var(--card);border:1px solid var(--green);border-radius:8px;padding:20px;">
+        <div style="font-family:'Space Mono',monospace;font-size:11px;color:var(--green);margin-bottom:8px;">SELF-IMPROVING</div>
+        <div style="font-size:12px;color:var(--muted);line-height:1.7;">Every /approve and /reject teaches the agent. Feedback is logged, and every 10 cycles Claude auto-summarizes your preferences into learned_preferences.md. First post takes many rounds. After 10 approvals, the agent nails your style in 1-2 rounds.</div>
+      </div>
+      <div style="background:var(--card);border:1px solid var(--blue);border-radius:8px;padding:20px;">
+        <div style="font-family:'Space Mono',monospace;font-size:11px;color:var(--blue);margin-bottom:8px;">REAL-TIME PROGRESS</div>
+        <div style="font-size:12px;color:var(--muted);line-height:1.7;">Every tool call sends a live progress message to Telegram: "Reading brand guidelines...", "Generating image...", "Composing final post...". You see exactly what the agent is doing, step by step, as it works.</div>
+      </div>
+    </div>
+
+    <!-- Draft output schema -->
+    <div style="background:var(--card);border:1px solid var(--border);border-radius:8px;padding:20px;">
+      <div style="font-family:'Space Mono',monospace;font-size:11px;color:var(--orange);margin-bottom:12px;">AGENT OUTPUT — JSON DRAFT</div>
+      <div style="font-family:'Space Mono',monospace;font-size:11px;line-height:2;color:var(--muted);">
+        <div><span style="color:var(--orange);">"caption"</span>: <span style="color:var(--green);">"Post text (50-150 chars)"</span></div>
+        <div><span style="color:var(--orange);">"title"</span>: <span style="color:var(--green);">"UPPERCASE HEADLINE"</span></div>
+        <div><span style="color:var(--orange);">"subtitle"</span>: <span style="color:var(--green);">"Brief explanation"</span></div>
+        <div><span style="color:var(--orange);">"image_prompt"</span>: <span style="color:var(--green);">"SPLICE-structured prompt for image gen"</span></div>
+        <div><span style="color:var(--orange);">"content_type"</span>: <span style="color:var(--blue);">"announcement | lifestyle | brand_3d | meme | ..."</span> <span style="color:#444;">// 14 types</span></div>
+        <div><span style="color:var(--orange);">"alt_text"</span>: <span style="color:var(--green);">"Accessible image description"</span></div>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- ═══════════════════════════════════════════════════
+       TEMPLATE SYSTEM TAB (NEW in v8)
+  ════════════════════════════════════════════════════ -->
+  <div id="panel-templates" class="panel">
+    <div class="section-head">
+      <h3>DETERMINISTIC TEMPLATE SYSTEM</h3>
+      <div class="section-line"></div>
+      <div class="section-badge tag-teal">NEW IN v8 — PIL RENDERER + FIGMA IMPORT</div>
+    </div>
+
+    <div class="hero-block" style="border-color:var(--teal);">
+      <div style="position:relative;z-index:1;">
+        <div style="font-family:'Space Mono',monospace;font-size:10px;color:var(--teal);letter-spacing:0.15em;margin-bottom:12px;">THE PROBLEM AND THE FIX</div>
+        <div style="font-size:18px;font-weight:800;margin-bottom:12px;">Templates Without AI Drift</div>
+        <div style="font-size:14px;color:var(--muted);line-height:1.8;max-width:800px;"><strong style="color:var(--red);">Before:</strong> Template frames were generated via flux-kontext-pro at strength=0.75. Diffusion models approximate — they don't replicate pixel-perfectly. Small details drifted each generation.<br><br><strong style="color:var(--green);">Now:</strong> Claude Vision extracts a precise visual spec from a reference image → PIL renders the template frame deterministically (exact colors, shapes, positions) → users refine via conversation with instant re-renders. Zero API cost for template iteration.</div>
+      </div>
+    </div>
+
+    <!-- Two paths -->
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:24px;margin-bottom:32px;">
+
+      <!-- Path 1: Reference upload -->
+      <div>
+        <div style="font-family:'Space Mono',monospace;font-size:11px;color:var(--teal);margin-bottom:16px;">PATH 1: UPLOAD A REFERENCE IMAGE</div>
+        <div style="display:flex;flex-direction:column;gap:8px;">
+          <div class="node teal">
+            <div class="node-title">1. /template_from_reference</div>
+            <div class="node-body">Upload any template image as reference</div>
+          </div>
+          <div style="text-align:center;color:var(--teal);font-size:14px;">↓</div>
+          <div class="node purple">
+            <div class="node-title">2. Claude Vision Analysis</div>
+            <div class="node-body">Extracts TemplateSpec JSON: background type/colors, shapes with positions/borders/radii, text zones with font estimates, image zones</div>
+          </div>
+          <div style="text-align:center;color:var(--teal);font-size:14px;">↓</div>
+          <div class="node teal">
+            <div class="node-title">3. PIL Renders Preview</div>
+            <div class="node-body">Instant render — checkerboard behind transparent zones, labeled overlays (IMAGE 1, TEXT: title, LOGO). No API call.</div>
+          </div>
+          <div style="text-align:center;color:var(--teal);font-size:14px;">↓</div>
+          <div class="node orange">
+            <div class="node-title">4. Conversational Refinement</div>
+            <div class="node-body">"Make the background darker" → spec modified → instant re-render. No Replicate cost. Iterate as many times as needed.</div>
+          </div>
+          <div style="text-align:center;color:var(--teal);font-size:14px;">↓</div>
+          <div class="node green">
+            <div class="node-title">5. Save Template</div>
+            <div class="node-body">Saved to template manifest with spec_json for future re-rendering after brand color changes</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Path 2: Figma import -->
+      <div>
+        <div style="font-family:'Space Mono',monospace;font-size:11px;color:var(--purple);margin-bottom:16px;">PATH 2: IMPORT FROM FIGMA</div>
+        <div style="display:flex;flex-direction:column;gap:8px;">
+          <div class="node purple">
+            <div class="node-title">1. /template_import &lt;figma_url&gt;</div>
+            <div class="node-body">Paste any Figma design URL</div>
+          </div>
+          <div style="text-align:center;color:var(--purple);font-size:14px;">↓</div>
+          <div class="node purple">
+            <div class="node-title">2. Screenshot + Layer Metadata</div>
+            <div class="node-body">Figma REST API fetches pixel-perfect screenshot + child layer positions, fills, and text styles</div>
+          </div>
+          <div style="text-align:center;color:var(--purple);font-size:14px;">↓</div>
+          <div class="node purple">
+            <div class="node-title">3. Claude Classifies Layers</div>
+            <div class="node-body">Static elements vs image/text/logo placeholders. Font info from Figma metadata.</div>
+          </div>
+          <div style="text-align:center;color:var(--purple);font-size:14px;">↓</div>
+          <div class="node green">
+            <div class="node-title">4. Template Ready</div>
+            <div class="node-body">Screenshot used as-is (pixel-perfect from Figma). Regions mapped from classified layers. Same preview flow.</div>
+          </div>
+        </div>
+        <div style="height:24px;"></div>
+        <div style="background:var(--card);border:1px solid var(--purple);border-radius:8px;padding:16px;">
+          <div style="font-family:'Space Mono',monospace;font-size:10px;color:var(--purple);margin-bottom:6px;">POWER USER PATH</div>
+          <div style="font-size:11px;color:var(--muted);line-height:1.6;">Design in Figma → paste URL → template imported with exact positions. Zero manual configuration.</div>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- TemplateSpec data model -->
+    <div class="section-head">
+      <h3>TEMPLATESPEC — THE DATA MODEL</h3>
+      <div class="section-line"></div>
+      <div class="section-badge tag-teal">agent/template_spec.py</div>
+    </div>
+
+    <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:32px;">
+      <div style="background:var(--card);border:1px solid var(--teal);border-radius:8px;padding:16px;">
+        <div style="font-family:'Space Mono',monospace;font-size:10px;color:var(--teal);margin-bottom:8px;">CANVAS</div>
+        <div style="font-size:11px;color:var(--muted);line-height:1.8;">width, height<br>background: Fill (solid / linear_gradient / radial_gradient)<br>GradientStop[] with positions + colors</div>
+      </div>
+      <div style="background:var(--card);border:1px solid var(--teal);border-radius:8px;padding:16px;">
+        <div style="font-family:'Space Mono',monospace;font-size:10px;color:var(--teal);margin-bottom:8px;">SHAPES</div>
+        <div style="font-size:11px;color:var(--muted);line-height:1.8;">ShapeElement: rect / rounded_rect / ellipse / line<br>position, size, fill, border, corner_radius<br>z_order for layering</div>
+      </div>
+      <div style="background:var(--card);border:1px solid var(--teal);border-radius:8px;padding:16px;">
+        <div style="font-family:'Space Mono',monospace;font-size:10px;color:var(--teal);margin-bottom:8px;">ZONES</div>
+        <div style="font-size:11px;color:var(--muted);line-height:1.8;">TextZoneSpec: font/size/weight/color/alignment<br>ImageZoneSpec: corner_radius, alpha cutout<br>LogoZoneSpec: position + padding</div>
+      </div>
+    </div>
+
+    <!-- Font Manager -->
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:24px;">
+      <div style="background:var(--card);border:1px solid var(--orange);border-radius:8px;padding:20px;">
+        <div style="font-family:'Space Mono',monospace;font-size:11px;color:var(--orange);margin-bottom:8px;">FONT MANAGER — agent/font_manager.py</div>
+        <div style="font-size:12px;color:var(--muted);line-height:1.7;">Dynamic font resolution: local fonts dir → Google Fonts download (async, cached) → system fonts → PIL default. Covers 20+ popular Google Fonts. Upload custom fonts via <code style="color:var(--white)">/font_upload</code>.</div>
+      </div>
+      <div style="background:var(--card);border:1px solid var(--green);border-radius:8px;padding:20px;">
+        <div style="font-family:'Space Mono',monospace;font-size:11px;color:var(--green);margin-bottom:8px;">WHAT STAYS UNCHANGED</div>
+        <div style="font-size:12px;color:var(--muted);line-height:1.7;"><code style="color:var(--white);">apply_template()</code> interface unchanged — still takes (template, image_source, draft) → BytesIO. Existing templates in manifest.json work unchanged via .get() defaults. The compositor pipeline is untouched.</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════════════════════════════════
+       LEARNING LOOP TAB
+  ════════════════════════════════════════════════════ -->
+  <div id="panel-learning" class="panel">
+    <div class="section-head">
+      <h3>SELF-IMPROVING LOOP — HOW THE BOT GETS SMARTER</h3>
+      <div class="section-line"></div>
+      <div class="section-badge tag-green">EVERY APPROVAL TEACHES THE AGENT</div>
+    </div>
+
+    <!-- The loop -->
+    <div style="max-width:800px;margin:0 auto 40px;">
+
+      <div style="background:var(--card);border:1px solid var(--orange);border-radius:8px;padding:20px;text-align:center;">
+        <div style="font-size:13px;font-weight:700;color:var(--orange);margin-bottom:4px;">User sends /approve or /reject + feedback</div>
+        <div style="font-size:11px;color:var(--muted);">Every interaction is a training signal</div>
+      </div>
+      <div style="text-align:center;padding:8px 0;color:var(--orange);font-size:20px;">↓</div>
+
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
+        <div style="background:var(--card);border:1px solid var(--green);border-radius:8px;padding:16px;">
+          <div style="font-size:11px;font-weight:700;color:var(--green);margin-bottom:8px;">CAPTION LEARNING</div>
+          <div style="font-size:11px;color:var(--muted);line-height:1.6;">
+            → feedback.json appended (accepted + feedback text)<br>
+            → Every 10 entries: Claude auto-summarizes patterns<br>
+            → learned_preferences.md updated<br>
+            → Future generations read this file first
+          </div>
+        </div>
+        <div style="background:var(--card);border:1px solid var(--teal);border-radius:8px;padding:16px;">
+          <div style="font-size:11px;font-weight:700;color:var(--teal);margin-bottom:8px;">VISUAL LEARNING</div>
+          <div style="font-size:11px;color:var(--muted);line-height:1.6;">
+            → Composed image saved to brand/references/<br>
+            → approved_{content_type}_{timestamp}.png<br>
+            → Active style profile updated<br>
+            → Next generation uses it at 0.3 strength
+          </div>
+        </div>
+      </div>
+
+      <div style="text-align:center;padding:8px 0;color:var(--orange);font-size:20px;">↓</div>
+
+      <div style="background:var(--card);border:1px solid var(--border);border-radius:8px;padding:20px;text-align:center;">
+        <div style="font-size:13px;font-weight:700;color:var(--white);margin-bottom:4px;">Next generation starts with approved context</div>
+        <div style="font-size:11px;color:var(--muted);">Style converges. Rounds to approval decreases over time.</div>
+      </div>
+
+      <div style="text-align:center;padding:8px 0;color:var(--green);font-size:20px;">↓</div>
+
+      <div style="background:var(--card);border:1px solid var(--green);border-radius:8px;padding:20px;text-align:center;">
+        <div style="font-size:13px;font-weight:700;color:var(--green);margin-bottom:4px;">20+ approvals → LoRA training → style baked into model weights</div>
+        <div style="font-size:11px;color:var(--muted);">Permanently faster, permanently consistent</div>
+      </div>
+    </div>
+
+    <!-- Style profiles -->
+    <div class="section-head">
+      <h3>STYLE PROFILES — /style COMMAND</h3>
+      <div class="section-line"></div>
+    </div>
+
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:20px;margin-bottom:24px;">
+      <div style="background:var(--card);border:1px solid var(--border);border-radius:8px;padding:16px;font-family:'Space Mono',monospace;font-size:11px;line-height:2;color:var(--muted);">
+        <div><span style="color:var(--teal)">/style</span> — list all profiles</div>
+        <div><span style="color:var(--teal)">/style create my_style "desc"</span> — new profile</div>
+        <div><span style="color:var(--teal)">/style my_style announcement</span> — set active for type</div>
+        <div><span style="color:var(--teal)">/style my_style info</span> — show details</div>
+        <div><span style="color:var(--teal)">/style my_style remove</span> — delete</div>
+        <div style="color:#444;">─────────────────────────</div>
+        <div><span style="color:var(--white)">Send photo with caption</span> <span style="color:var(--teal)">"style my_style"</span></div>
+        <div style="color:var(--muted)">→ adds image to that profile's reference folder</div>
+      </div>
+      <div style="background:var(--card);border:1px solid var(--orange);border-radius:8px;padding:20px;">
+        <div style="font-family:'Space Mono',monospace;font-size:11px;color:var(--orange);margin-bottom:12px;">THE CONVERGENCE PATH</div>
+        <div style="display:flex;flex-direction:column;gap:8px;">
+          <div style="display:flex;gap:10px;align-items:flex-start;">
+            <div style="background:var(--orange);color:#000;font-family:'Space Mono',monospace;font-size:10px;padding:2px 6px;border-radius:2px;white-space:nowrap;">1</div>
+            <div style="font-size:11px;color:var(--muted);">Upload 3-5 reference images tagged to a style profile</div>
+          </div>
+          <div style="display:flex;gap:10px;align-items:flex-start;">
+            <div style="background:var(--orange);color:#000;font-family:'Space Mono',monospace;font-size:10px;padding:2px 6px;border-radius:2px;white-space:nowrap;">2</div>
+            <div style="font-size:11px;color:var(--muted);">Set as active for a content type → auto-injected at 0.3 strength</div>
+          </div>
+          <div style="display:flex;gap:10px;align-items:flex-start;">
+            <div style="background:var(--orange);color:#000;font-family:'Space Mono',monospace;font-size:10px;padding:2px 6px;border-radius:2px;white-space:nowrap;">3</div>
+            <div style="font-size:11px;color:var(--muted);">Approve → profile updates with approved output. Style converges.</div>
+          </div>
+          <div style="display:flex;gap:10px;align-items:flex-start;">
+            <div style="background:var(--green);color:#000;font-family:'Space Mono',monospace;font-size:10px;padding:2px 6px;border-radius:2px;white-space:nowrap;">∞</div>
+            <div style="font-size:11px;color:var(--muted);">After 20+ approvals → LoRA training → aesthetic baked into weights permanently</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════════════════════════════════
+       BRANDCONFIG TAB
+  ════════════════════════════════════════════════════ -->
+  <div id="panel-brandconfig" class="panel">
+    <div class="section-head">
+      <h3>BRANDCONFIG — SINGLE SOURCE OF TRUTH</h3>
+      <div class="section-line"></div>
+      <div class="section-badge tag-teal">BRAND-AGNOSTIC PLATFORM</div>
+    </div>
+
+    <div style="background:var(--card);border:1px solid var(--teal);border-radius:8px;padding:20px;margin-bottom:24px;">
+      <div style="font-size:14px;color:var(--muted);line-height:1.7;">Every brand reference flows through a single source of truth: <strong style="color:var(--white)">BrandConfig</strong>. Drop in a new <code style="color:var(--teal)">brand/guidelines.md</code> and the entire system adapts — compositor, prompts, image gen, content types. New brand in 5 minutes via <code style="color:var(--teal)">/setup</code> or <code style="color:var(--teal)">/ingest</code>.</div>
+    </div>
+
+    <div style="display:grid;grid-template-columns:1fr 40px 1fr 40px 1fr;gap:8px;align-items:center;margin-bottom:32px;">
+      <div class="node teal" style="text-align:center;padding:20px;">
+        <span class="node-icon">📄</span>
+        <div class="node-title">brand/guidelines.md</div>
+        <div class="node-body">14 configurable sections — identity, voice, colors, fonts, layout, visual effects, LoRA mappings</div>
+      </div>
+      <div style="text-align:center;color:var(--teal);font-size:20px;">→</div>
+      <div class="node teal" style="text-align:center;padding:20px;">
+        <span class="node-icon">⚙️</span>
+        <div class="node-title">compositor_config.py</div>
+        <div class="node-body">Parses into BrandConfig dataclass (~30 fields). mtime-based caching + MD5 validation. Auto-reloads on change.</div>
+      </div>
+      <div style="text-align:center;color:var(--teal);font-size:20px;">→</div>
+      <div class="node teal" style="text-align:center;padding:20px;">
+        <span class="node-icon">🏗</span>
+        <div class="node-title">BrandConfig dataclass</div>
+        <div class="node-body">~30 typed fields. Every module reads from this. No hardcoded brand values anywhere.</div>
+      </div>
+    </div>
+
+    <div class="section-head"><h3>BRANDCONFIG FIELDS — 6 GROUPS</h3><div class="section-line"></div></div>
+    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;margin-bottom:32px;">
+      <div style="background:var(--card);border:1px solid var(--teal);border-radius:8px;padding:16px;">
+        <div style="font-family:'Space Mono',monospace;font-size:10px;color:var(--teal);margin-bottom:10px;">IDENTITY</div>
+        <div style="font-size:11px;color:var(--muted);line-height:1.8;">brand_name, tagline, website, x_handle</div>
+      </div>
+      <div style="background:var(--card);border:1px solid var(--teal);border-radius:8px;padding:16px;">
+        <div style="font-family:'Space Mono',monospace;font-size:10px;color:var(--teal);margin-bottom:10px;">COLORS &amp; FONTS</div>
+        <div style="font-size:11px;color:var(--muted);line-height:1.8;">colors (dict), fonts (dict), style_keywords, avoid_terms</div>
+      </div>
+      <div style="background:var(--card);border:1px solid var(--teal);border-radius:8px;padding:16px;">
+        <div style="font-family:'Space Mono',monospace;font-size:10px;color:var(--teal);margin-bottom:10px;">VOICE &amp; CONTENT</div>
+        <div style="font-size:11px;color:var(--muted);line-height:1.8;">visual_style_prompt, voice_traits, brand_phrases, content_themes</div>
+      </div>
+      <div style="background:var(--card);border:1px solid var(--orange);border-radius:8px;padding:16px;">
+        <div style="font-family:'Space Mono',monospace;font-size:10px;color:var(--orange);margin-bottom:10px;">LAYOUT</div>
+        <div style="font-size:11px;color:var(--muted);line-height:1.8;">canvas_width/height, logo_position/padding, image_x/y/width, layout_mappings</div>
+      </div>
+      <div style="background:var(--card);border:1px solid var(--orange);border-radius:8px;padding:16px;">
+        <div style="font-family:'Space Mono',monospace;font-size:10px;color:var(--orange);margin-bottom:10px;">VISUAL EFFECTS</div>
+        <div style="font-size:11px;color:var(--muted);line-height:1.8;">glass_opacity/blur/radius, orb_alpha, orb_count, noise_opacity</div>
+      </div>
+      <div style="background:var(--card);border:1px solid var(--border);border-radius:8px;padding:16px;">
+        <div style="font-family:'Space Mono',monospace;font-size:10px;color:var(--muted);margin-bottom:10px;">METADATA</div>
+        <div style="font-size:11px;color:var(--muted);line-height:1.8;">raw_hash (MD5), parsed_at, source_path</div>
+      </div>
+    </div>
+
+    <div style="background:var(--card);border:1px solid var(--green);border-radius:8px;padding:20px;">
+      <div style="font-family:'Space Mono',monospace;font-size:11px;color:var(--green);margin-bottom:8px;">CACHE LOGIC</div>
+      <div style="font-size:12px;color:var(--muted);line-height:1.7;">mtime TTL: skip filesystem scan if checked within 30 seconds. On mtime change → re-parse → new MD5 hash. Call <code style="color:var(--white)">invalidate_cache()</code> after programmatic edits. Change any section → entire system adapts automatically.</div>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════════════════════════════════
+       IMAGE MODELS TAB
+  ════════════════════════════════════════════════════ -->
+  <div id="panel-models" class="panel">
+    <div class="section-head">
+      <h3>IMAGE MODEL ROUTING</h3>
+      <div class="section-line"></div>
+      <div class="section-badge tag-purple">5 MODELS — SMART ROUTING</div>
+    </div>
+
+    <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:12px;margin:24px 0;">
+      <div style="background:var(--card);border:1px solid var(--green);border-radius:8px;padding:16px;position:relative;overflow:hidden;">
+        <div style="position:absolute;top:10px;right:10px;background:var(--green);color:#000;font-family:'Space Mono',monospace;font-size:8px;padding:2px 6px;border-radius:2px;font-weight:700;">DEFAULT</div>
+        <div style="font-family:'Space Mono',monospace;font-size:11px;color:var(--green);margin-bottom:6px;">flux-1.1-pro-ultra</div>
+        <div style="font-size:10px;color:var(--muted);margin-bottom:8px;">Black Forest Labs</div>
+        <div style="font-size:11px;color:var(--white);line-height:1.5;margin-bottom:8px;">High-res general purpose. Ultra quality for all content types not routed elsewhere.</div>
+        <div style="font-family:'Space Mono',monospace;font-size:10px;color:var(--green);">~$0.06 / image</div>
+      </div>
+      <div style="background:var(--card);border:1px solid var(--orange);border-radius:8px;padding:16px;position:relative;overflow:hidden;">
+        <div style="position:absolute;top:10px;right:10px;background:var(--orange);color:#000;font-family:'Space Mono',monospace;font-size:8px;padding:2px 6px;border-radius:2px;font-weight:700;">ANNOUNCEMENT</div>
+        <div style="font-family:'Space Mono',monospace;font-size:11px;color:var(--orange);margin-bottom:6px;">nano-banana-pro</div>
+        <div style="font-size:10px;color:var(--muted);margin-bottom:8px;">Google</div>
+        <div style="font-size:11px;color:var(--white);line-height:1.5;margin-bottom:8px;">Best text rendering. Clean headlines and text overlays in images.</div>
+        <div style="font-family:'Space Mono',monospace;font-size:10px;color:var(--green);">~$0.04 / image</div>
+      </div>
+      <div style="background:var(--card);border:1px solid var(--teal);border-radius:8px;padding:16px;position:relative;overflow:hidden;">
+        <div style="position:absolute;top:10px;right:10px;background:var(--teal);color:#000;font-family:'Space Mono',monospace;font-size:8px;padding:2px 6px;border-radius:2px;font-weight:700;">MASCOT / REF</div>
+        <div style="font-family:'Space Mono',monospace;font-size:11px;color:var(--teal);margin-bottom:6px;">flux-kontext-pro</div>
+        <div style="font-size:10px;color:var(--muted);margin-bottom:8px;">Black Forest Labs (img2img)</div>
+        <div style="font-size:11px;color:var(--white);line-height:1.5;margin-bottom:8px;">Character consistency via reference grid. Mascot and brand character generation.</div>
+        <div style="font-family:'Space Mono',monospace;font-size:10px;color:var(--green);">~$0.04 / image</div>
+      </div>
+      <div style="background:var(--card);border:1px solid var(--blue);border-radius:8px;padding:16px;position:relative;overflow:hidden;">
+        <div style="position:absolute;top:10px;right:10px;background:var(--blue);color:#000;font-family:'Space Mono',monospace;font-size:8px;padding:2px 6px;border-radius:2px;font-weight:700;">PHOTOGRAPHY</div>
+        <div style="font-family:'Space Mono',monospace;font-size:11px;color:var(--blue);margin-bottom:6px;">seedream-4.5</div>
+        <div style="font-size:10px;color:var(--muted);margin-bottom:8px;">ByteDance</div>
+        <div style="font-size:11px;color:var(--white);line-height:1.5;margin-bottom:8px;">Photography-quality for lifestyle, event, and photography content types.</div>
+        <div style="font-family:'Space Mono',monospace;font-size:10px;color:var(--green);">~$0.02 / image</div>
+      </div>
+      <div style="background:var(--card);border:1px solid var(--purple);border-radius:8px;padding:16px;position:relative;overflow:hidden;">
+        <div style="position:absolute;top:10px;right:10px;background:var(--purple);color:#000;font-family:'Space Mono',monospace;font-size:8px;padding:2px 6px;border-radius:2px;font-weight:700;">SVG ASSETS</div>
+        <div style="font-family:'Space Mono',monospace;font-size:11px;color:var(--purple);margin-bottom:6px;">recraft-v3-svg</div>
+        <div style="font-size:10px;color:var(--muted);margin-bottom:8px;">Recraft</div>
+        <div style="font-size:11px;color:var(--white);line-height:1.5;margin-bottom:8px;">Real SVG output. Icons and brand asset generation.</div>
+        <div style="font-family:'Space Mono',monospace;font-size:10px;color:var(--green);">~$0.04 / image</div>
+      </div>
+    </div>
+
+    <div style="background:var(--card);border:1px solid var(--border);border-radius:8px;padding:20px;font-family:'Space Mono',monospace;font-size:11px;line-height:2;color:var(--muted)">
+      <div style="color:var(--orange)"># image_gen.py — _select_model()</div>
+      <div>if manual_override: <span style="color:#444;">→ [override model]</span></div>
+      <div>elif content_type == <span style="color:var(--green)">"announcement"</span>: <span style="color:#444;">→ nano-banana-pro</span></div>
+      <div>elif content_type == <span style="color:var(--green)">"brand_asset"</span>: <span style="color:#444;">→ recraft-v3-svg</span></div>
+      <div>elif content_type in [<span style="color:var(--blue)">"lifestyle", "event", "photography"</span>]: <span style="color:#444;">→ seedream-4.5</span></div>
+      <div>else: <span style="color:#444;">→ flux-1.1-pro-ultra (default)</span></div>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════════════════════════════════
+       MODULES TAB
+  ════════════════════════════════════════════════════ -->
+  <div id="panel-modules" class="panel">
+    <div class="section-head">
+      <h3>CORE MODULES — 35 TOTAL</h3>
+      <div class="section-line"></div>
+      <div class="section-badge tag-green">agent/ — bot/ — config/</div>
+    </div>
+
+    <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:32px;">
+      <div style="background:var(--card);border:1px solid var(--orange);border-radius:8px;padding:14px;">
+        <div style="font-family:'Space Mono',monospace;font-size:10px;color:var(--orange);margin-bottom:4px;">engine.py</div>
+        <div style="font-size:10px;color:var(--muted);">Claude tool-use loop, ≤15 turns, async. Draft parsing + auto-sanitize.</div>
+      </div>
+      <div style="background:var(--card);border:1px solid var(--orange);border-radius:8px;padding:14px;">
+        <div style="font-family:'Space Mono',monospace;font-size:10px;color:var(--orange);margin-bottom:4px;">tools.py</div>
+        <div style="font-size:10px;color:var(--muted);">8 tool definitions + handlers. brand_3d pipeline, mascot auto-detect.</div>
+      </div>
+      <div style="background:var(--card);border:1px solid var(--orange);border-radius:8px;padding:14px;">
+        <div style="font-family:'Space Mono',monospace;font-size:10px;color:var(--orange);margin-bottom:4px;">skill_prompt.py</div>
+        <div style="font-size:10px;color:var(--muted);">System prompt — HARD RULES, SPLICE framework, brand instructions.</div>
+      </div>
+      <div style="background:var(--card);border:1px solid var(--purple);border-radius:8px;padding:14px;">
+        <div style="font-family:'Space Mono',monospace;font-size:10px;color:var(--purple);margin-bottom:4px;">brain.py</div>
+        <div style="font-size:10px;color:var(--muted);">Multi-LLM dispatch (Anthropic / OpenAI / Gemini). Gemini key via header.</div>
+      </div>
+      <div style="background:var(--card);border:1px solid var(--purple);border-radius:8px;padding:14px;">
+        <div style="font-family:'Space Mono',monospace;font-size:10px;color:var(--purple);margin-bottom:4px;">intent_router.py</div>
+        <div style="font-size:10px;color:var(--muted);">NL intent classification. Routes to generate, chat, refine, template, etc.</div>
+      </div>
+      <div style="background:var(--card);border:1px solid var(--green);border-radius:8px;padding:14px;">
+        <div style="font-family:'Space Mono',monospace;font-size:10px;color:var(--green);margin-bottom:4px;">image_gen.py</div>
+        <div style="font-size:10px;color:var(--muted);">Replicate API. Smart model routing. SPLICE enhancement + locked directives.</div>
+      </div>
+      <div style="background:var(--card);border:1px solid var(--teal);border-radius:8px;padding:14px;">
+        <div style="font-family:'Space Mono',monospace;font-size:10px;color:var(--teal);margin-bottom:4px;">compositor.py</div>
+        <div style="font-size:10px;color:var(--muted);">Branded 1280x720 overlay. Cached backgrounds, vectorized masks.</div>
+      </div>
+      <div style="background:var(--card);border:1px solid var(--teal);border-radius:8px;padding:14px;">
+        <div style="font-family:'Space Mono',monospace;font-size:10px;color:var(--teal);margin-bottom:4px;">compositor_config.py</div>
+        <div style="font-size:10px;color:var(--muted);">BrandConfig parser. mtime caching + MD5 validation.</div>
+      </div>
+      <div style="background:var(--card);border:1px solid var(--teal);border-radius:8px;padding:14px;">
+        <div style="font-family:'Space Mono',monospace;font-size:10px;color:var(--teal);margin-bottom:4px;">template_spec.py</div>
+        <div style="font-size:10px;color:var(--muted);">TemplateSpec dataclass — rich visual spec for deterministic rendering.</div>
+        <span class="node-tag tag-teal" style="margin-top:4px;font-size:8px;">NEW v8</span>
+      </div>
+      <div style="background:var(--card);border:1px solid var(--teal);border-radius:8px;padding:14px;">
+        <div style="font-family:'Space Mono',monospace;font-size:10px;color:var(--teal);margin-bottom:4px;">template_renderer.py</div>
+        <div style="font-size:10px;color:var(--muted);">PIL renderer — NumPy vectorized gradients, alpha cutouts, previews.</div>
+        <span class="node-tag tag-teal" style="margin-top:4px;font-size:8px;">NEW v8</span>
+      </div>
+      <div style="background:var(--card);border:1px solid var(--teal);border-radius:8px;padding:14px;">
+        <div style="font-family:'Space Mono',monospace;font-size:10px;color:var(--teal);margin-bottom:4px;">template_generator.py</div>
+        <div style="font-size:10px;color:var(--muted);">Claude Vision analysis → TemplateSpec. Figma import. Conversational refinement.</div>
+      </div>
+      <div style="background:var(--card);border:1px solid var(--teal);border-radius:8px;padding:14px;">
+        <div style="font-family:'Space Mono',monospace;font-size:10px;color:var(--teal);margin-bottom:4px;">template_memory.py</div>
+        <div style="font-size:10px;color:var(--muted);">Template manifest, apply_template(), region-level font overrides.</div>
+      </div>
+      <div style="background:var(--card);border:1px solid var(--teal);border-radius:8px;padding:14px;">
+        <div style="font-family:'Space Mono',monospace;font-size:10px;color:var(--teal);margin-bottom:4px;">font_manager.py</div>
+        <div style="font-size:10px;color:var(--muted);">Dynamic font resolution. Google Fonts download + caching.</div>
+        <span class="node-tag tag-teal" style="margin-top:4px;font-size:8px;">NEW v8</span>
+      </div>
+      <div style="background:var(--card);border:1px solid var(--blue);border-radius:8px;padding:14px;">
+        <div style="font-family:'Space Mono',monospace;font-size:10px;color:var(--blue);margin-bottom:4px;">guidelines.py</div>
+        <div style="font-size:10px;color:var(--muted);">Brand context loader. PDF/MD/TXT. 30s mtime TTL.</div>
+      </div>
+      <div style="background:var(--card);border:1px solid var(--blue);border-radius:8px;padding:14px;">
+        <div style="font-family:'Space Mono',monospace;font-size:10px;color:var(--blue);margin-bottom:4px;">content_types.py</div>
+        <div style="font-size:10px;color:var(--muted);">14 content types. Routing maps, LoRA eligibility, compositor profiles.</div>
+      </div>
+      <div style="background:var(--card);border:1px solid var(--green);border-radius:8px;padding:14px;">
+        <div style="font-family:'Space Mono',monospace;font-size:10px;color:var(--green);margin-bottom:4px;">feedback.py</div>
+        <div style="font-size:10px;color:var(--muted);">Append-only feedback log. Auto-learning every 10 → learned_preferences.md.</div>
+      </div>
+      <div style="background:var(--card);border:1px solid var(--green);border-radius:8px;padding:14px;">
+        <div style="font-family:'Space Mono',monospace;font-size:10px;color:var(--green);margin-bottom:4px;">state.py</div>
+        <div style="font-size:10px;color:var(--muted);">Draft management. asyncio.Lock for concurrency. In-memory cache.</div>
+      </div>
+      <div style="background:var(--card);border:1px solid var(--green);border-radius:8px;padding:14px;">
+        <div style="font-family:'Space Mono',monospace;font-size:10px;color:var(--green);margin-bottom:4px;">lora_pipeline.py</div>
+        <div style="font-size:10px;color:var(--muted);">LoRA training, polling, version management. Replicate integration.</div>
+      </div>
+      <div style="background:var(--card);border:1px solid var(--purple);border-radius:8px;padding:14px;">
+        <div style="font-family:'Space Mono',monospace;font-size:10px;color:var(--purple);margin-bottom:4px;">figma.py</div>
+        <div style="font-size:10px;color:var(--muted);">Figma REST API. Styles, tokens, screenshots, node metadata.</div>
+      </div>
+      <div style="background:var(--card);border:1px solid var(--orange);border-radius:8px;padding:14px;">
+        <div style="font-family:'Space Mono',monospace;font-size:10px;color:var(--orange);margin-bottom:4px;">publisher.py</div>
+        <div style="font-size:10px;color:var(--muted);">Tweepy OAuth1 media upload + v2 tweet creation.</div>
+      </div>
+      <div style="background:var(--card);border:1px solid var(--border);border-radius:8px;padding:14px;">
+        <div style="font-family:'Space Mono',monospace;font-size:10px;color:var(--white);margin-bottom:4px;">_client.py</div>
+        <div style="font-size:10px;color:var(--muted);">Singleton API clients (Anthropic + httpx). Connection reuse.</div>
+        <span class="node-tag tag-teal" style="margin-top:4px;font-size:8px;">NEW v8</span>
+      </div>
+      <div style="background:var(--card);border:1px solid var(--border);border-radius:8px;padding:14px;">
+        <div style="font-family:'Space Mono',monospace;font-size:10px;color:var(--white);margin-bottom:4px;">+ 14 more</div>
+        <div style="font-size:10px;color:var(--muted);">asset_gen, asset_audit, asset_library, auto_state, brand_check, chat, conversation_context, generation_history, ingest, onboarding, onchain, resource_log, scheduler, strategy</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════════════════════════════════
+       COMMANDS TAB
+  ════════════════════════════════════════════════════ -->
+  <div id="panel-commands" class="panel">
+    <div class="section-head">
+      <h3>TELEGRAM COMMANDS — 44 TOTAL</h3>
+      <div class="section-line"></div>
+      <div class="section-badge tag-green">FULL COMMAND REFERENCE</div>
+    </div>
+
+    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:16px;margin-bottom:32px;">
+
+      <!-- Core Workflow -->
+      <div>
+        <div style="font-family:'Space Mono',monospace;font-size:11px;color:var(--orange);margin-bottom:12px;">CORE WORKFLOW</div>
+        <div style="display:flex;flex-direction:column;gap:6px;">
+          <div style="background:var(--card);border:1px solid var(--green);border-radius:6px;padding:10px;"><div style="font-family:'Space Mono',monospace;font-size:11px;color:var(--green);">/approve [N]</div><div style="font-size:10px;color:var(--muted);margin-top:2px;">Approve draft. Pick option N for parallel gen.</div></div>
+          <div style="background:var(--card);border:1px solid var(--red);border-radius:6px;padding:10px;"><div style="font-family:'Space Mono',monospace;font-size:11px;color:var(--red);">/reject &lt;feedback&gt;</div><div style="font-size:10px;color:var(--muted);margin-top:2px;">Reject + revise with feedback context.</div></div>
+          <div style="background:var(--card);border:1px solid var(--blue);border-radius:6px;padding:10px;"><div style="font-family:'Space Mono',monospace;font-size:11px;color:var(--blue);">/edit &lt;instruction&gt;</div><div style="font-size:10px;color:var(--muted);margin-top:2px;">Surgical img2img edit at 0.2 strength.</div></div>
+          <div style="background:var(--card);border:1px solid var(--border);border-radius:6px;padding:10px;"><div style="font-family:'Space Mono',monospace;font-size:11px;color:var(--white);">/cancel /status /help</div><div style="font-size:10px;color:var(--muted);margin-top:2px;">Clear draft, show status, list commands.</div></div>
+        </div>
+      </div>
+
+      <!-- Templates -->
+      <div>
+        <div style="font-family:'Space Mono',monospace;font-size:11px;color:var(--teal);margin-bottom:12px;">TEMPLATES (NEW v8)</div>
+        <div style="display:flex;flex-direction:column;gap:6px;">
+          <div style="background:var(--card);border:1px solid var(--teal);border-radius:6px;padding:10px;"><div style="font-family:'Space Mono',monospace;font-size:11px;color:var(--teal);">/template</div><div style="font-size:10px;color:var(--muted);margin-top:2px;">List templates + active mappings.</div></div>
+          <div style="background:var(--card);border:1px solid var(--teal);border-radius:6px;padding:10px;"><div style="font-family:'Space Mono',monospace;font-size:11px;color:var(--teal);">/template_from_reference</div><div style="font-size:10px;color:var(--muted);margin-top:2px;">Upload reference → PIL spec → render.</div></div>
+          <div style="background:var(--card);border:1px solid var(--teal);border-radius:6px;padding:10px;"><div style="font-family:'Space Mono',monospace;font-size:11px;color:var(--teal);">/template_import &lt;url&gt;</div><div style="font-size:10px;color:var(--muted);margin-top:2px;">Import from Figma URL.</div></div>
+          <div style="background:var(--card);border:1px solid var(--teal);border-radius:6px;padding:10px;"><div style="font-family:'Space Mono',monospace;font-size:11px;color:var(--teal);">/template_upload /template_test</div><div style="font-size:10px;color:var(--muted);margin-top:2px;">Upload raw PNG / test a template.</div></div>
+          <div style="background:var(--card);border:1px solid var(--teal);border-radius:6px;padding:10px;"><div style="font-family:'Space Mono',monospace;font-size:11px;color:var(--teal);">/font_upload</div><div style="font-size:10px;color:var(--muted);margin-top:2px;">Upload custom TTF/OTF font.</div></div>
+        </div>
+      </div>
+
+      <!-- Learning & Style -->
+      <div>
+        <div style="font-family:'Space Mono',monospace;font-size:11px;color:var(--purple);margin-bottom:12px;">LEARNING &amp; STYLE</div>
+        <div style="display:flex;flex-direction:column;gap:6px;">
+          <div style="background:var(--card);border:1px solid var(--purple);border-radius:6px;padding:10px;"><div style="font-family:'Space Mono',monospace;font-size:11px;color:var(--purple);">/style</div><div style="font-size:10px;color:var(--muted);margin-top:2px;">Manage style profiles (create/set/remove).</div></div>
+          <div style="background:var(--card);border:1px solid var(--purple);border-radius:6px;padding:10px;"><div style="font-family:'Space Mono',monospace;font-size:11px;color:var(--purple);">/learn /feedback</div><div style="font-size:10px;color:var(--muted);margin-top:2px;">Trigger learning / view stats.</div></div>
+          <div style="background:var(--card);border:1px solid var(--border);border-radius:6px;padding:10px;"><div style="font-family:'Space Mono',monospace;font-size:11px;color:var(--white);">/refs /brand /apply</div><div style="font-size:10px;color:var(--muted);margin-top:2px;">Show references / brand info / apply style.</div></div>
+        </div>
+      </div>
+
+    </div>
+
+    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:16px;">
+      <!-- Asset Generation -->
+      <div>
+        <div style="font-family:'Space Mono',monospace;font-size:11px;color:var(--teal);margin-bottom:12px;">ASSET GENERATION</div>
+        <div style="display:flex;flex-direction:column;gap:6px;">
+          <div style="background:var(--card);border:1px solid var(--teal);border-radius:6px;padding:10px;"><div style="font-family:'Space Mono',monospace;font-size:11px;color:var(--teal);">/generate /logo /ingest</div><div style="font-size:10px;color:var(--muted);margin-top:2px;">Standalone gen / logo / brand ingest.</div></div>
+          <div style="background:var(--card);border:1px solid var(--border);border-radius:6px;padding:10px;"><div style="font-family:'Space Mono',monospace;font-size:11px;color:var(--white);">/brand_check /setup</div><div style="font-size:10px;color:var(--muted);margin-top:2px;">Compliance check / brand bootstrap.</div></div>
+        </div>
+      </div>
+
+      <!-- LoRA -->
+      <div>
+        <div style="font-family:'Space Mono',monospace;font-size:11px;color:var(--green);margin-bottom:12px;">LORA MANAGEMENT</div>
+        <div style="display:flex;flex-direction:column;gap:6px;">
+          <div style="background:var(--card);border:1px solid var(--green);border-radius:6px;padding:10px;"><div style="font-family:'Space Mono',monospace;font-size:11px;color:var(--green);">/train_lora</div><div style="font-size:10px;color:var(--muted);margin-top:2px;">Trigger LoRA training (~$2-4).</div></div>
+          <div style="background:var(--card);border:1px solid var(--border);border-radius:6px;padding:10px;"><div style="font-family:'Space Mono',monospace;font-size:11px;color:var(--white);">/lora_status /lora_versions</div><div style="font-size:10px;color:var(--muted);margin-top:2px;">Poll training / list versions.</div></div>
+          <div style="background:var(--card);border:1px solid var(--border);border-radius:6px;padding:10px;"><div style="font-family:'Space Mono',monospace;font-size:11px;color:var(--white);">/lora_switch N /lora_rollback</div><div style="font-size:10px;color:var(--muted);margin-top:2px;">Switch version / rollback.</div></div>
+        </div>
+      </div>
+
+      <!-- Auto & Analytics -->
+      <div>
+        <div style="font-family:'Space Mono',monospace;font-size:11px;color:var(--yellow);margin-bottom:12px;">AUTO-POSTING &amp; ANALYTICS</div>
+        <div style="display:flex;flex-direction:column;gap:6px;">
+          <div style="background:var(--card);border:1px solid var(--border);border-radius:6px;padding:10px;"><div style="font-family:'Space Mono',monospace;font-size:11px;color:var(--white);">/autostatus /autopause /autoforce</div><div style="font-size:10px;color:var(--muted);margin-top:2px;">Schedule status / pause / force post.</div></div>
+          <div style="background:var(--card);border:1px solid var(--border);border-radius:6px;padding:10px;"><div style="font-family:'Space Mono',monospace;font-size:11px;color:var(--white);">/history /analytics</div><div style="font-size:10px;color:var(--muted);margin-top:2px;">Generation history / cost breakdown.</div></div>
+          <div style="background:var(--card);border:1px solid var(--border);border-radius:6px;padding:10px;"><div style="font-family:'Space Mono',monospace;font-size:11px;color:var(--white);">/onboard /strategy /library</div><div style="font-size:10px;color:var(--muted);margin-top:2px;">Brand onboarding / content strategy / asset library.</div></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════════════════════════════════
+       LORA TAB
+  ════════════════════════════════════════════════════ -->
+  <div id="panel-lora" class="panel">
+    <div class="section-head">
+      <h3>LORA PIPELINE — VERSION MANAGEMENT</h3>
+      <div class="section-line"></div>
+      <div class="section-badge" style="background:var(--green-dim);color:var(--green);border:1px solid var(--green);">MANIFEST-BASED — REPLICATE</div>
+    </div>
+
+    <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:32px;">
+      <div style="background:var(--card);border:1px solid var(--green);border-radius:8px;padding:20px;text-align:center;">
+        <div style="font-size:28px;font-weight:800;color:var(--green);">20+</div>
+        <div style="font-size:11px;color:var(--muted);margin-top:4px;">images to trigger training</div>
+      </div>
+      <div style="background:var(--card);border:1px solid var(--orange);border-radius:8px;padding:20px;text-align:center;">
+        <div style="font-size:28px;font-weight:800;color:var(--orange);">~$2-4</div>
+        <div style="font-size:11px;color:var(--muted);margin-top:4px;">training cost</div>
+      </div>
+      <div style="background:var(--card);border:1px solid var(--teal);border-radius:8px;padding:20px;text-align:center;">
+        <div style="font-size:28px;font-weight:800;color:var(--teal);">4</div>
+        <div style="font-size:11px;color:var(--muted);margin-top:4px;">LoRA-eligible types</div>
+      </div>
+      <div style="background:var(--card);border:1px solid var(--purple);border-radius:8px;padding:20px;text-align:center;">
+        <div style="font-size:28px;font-weight:800;color:var(--purple);">∞</div>
+        <div style="font-size:11px;color:var(--muted);margin-top:4px;">versions tracked</div>
+      </div>
+    </div>
+
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:24px;">
+      <div style="background:var(--card);border:1px solid var(--border);border-radius:8px;padding:20px;">
+        <div style="font-family:'Space Mono',monospace;font-size:11px;color:var(--orange);margin-bottom:12px;">MANIFEST.JSON — brand/loras/manifest.json</div>
+        <div style="font-family:'Space Mono',monospace;font-size:11px;line-height:2;color:var(--muted);">
+          <div>version_number, prediction_id, training_date</div>
+          <div>image_count, content_types trained on</div>
+          <div>file_path, weights_url, trigger_word, status</div>
+        </div>
+      </div>
+      <div style="background:var(--card);border:1px solid var(--orange);border-radius:8px;padding:20px;">
+        <div style="font-family:'Space Mono',monospace;font-size:11px;color:var(--orange);margin-bottom:12px;">THE ENDGAME</div>
+        <div style="font-size:12px;color:var(--muted);line-height:1.7;">Today: pass reference images every generation ("look like this"). After 20+ approvals → train LoRA on Replicate (~$2-4) → aesthetic baked into model weights. <span style="color:var(--teal);">3x faster, infinitely consistent.</span></div>
+      </div>
+    </div>
+
+    <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;">
+      <div style="background:var(--card);border:1px solid var(--green);border-radius:6px;padding:12px;text-align:center;font-family:'Space Mono',monospace;font-size:10px;color:var(--green);">brand_asset</div>
+      <div style="background:var(--card);border:1px solid var(--green);border-radius:6px;padding:12px;text-align:center;font-family:'Space Mono',monospace;font-size:10px;color:var(--green);">community</div>
+      <div style="background:var(--card);border:1px solid var(--green);border-radius:6px;padding:12px;text-align:center;font-family:'Space Mono',monospace;font-size:10px;color:var(--green);">brand_3d</div>
+      <div style="background:var(--card);border:1px solid var(--green);border-radius:6px;padding:12px;text-align:center;font-family:'Space Mono',monospace;font-size:10px;color:var(--green);">lifestyle</div>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════════════════════════════════
+       SECURITY & PERFORMANCE TAB (NEW)
+  ════════════════════════════════════════════════════ -->
+  <div id="panel-security" class="panel">
+    <div class="section-head">
+      <h3>SECURITY HARDENING &amp; PERFORMANCE</h3>
+      <div class="section-line"></div>
+      <div class="section-badge tag-red">FULL AUDIT — v8</div>
+    </div>
+
+    <div style="font-family:'Space Mono',monospace;font-size:11px;color:var(--red);margin-bottom:12px;margin-top:8px;">SECURITY FIXES</div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:32px;">
+      <div style="background:var(--card);border:1px solid var(--red);border-radius:8px;padding:16px;">
+        <div style="font-size:12px;font-weight:700;color:var(--red);margin-bottom:6px;">Path Traversal Prevention</div>
+        <div style="font-size:11px;color:var(--muted);line-height:1.6;">All Telegram file uploads (fonts, PDFs) stripped with os.path.basename(). No ../../../etc/passwd attacks possible.</div>
+      </div>
+      <div style="background:var(--card);border:1px solid var(--red);border-radius:8px;padding:16px;">
+        <div style="font-size:12px;font-weight:700;color:var(--red);margin-bottom:6px;">img2img Path Validation</div>
+        <div style="font-size:11px;color:var(--muted);line-height:1.6;">File reads restricted to brand/ and /tmp directories. Image extension whitelist (.png, .jpg, .jpeg, .webp, .gif).</div>
+      </div>
+      <div style="background:var(--card);border:1px solid var(--red);border-radius:8px;padding:16px;">
+        <div style="font-size:12px;font-weight:700;color:var(--red);margin-bottom:6px;">File Size Limits</div>
+        <div style="font-size:11px;color:var(--muted);line-height:1.6;">Fonts: 10MB max. PDFs: 50MB max. Validated with isinstance(int) check before comparison.</div>
+      </div>
+      <div style="background:var(--card);border:1px solid var(--red);border-radius:8px;padding:16px;">
+        <div style="font-size:12px;font-weight:700;color:var(--red);margin-bottom:6px;">Gemini API Key in Header</div>
+        <div style="font-size:11px;color:var(--muted);line-height:1.6;">Moved from URL query parameter to x-goog-api-key header. No longer visible in logs or browser history.</div>
+      </div>
+      <div style="background:var(--card);border:1px solid var(--red);border-radius:8px;padding:16px;">
+        <div style="font-size:12px;font-weight:700;color:var(--red);margin-bottom:6px;">OpenClaw Newline Bypass</div>
+        <div style="font-size:11px;color:var(--muted);line-height:1.6;">Added \n\r\t to unsafe chars regex. Prevents command injection via newline characters in scripts.</div>
+      </div>
+      <div style="background:var(--card);border:1px solid var(--red);border-radius:8px;padding:16px;">
+        <div style="font-size:12px;font-weight:700;color:var(--red);margin-bottom:6px;">Generic Error Messages</div>
+        <div style="font-size:11px;color:var(--muted);line-height:1.6;">Removed raw str(e) from user-facing messages. Internal errors no longer leak stack traces to Telegram.</div>
+      </div>
+    </div>
+
+    <div style="font-family:'Space Mono',monospace;font-size:11px;color:var(--green);margin-bottom:12px;">PERFORMANCE OPTIMIZATIONS</div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:24px;">
+      <div style="background:var(--card);border:1px solid var(--green);border-radius:8px;padding:16px;">
+        <div style="font-size:12px;font-weight:700;color:var(--green);margin-bottom:6px;">Singleton API Clients</div>
+        <div style="font-size:11px;color:var(--muted);line-height:1.6;"><code style="color:var(--white);">agent/_client.py</code> — one AsyncAnthropic and one httpx.AsyncClient reused across all 35 modules. Previously: new client per call (24+ instantiation sites). Connection pooling saves ~100ms per LLM call.</div>
+      </div>
+      <div style="background:var(--card);border:1px solid var(--green);border-radius:8px;padding:16px;">
+        <div style="font-size:12px;font-weight:700;color:var(--green);margin-bottom:6px;">NumPy Vectorized Gradients</div>
+        <div style="font-size:11px;color:var(--muted);line-height:1.6;">Template renderer gradients use np.meshgrid + np.linspace + Image.fromarray instead of per-pixel putpixel(). ~100x faster for large gradient fills.</div>
+      </div>
+      <div style="background:var(--card);border:1px solid var(--green);border-radius:8px;padding:16px;">
+        <div style="font-size:12px;font-weight:700;color:var(--green);margin-bottom:6px;">Cached Compositor Backgrounds</div>
+        <div style="font-size:11px;color:var(--muted);line-height:1.6;">Background images + fade masks cached by config hash + dimensions. Avoids re-rendering 14 layers per compose for repeated generations.</div>
+      </div>
+      <div style="background:var(--card);border:1px solid var(--green);border-radius:8px;padding:16px;">
+        <div style="font-size:12px;font-weight:700;color:var(--green);margin-bottom:6px;">Parallel Multi-Option Compose</div>
+        <div style="font-size:11px;color:var(--muted);line-height:1.6;">brand_3d 3-option images composed via asyncio.gather() instead of sequential loop. ~3x faster for multi-option drafts.</div>
+      </div>
+      <div style="background:var(--card);border:1px solid var(--green);border-radius:8px;padding:16px;">
+        <div style="font-size:12px;font-weight:700;color:var(--green);margin-bottom:6px;">Async Font Downloads</div>
+        <div style="font-size:11px;color:var(--muted);line-height:1.6;">Google Fonts fetched with async httpx (non-blocking). Cached to brand/assets/fonts/ after first download.</div>
+      </div>
+      <div style="background:var(--card);border:1px solid var(--green);border-radius:8px;padding:16px;">
+        <div style="font-size:12px;font-weight:700;color:var(--green);margin-bottom:6px;">State Concurrency Safety</div>
+        <div style="font-size:11px;color:var(--muted);line-height:1.6;">asyncio.Lock on state file operations. In-memory cache reduces repeated JSON parsing. Prevents race conditions between auto-poster and user handlers.</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════════════════════════════════
+       EVAL TAB
+  ════════════════════════════════════════════════════ -->
+  <div id="panel-eval" class="panel">
+    <div class="section-head">
+      <h3>EVAL SYSTEM — 647 TESTS</h3>
+      <div class="section-line"></div>
+      <div class="section-badge" style="background:var(--teal-dim);color:var(--teal);border:1px solid var(--teal);">30 TEST FILES — ALL PASSING</div>
+    </div>
+
+    <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:32px;">
+      <div style="background:var(--card);border:1px solid var(--teal);border-radius:8px;padding:20px;text-align:center;">
+        <div style="font-size:36px;font-weight:800;color:var(--teal);">647</div>
+        <div style="font-size:11px;color:var(--muted);margin-top:4px;">tests total</div>
+      </div>
+      <div style="background:var(--card);border:1px solid var(--green);border-radius:8px;padding:20px;text-align:center;">
+        <div style="font-size:36px;font-weight:800;color:var(--green);">30</div>
+        <div style="font-size:11px;color:var(--muted);margin-top:4px;">test files</div>
+      </div>
+      <div style="background:var(--card);border:1px solid var(--orange);border-radius:8px;padding:20px;text-align:center;">
+        <div style="font-size:36px;font-weight:800;color:var(--orange);">3</div>
+        <div style="font-size:11px;color:var(--muted);margin-top:4px;">compliance layers</div>
+      </div>
+      <div style="background:var(--card);border:1px solid var(--green);border-radius:8px;padding:20px;text-align:center;">
+        <div style="font-size:36px;font-weight:800;color:var(--green);">0</div>
+        <div style="font-size:11px;color:var(--muted);margin-top:4px;">failures</div>
+      </div>
+    </div>
+
+    <div style="font-family:'Space Mono',monospace;font-size:11px;color:var(--orange);margin-bottom:16px;">COMPLIANCE ENFORCEMENT — DEFENSE IN DEPTH</div>
+    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;margin-bottom:24px;">
+      <div style="background:var(--card);border:1px solid var(--orange);border-radius:8px;padding:16px;">
+        <div style="font-family:'Space Mono',monospace;font-size:10px;color:var(--orange);margin-bottom:8px;">LAYER 1 — PROMPT</div>
+        <div style="font-size:12px;font-weight:700;color:var(--white);margin-bottom:6px;">HARD RULES in system prompt</div>
+        <div style="font-size:11px;color:var(--muted);">Zero hashtags. No AI words. Max 1 emoji. Injected into every agent turn.</div>
+      </div>
+      <div style="background:var(--card);border:1px solid var(--blue);border-radius:8px;padding:16px;">
+        <div style="font-family:'Space Mono',monospace;font-size:10px;color:var(--blue);margin-bottom:8px;">LAYER 2 — POST-PROCESSING</div>
+        <div style="font-size:12px;font-weight:700;color:var(--white);margin-bottom:6px;">_sanitize_draft() auto-strip</div>
+        <div style="font-size:11px;color:var(--muted);">Programmatically strips hashtags and AI words from every draft.</div>
+      </div>
+      <div style="background:var(--card);border:1px solid var(--teal);border-radius:8px;padding:16px;">
+        <div style="font-family:'Space Mono',monospace;font-size:10px;color:var(--teal);margin-bottom:8px;">LAYER 3 — EVAL</div>
+        <div style="font-size:12px;font-weight:700;color:var(--white);margin-bottom:6px;">Scorer + regression baselines</div>
+        <div style="font-size:11px;color:var(--muted);">Catches prompt drift and forbidden terms before deployment.</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════════════════════════════════
+       SETUP TAB
+  ════════════════════════════════════════════════════ -->
+  <div id="panel-setup" class="panel">
+    <div class="section-head">
+      <h3>SETUP — NEW CLIENT IN 5 MINUTES</h3>
+      <div class="section-line"></div>
+      <div class="section-badge tag-green">BRAND-AGNOSTIC ONBOARDING</div>
+    </div>
+
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:24px;margin-bottom:32px;">
+      <div>
+        <div style="font-family:'Space Mono',monospace;font-size:11px;color:var(--orange);margin-bottom:16px;">CLI WIZARD</div>
+        <div style="background:var(--card);border:1px solid var(--border);border-radius:8px;padding:20px;font-family:'Space Mono',monospace;font-size:11px;line-height:2;color:var(--muted)">
+          <div style="color:var(--orange)">$ python3 setup.py</div>
+          <div style="color:#444">──────────────────────────</div>
+          <div style="color:var(--white)">Step 1/4: Telegram Bot</div>
+          <div>Token: <span style="color:var(--orange)">____</span> | User ID: <span style="color:var(--orange)">____</span></div>
+          <div style="color:var(--white)">Step 2/4: AI Services</div>
+          <div>Anthropic: <span style="color:var(--orange)">____</span> | Replicate: <span style="color:var(--orange)">____</span></div>
+          <div style="color:var(--white)">Step 3/4: Brand Identity</div>
+          <div>Name: <span style="color:var(--orange)">____</span> | Color: <span style="color:var(--orange)">____</span> | Voice: <span style="color:var(--orange)">____</span></div>
+          <div style="color:var(--green)">→ Generating guidelines.md...</div>
+          <div style="color:var(--green)">✓ Done. Run: python3 main.py</div>
+        </div>
+      </div>
+      <div>
+        <div style="font-family:'Space Mono',monospace;font-size:11px;color:var(--orange);margin-bottom:16px;">BOT COMMAND — /setup PDF UPLOAD</div>
+        <div style="display:flex;flex-direction:column;gap:8px;">
+          <div class="node orange"><div class="node-title">1. /setup → upload brand PDF</div><div class="node-body">PyMuPDF extracts text + images</div></div>
+          <div style="text-align:center;color:var(--orange)">↓</div>
+          <div class="node purple"><div class="node-title">2. Claude Vision extracts brand</div><div class="node-body">Colors, fonts, voice, tone → guidelines.md</div></div>
+          <div style="text-align:center;color:var(--orange)">↓</div>
+          <div class="node teal"><div class="node-title">3. Upload style references</div><div class="node-body">/style create → visual profile ready</div></div>
+          <div style="text-align:center;color:var(--orange)">↓</div>
+          <div class="node green"><div class="node-title">4. First post in 5 minutes</div><div class="node-body">"write a post about X" → draft → /approve</div></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════════════════════════════════
+       VIDEO TAB (FUTURE)
+  ════════════════════════════════════════════════════ -->
+  <div id="panel-video" class="panel">
+    <div class="section-head">
+      <h3>VIDEO GENERATION ROADMAP</h3>
+      <div class="section-line"></div>
+      <div class="section-badge" style="background:var(--yellow-dim);color:var(--yellow);border:1px solid var(--yellow);">FUTURE — AFTER STABLE IMAGE PIPELINE</div>
+    </div>
+
+    <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:32px;">
+      <div style="background:var(--card);border:1px solid var(--green);border-radius:8px;padding:20px;position:relative;">
+        <div style="position:absolute;top:-1px;left:20px;background:var(--bg);padding:0 8px;font-family:'Space Mono',monospace;font-size:9px;color:var(--green);">NOW</div>
+        <div style="font-size:16px;font-weight:800;color:var(--green);margin-bottom:12px;">Images + Templates</div>
+        <div style="font-size:11px;color:var(--muted);line-height:1.8;">
+          ✓ Agent mode working<br>
+          ✓ Template system live<br>
+          ✓ Security hardened<br>
+          ✓ 647 tests passing<br>
+          → Enable X posting<br>
+          → 10 approved posts
+        </div>
+      </div>
+      <div style="background:var(--card);border:1px solid var(--orange);border-radius:8px;padding:20px;position:relative;">
+        <div style="position:absolute;top:-1px;left:20px;background:var(--bg);padding:0 8px;font-family:'Space Mono',monospace;font-size:9px;color:var(--orange);">MONTH 2</div>
+        <div style="font-size:16px;font-weight:800;color:var(--orange);margin-bottom:12px;">LoRA + Scale</div>
+        <div style="font-size:11px;color:var(--muted);line-height:1.8;">
+          → 20+ approved outputs<br>
+          → Train client LoRA<br>
+          → Multi-client support<br>
+          → Approval rate &lt;3 rounds
+        </div>
+      </div>
+      <div style="background:var(--card);border:2px solid var(--yellow);border-radius:8px;padding:20px;position:relative;">
+        <div style="position:absolute;top:-1px;left:20px;background:var(--bg);padding:0 8px;font-family:'Space Mono',monospace;font-size:9px;color:var(--yellow);">MONTH 3+</div>
+        <div style="font-size:16px;font-weight:800;color:var(--yellow);margin-bottom:12px;">Video Generation</div>
+        <div style="font-size:11px;color:var(--muted);line-height:1.8;">
+          → Approved image → animate<br>
+          → Kling 2.6 Pro I2V (~$0.46)<br>
+          → Wan 2.2 for iteration (~$0.25)<br>
+          → Veo 3.1 for campaigns ($0.65)<br>
+          → Same approve/reject loop
+        </div>
+      </div>
+    </div>
+
+    <div style="background:var(--card);border:1px solid var(--yellow);border-radius:8px;padding:24px;">
+      <div style="font-family:'Space Mono',monospace;font-size:11px;color:var(--yellow);margin-bottom:12px;">THE UNLOCK</div>
+      <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:20px;">
+        <div>
+          <div style="font-size:13px;font-weight:700;color:var(--white);margin-bottom:6px;">Same feedback loop</div>
+          <div style="font-size:11px;color:var(--muted);line-height:1.6;">approve/reject/learn works identically for video. After 5 approved videos the bot knows exactly what motion style gets approved.</div>
+        </div>
+        <div>
+          <div style="font-size:13px;font-weight:700;color:var(--white);margin-bottom:6px;">$14/month for daily video</div>
+          <div style="font-size:11px;color:var(--muted);line-height:1.6;">$0.46 per 5-second mascot video at 1080p. Compare to a motion designer at $3,000/month.</div>
+        </div>
+        <div>
+          <div style="font-size:13px;font-weight:700;color:var(--white);margin-bottom:6px;">Character locked</div>
+          <div style="font-size:11px;color:var(--muted);line-height:1.6;">Kling I2V takes approved mascot image and animates it. Same consistency that took 9 reference images to achieve — now moving.</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<script>
+function showTab(name, event) {
+  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+  document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
+  document.querySelector('#panel-' + name).classList.add('active');
+  if (event && event.currentTarget) event.currentTarget.classList.add('active');
+}
+</script>
+</body>
+</html>

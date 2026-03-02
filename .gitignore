@@ -27,9 +27,13 @@ brand/references/
 brand/assets/fonts/
 brand/assets/pdf_pages/
 brand/assets/images/
+brand/assets/library/
 brand/assets/*.png
 brand/assets/*.svg
 brand/assets/*.jpg
+brand/asset_inventory.json
+brand/asset_library.json
+brand/templates/
 
 # Eval baselines (generated per-brand)
 eval/baselines/*.json

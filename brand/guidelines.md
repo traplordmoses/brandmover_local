@@ -339,4 +339,4 @@ FOID lives in an iridescent underwater dreamworld — a luminous light-blue univ
 
 | Setting        | Value          |
 |----------------|----------------|
-| Enabled        | false           |
+| Enabled        | true           |
