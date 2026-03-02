@@ -15,7 +15,7 @@ from PIL import Image as _PILImage
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import ContextTypes
 
-from agent import asset_gen, asset_library, auto_state, brain, chat, compositor, compositor_config, conversation_context, engine, feedback, generation_history, guidelines, image_gen, intent_router, onboarding, publisher, scheduler, state
+from agent import asset_gen, asset_library, auto_state, brain, chat, compositor, compositor_config, conversation_context, engine, feedback, generation_history, guidelines, image_gen, intent_router, onboarding, publisher, schedule_queue, scheduler, state
 from agent import compositor_config as _cc
 from config import settings
 
@@ -431,6 +431,9 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         "/brand — Show active brand config\n"
         "/setup — Bootstrap guidelines from a PDF upload\n"
         "/cancel — Clear pending draft\n"
+        "/schedule <i>time prompt</i> — Schedule a post for a specific time\n"
+        "/scheduled — List upcoming scheduled posts\n"
+        "/unschedule <i>id</i> — Cancel a scheduled post\n"
         "/autostatus — Auto-posting scheduler status\n"
         "/autopause — Pause/resume auto-posting\n"
         "/autoforce <i>slot</i> — Force a specific auto-post slot\n"
@@ -1829,6 +1832,43 @@ async def _route_intent(update: Update, context: ContextTypes.DEFAULT_TYPE, mess
         )
         return True
 
+    if intent == "schedule_post" and confidence >= 0.5:
+        time_expr = result.parameters.get("time", "")
+        topic = result.parameters.get("topic", "")
+
+        # If Haiku extracted time and topic, try to schedule directly
+        if time_expr and topic:
+            combined = f"{time_expr} {topic}"
+            prompt, ts, recurrence, display = schedule_queue.parse_schedule_command(combined)
+            if prompt and ts:
+                item = schedule_queue.add_scheduled(prompt, ts, recurrence or "once")
+                await update.message.reply_text(
+                    f"<b>Post scheduled</b>\n\n"
+                    f"<b>Time:</b> {_esc(display)}\n"
+                    f"<b>Prompt:</b> {_esc(prompt[:200])}\n"
+                    f"<b>ID:</b> <code>{item['id']}</code>\n\n"
+                    f"I'll generate a draft at the scheduled time and send it for your approval.\n"
+                    f"Use /unschedule <code>{item['id']}</code> to cancel.",
+                    parse_mode="HTML",
+                )
+                return True
+
+        # If no time/topic extracted or parse failed, show bare keyword help
+        # or list existing schedule
+        items = schedule_queue.list_scheduled()
+        if items:
+            await scheduled_command(update, context)
+        else:
+            await update.message.reply_text(
+                "<b>Schedule a post</b>\n\n"
+                "Tell me when and what to post:\n"
+                "  <i>\"schedule a post about our launch at 3pm\"</i>\n"
+                "  <i>\"post about community updates tomorrow 9am\"</i>\n\n"
+                "Or use: /schedule <i>time</i> <i>prompt</i>",
+                parse_mode="HTML",
+            )
+        return True
+
     # Conversational
     if intent == "greeting":
         user = update.effective_user
@@ -3027,6 +3067,18 @@ async def autostatus_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
     recent = status.get("recent_captions", [])
     recent_str = "\n".join(f"  - {c}" for c in recent) if recent else "  (none)"
 
+    # User-scheduled queue info
+    scheduled_items = schedule_queue.list_scheduled()
+    if scheduled_items:
+        from datetime import datetime, timezone
+        sched_lines = []
+        for item in sorted(scheduled_items, key=lambda x: x.get("scheduled_utc", 0))[:5]:
+            dt = datetime.fromtimestamp(item.get("scheduled_utc", 0), tz=timezone.utc)
+            sched_lines.append(f"  \u23F0 {dt.strftime('%b %d %H:%M')} — {item.get('prompt', '')[:40]}")
+        sched_section = f"\n<b>Scheduled ({len(scheduled_items)}):</b>\n" + "\n".join(sched_lines)
+    else:
+        sched_section = "\n<b>Scheduled:</b> none"
+
     msg = (
         f"<b>Auto-Post Status: {paused_str}</b>\n\n"
         f"<b>Enabled:</b> {settings.AUTO_POST_ENABLED}\n"
@@ -3034,7 +3086,8 @@ async def autostatus_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
         f"<b>Posts today:</b> {status['posts_today']}/{global_cfg.get('max_posts_per_day', 6)}\n"
         f"<b>Last post:</b> {last_str}\n"
         f"<b>Min gap:</b> {global_cfg.get('min_gap_minutes', 120)} min\n\n"
-        f"<b>Slots:</b>\n" + "\n".join(slot_lines) + "\n\n"
+        f"<b>Slots:</b>\n" + "\n".join(slot_lines) +
+        sched_section + "\n\n"
         f"<b>Recent:</b>\n{recent_str}"
     )
     await update.message.reply_text(msg, parse_mode="HTML")
@@ -3129,6 +3182,141 @@ async def autoforce_command(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         logger.error("autoforce failed for %s: %s", slot_name, e)
         await update.message.reply_text(
             f"Force draft failed: {_esc(str(e))}",
+            parse_mode="HTML",
+        )
+
+
+# ---------------------------------------------------------------------------
+# /schedule, /scheduled, /unschedule — user-driven scheduling
+# ---------------------------------------------------------------------------
+
+
+async def schedule_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /schedule <time> <prompt> — schedule a post for a specific time.
+
+    Examples:
+        /schedule 3pm post about our new product launch
+        /schedule tomorrow 9am morning engagement thread
+        /schedule in 2 hours something cool about the community
+        /schedule daily 3pm afternoon update
+        /schedule weekly monday 9am week in review
+    """
+    if not _authorized(update.effective_user.id):
+        return
+
+    text = (update.message.text or "").strip()
+    # Strip the /schedule command prefix
+    args = text.split(None, 1)
+    if len(args) < 2:
+        await update.message.reply_text(
+            "<b>Schedule a post</b>\n\n"
+            "Usage: /schedule <i>time</i> <i>prompt</i>\n\n"
+            "<b>Examples:</b>\n"
+            "<code>/schedule 3pm post about our launch</code>\n"
+            "<code>/schedule tomorrow 9am morning engagement</code>\n"
+            "<code>/schedule in 2 hours community update</code>\n"
+            "<code>/schedule daily 3pm afternoon post</code>\n"
+            "<code>/schedule weekly monday 9am week in review</code>\n\n"
+            "<b>Time formats:</b> 3pm, 9:30am, 15:00, tomorrow, monday, in 2 hours\n"
+            "<b>Recurrence:</b> prefix with <code>daily</code> or <code>weekly</code>",
+            parse_mode="HTML",
+        )
+        return
+
+    prompt, ts, recurrence, display = schedule_queue.parse_schedule_command(args[1])
+
+    if prompt is None:
+        await update.message.reply_text(
+            f"{_esc(display)}",
+            parse_mode="HTML",
+        )
+        return
+
+    item = schedule_queue.add_scheduled(prompt, ts, recurrence or "once")
+    recurrence_tag = f" ({recurrence})" if recurrence and recurrence != "once" else ""
+
+    await update.message.reply_text(
+        f"<b>Post scheduled{_esc(recurrence_tag)}</b>\n\n"
+        f"<b>Time:</b> {_esc(display)}\n"
+        f"<b>Prompt:</b> {_esc(prompt[:200])}\n"
+        f"<b>ID:</b> <code>{item['id']}</code>\n\n"
+        f"I'll generate a draft at the scheduled time and send it here for your approval.\n"
+        f"Use /unschedule <code>{item['id']}</code> to cancel.",
+        parse_mode="HTML",
+    )
+
+
+async def scheduled_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /scheduled — list upcoming scheduled posts."""
+    if not _authorized(update.effective_user.id):
+        return
+
+    items = schedule_queue.list_scheduled()
+
+    if not items:
+        await update.message.reply_text(
+            "No scheduled posts.\n\n"
+            "Use /schedule <i>time</i> <i>prompt</i> to schedule one.",
+            parse_mode="HTML",
+        )
+        return
+
+    from datetime import datetime, timezone
+
+    lines = ["<b>Scheduled Posts</b>\n"]
+    for item in sorted(items, key=lambda x: x.get("scheduled_utc", 0)):
+        ts = item.get("scheduled_utc", 0)
+        dt = datetime.fromtimestamp(ts, tz=timezone.utc)
+        time_str = dt.strftime("%b %d %H:%M UTC")
+        status = item.get("status", "pending")
+        recurrence = item.get("recurrence", "once")
+        rec_tag = f" [{recurrence}]" if recurrence != "once" else ""
+
+        icon = "\u23F0" if status == "pending" else "\u2699\uFE0F"  # clock or gear
+        lines.append(
+            f"{icon} <code>{item['id']}</code> — {_esc(time_str)}{_esc(rec_tag)}\n"
+            f"   {_esc(item.get('prompt', '')[:80])}"
+        )
+
+    lines.append(f"\n<i>{len(items)} scheduled post{'s' if len(items) != 1 else ''}</i>")
+    lines.append("\nUse /unschedule <code>ID</code> to cancel.")
+
+    await update.message.reply_text("\n".join(lines), parse_mode="HTML")
+
+
+async def unschedule_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /unschedule <id> — cancel a scheduled post."""
+    if not _authorized(update.effective_user.id):
+        return
+
+    text = (update.message.text or "").strip()
+    parts = text.split()
+
+    if len(parts) < 2:
+        items = schedule_queue.list_scheduled()
+        if not items:
+            await update.message.reply_text("No scheduled posts to cancel.")
+            return
+
+        item_list = ", ".join(f"<code>{i['id']}</code>" for i in items)
+        await update.message.reply_text(
+            f"Usage: /unschedule <i>id</i>\n\n"
+            f"Active IDs: {item_list}\n\n"
+            f"Use /scheduled to see details.",
+            parse_mode="HTML",
+        )
+        return
+
+    item_id = parts[1]
+    if schedule_queue.cancel_scheduled(item_id):
+        await update.message.reply_text(
+            f"Cancelled scheduled post <code>{_esc(item_id)}</code>.",
+            parse_mode="HTML",
+        )
+    else:
+        await update.message.reply_text(
+            f"No active scheduled post with ID <code>{_esc(item_id)}</code>.\n"
+            f"Use /scheduled to see current posts.",
             parse_mode="HTML",
         )
 

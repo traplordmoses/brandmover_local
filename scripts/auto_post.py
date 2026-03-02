@@ -38,7 +38,7 @@ from pathlib import Path
 _project_root = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_project_root))
 
-from agent import auto_state, engine, scheduler, state
+from agent import auto_state, engine, schedule_queue, scheduler, state
 from config import settings
 
 logger = logging.getLogger(__name__)
@@ -224,6 +224,141 @@ async def process_slot(
 
 
 # ---------------------------------------------------------------------------
+# User-scheduled item processing
+# ---------------------------------------------------------------------------
+
+async def process_scheduled_item(
+    item: dict,
+    global_config: dict,
+    dry_run: bool = False,
+    bot=None,
+) -> bool:
+    """Process a user-scheduled queue item.
+
+    Similar to process_slot but uses the user's prompt directly
+    and tracks status in the schedule queue.
+
+    Returns True if a draft was generated and queued.
+    """
+    item_id = item["id"]
+    prompt = item["prompt"]
+    label = item.get("label", prompt[:40])
+    slot_name = f"scheduled:{item_id}"
+
+    logger.info("Processing scheduled item: %s (%s)", item_id, label)
+    schedule_queue.mark_generating(item_id)
+
+    # Rate limit check
+    min_gap = global_config.get("min_gap_minutes", 120)
+    max_posts = global_config.get("max_posts_per_day", 6)
+    allowed, reason = auto_state.can_post(min_gap, max_posts)
+    if not allowed and not dry_run:
+        logger.info("Skipping scheduled %s: %s", item_id, reason)
+        # Don't mark as failed — leave as generating so it retries next cycle
+        # Reset back to pending so it's picked up again
+        items = schedule_queue._read_queue()
+        for i in items:
+            if i["id"] == item_id:
+                i["status"] = "pending"
+                break
+        schedule_queue._write_queue(items)
+        return False
+
+    # Don't queue if there's already a pending draft awaiting review
+    if state.has_pending() and not dry_run:
+        logger.info("Skipping scheduled %s: a draft is already pending approval", item_id)
+        items = schedule_queue._read_queue()
+        for i in items:
+            if i["id"] == item_id:
+                i["status"] = "pending"
+                break
+        schedule_queue._write_queue(items)
+        return False
+
+    # Run the agent with the user's prompt
+    result = None
+    for attempt in range(_MAX_RETRIES + 1):
+        try:
+            result = await engine.run_agent(request=prompt)
+            if result.draft:
+                break
+            logger.warning(
+                "Agent returned no draft for scheduled %s (attempt %d/%d)",
+                item_id, attempt + 1, _MAX_RETRIES + 1,
+            )
+        except Exception as e:
+            logger.error(
+                "Agent failed for scheduled %s (attempt %d/%d): %s",
+                item_id, attempt + 1, _MAX_RETRIES + 1, e,
+            )
+        if attempt < _MAX_RETRIES:
+            await asyncio.sleep(60)  # shorter retry delay for user-scheduled
+
+    if not result or not result.draft:
+        schedule_queue.mark_failed(item_id, "Could not generate content")
+        await _notify_telegram(
+            f"<b>Scheduled post failed</b>\n\n"
+            f"ID: <code>{item_id}</code>\n"
+            f"Prompt: {prompt[:100]}\n"
+            f"Could not generate content after {_MAX_RETRIES + 1} attempts."
+        )
+        return False
+
+    caption = result.draft.get("caption", "")
+    image_url = result.image_url
+
+    # Duplicate check
+    if auto_state.is_duplicate_caption(caption):
+        schedule_queue.mark_failed(item_id, "Duplicate caption")
+        await _notify_telegram(
+            f"<b>Scheduled post skipped (duplicate)</b>\n\n"
+            f"ID: <code>{item_id}</code>\n"
+            f"Caption was too similar to a recent post."
+        )
+        return False
+
+    if dry_run:
+        logger.info("DRY RUN — scheduled=%s caption=%s", item_id, caption[:80])
+        schedule_queue.mark_done(item_id)
+        return True
+
+    # Save as pending draft
+    state.save_pending(
+        caption=caption,
+        hashtags=result.draft.get("hashtags", []),
+        image_url=image_url,
+        alt_text=result.draft.get("alt_text", ""),
+        image_prompt=result.draft.get("image_prompt", ""),
+        original_request=prompt,
+        image_urls=result.image_urls if len(result.image_urls) > 1 else None,
+        auto_slot=slot_name,
+    )
+
+    if image_url:
+        state.save_last_generated(image_url, result.draft.get("content_type", "default"))
+
+    # Mark as done (recurrence handled inside mark_done)
+    schedule_queue.mark_done(item_id)
+
+    # Send draft to Telegram for review
+    if bot:
+        from bot.handlers import send_auto_draft
+        await send_auto_draft(bot, result.draft, image_url, slot_name)
+    else:
+        notification = (
+            f"<b>Scheduled Draft Ready</b>  [<code>{item_id}</code>]\n\n"
+            f"{caption}\n\n"
+            f"/approve to post to X\n"
+            f"/reject <i>feedback</i> to revise\n"
+            f"/cancel to discard"
+        )
+        await _notify_telegram(notification)
+
+    logger.info("Scheduled draft queued for approval: %s", item_id)
+    return True
+
+
+# ---------------------------------------------------------------------------
 # Cron / daemon runners
 # ---------------------------------------------------------------------------
 
@@ -232,42 +367,63 @@ async def run_cron(
     force_slot: str | None = None,
     bot=None,
 ) -> int:
-    """Single cron run: check schedule, process due slots.
+    """Single cron run: check schedule + user queue, process due items.
 
     Returns number of drafts generated.
     """
     schedule = scheduler.load_schedule()
     global_config = schedule.get("global", {})
     slots = schedule.get("slots", {})
+    drafts_made = 0
 
+    # --- 1. Process user-scheduled queue items (always, even if auto-post is off) ---
+    # User-scheduled posts are explicit user requests, not auto-pilot.
+    due_items = schedule_queue.get_due_items(window_seconds=SCHEDULER_INTERVAL_SECONDS)
+    if due_items and not force_slot:
+        if not auto_state.is_paused():
+            for item in due_items:
+                if state.has_pending() and not dry_run:
+                    logger.info("User queue: pending draft exists, deferring")
+                    break
+                success = await process_scheduled_item(
+                    item, global_config,
+                    dry_run=dry_run or settings.AUTO_POST_DRY_RUN,
+                    bot=bot,
+                )
+                if success:
+                    drafts_made += 1
+                    if not dry_run:
+                        break
+
+    # If a user-scheduled draft was generated, skip predefined slots this cycle
+    if drafts_made and not dry_run:
+        return drafts_made
+
+    # --- 2. Process predefined time slots ---
     if not slots:
-        logger.warning("No slots defined in schedule.json")
-        return 0
-
-    # Determine which slots to process
-    if force_slot:
+        logger.debug("No predefined slots in schedule.json")
+    elif force_slot:
         if force_slot not in slots:
             logger.error("Unknown slot: %s (available: %s)", force_slot, list(slots.keys()))
-            return 0
+            return drafts_made
         due_slots = [force_slot]
         logger.info("Forcing slot: %s", force_slot)
     else:
         due_slots = scheduler.get_due_slots(schedule)
-        if not due_slots:
-            logger.debug("No slots due right now")
-            return 0
-        logger.info("Due slots: %s", due_slots)
+        if due_slots:
+            logger.info("Due slots: %s", due_slots)
+        else:
+            due_slots = []
 
-    # Check if auto-posting is enabled and not paused
+    # Check if auto-posting is enabled and not paused (for predefined slots)
     if not settings.AUTO_POST_ENABLED and not dry_run and not force_slot:
-        logger.info("Auto-posting is disabled (AUTO_POST_ENABLED=false)")
-        return 0
+        logger.debug("Auto-posting disabled — skipping predefined slots")
+        return drafts_made
 
     if auto_state.is_paused() and not force_slot:
-        logger.info("Auto-posting is paused")
-        return 0
+        logger.debug("Auto-posting paused — skipping predefined slots")
+        return drafts_made
 
-    drafts_made = 0
     for slot_name in due_slots:
         slot_config = slots[slot_name]
         success = await process_slot(
@@ -277,9 +433,11 @@ async def run_cron(
         )
         if success:
             drafts_made += 1
-            # Only generate one draft at a time — wait for approval before next
             if not dry_run:
                 break
+
+    # --- 3. Periodic housekeeping ---
+    schedule_queue.prune_old()
 
     return drafts_made
 

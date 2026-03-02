@@ -28,6 +28,7 @@ KNOWN_INTENTS = (
     "edit_request",
     "reroll",
     "generate_content",
+    "schedule_post",
     "change_style",
     "modify_last",
     "upload_assets",
@@ -104,6 +105,11 @@ _SHORT_MESSAGE_TABLE: dict[str, str] = {
     "send images": "upload_assets",
     "send pictures": "upload_assets",
     "add images": "upload_assets",
+    # Schedule
+    "schedule": "schedule_post",
+    "scheduled": "schedule_post",
+    "schedule posts": "schedule_post",
+    "show schedule": "schedule_post",
     # Utility
     "help": "show_help",
     "status": "show_status",
@@ -207,6 +213,7 @@ Available intents:
 - edit_request: User wants to modify a pending draft (has specific feedback)
 - reroll: User wants to regenerate content from scratch
 - generate_content: User wants to create new content (has a topic/idea)
+- schedule_post: User wants to schedule a post for a future time (says "schedule", "post at", "post tomorrow", "queue up", etc.)
 - change_style: User wants to change the visual or writing style
 - modify_last: User wants to tweak the last generated content
 - show_status: User wants to see bot/system status
@@ -224,6 +231,7 @@ Respond with ONLY valid JSON:
 
 For edit_request, include: {"feedback": "the user's feedback"}
 For generate_content, include: {"topic": "extracted topic"}
+For schedule_post, include: {"time": "the time expression", "topic": "what to post about"}
 For change_style, include: {"style": "requested style"}
 """
 
