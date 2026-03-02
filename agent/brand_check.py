@@ -389,7 +389,8 @@ async def check_brand_compliance(image_path: str) -> dict:
 
     image_data, media_type = _encode_image(image_path)
 
-    client = anthropic.AsyncAnthropic(api_key=settings.ANTHROPIC_API_KEY)
+    from agent._client import get_anthropic
+    client = get_anthropic()
 
     response = await client.messages.create(
         model="claude-sonnet-4-20250514",

@@ -38,6 +38,16 @@ class TemplateRegion:
     width: int = 0
     height: int = 0
     description: str = ""
+    # Optional font/style overrides (populated from TemplateSpec analysis)
+    font_family: str = ""
+    font_size: int = 0
+    font_weight: str = ""
+    color: str = ""
+    alignment: str = ""
+    uppercase: bool = False
+    outline_color: str = ""
+    outline_width: int = 0
+    corner_radius: int = 0
 
 
 @dataclass
@@ -51,6 +61,8 @@ class BrandTemplate:
     aspect_ratio: str = ""
     content_types: list[str] = field(default_factory=list)
     analysis_notes: str = ""
+    spec_json: dict | None = None   # TemplateSpec dict (None for legacy/Figma templates)
+    source: str = ""                # "reference", "figma", "upload", or ""
 
 
 # ---------------------------------------------------------------------------
@@ -84,7 +96,7 @@ class TemplateMemory:
 
     def add_template(self, template: BrandTemplate) -> None:
         manifest = self.load_manifest()
-        manifest.append({
+        entry: dict = {
             "id": template.id,
             "name": template.name,
             "path": template.path,
@@ -93,18 +105,26 @@ class TemplateMemory:
             "regions": [
                 {
                     "type": r.type,
-                    "x": r.x,
-                    "y": r.y,
-                    "width": r.width,
-                    "height": r.height,
+                    "x": r.x, "y": r.y,
+                    "width": r.width, "height": r.height,
                     "description": r.description,
+                    "font_family": r.font_family, "font_size": r.font_size,
+                    "font_weight": r.font_weight, "color": r.color,
+                    "alignment": r.alignment, "uppercase": r.uppercase,
+                    "outline_color": r.outline_color, "outline_width": r.outline_width,
+                    "corner_radius": r.corner_radius,
                 }
                 for r in template.regions
             ],
             "aspect_ratio": template.aspect_ratio,
             "content_types": template.content_types,
             "analysis_notes": template.analysis_notes,
-        })
+        }
+        if template.spec_json is not None:
+            entry["spec_json"] = template.spec_json
+        if template.source:
+            entry["source"] = template.source
+        manifest.append(entry)
         self.save_manifest()
 
     def remove_template(self, template_id: str) -> bool:
@@ -121,7 +141,22 @@ class TemplateMemory:
         result = []
         for t in manifest:
             regions = [
-                TemplateRegion(**r) for r in t.get("regions", [])
+                TemplateRegion(
+                    type=r.get("type", "image"),
+                    x=r.get("x", 0), y=r.get("y", 0),
+                    width=r.get("width", 0), height=r.get("height", 0),
+                    description=r.get("description", ""),
+                    font_family=r.get("font_family", ""),
+                    font_size=r.get("font_size", 0),
+                    font_weight=r.get("font_weight", ""),
+                    color=r.get("color", ""),
+                    alignment=r.get("alignment", ""),
+                    uppercase=r.get("uppercase", False),
+                    outline_color=r.get("outline_color", ""),
+                    outline_width=r.get("outline_width", 0),
+                    corner_radius=r.get("corner_radius", 0),
+                )
+                for r in t.get("regions", [])
             ]
             result.append(BrandTemplate(
                 id=t.get("id", ""),
@@ -133,6 +168,8 @@ class TemplateMemory:
                 aspect_ratio=t.get("aspect_ratio", ""),
                 content_types=t.get("content_types", []),
                 analysis_notes=t.get("analysis_notes", ""),
+                spec_json=t.get("spec_json"),
+                source=t.get("source", ""),
             ))
         return result
 
@@ -185,6 +222,26 @@ class TemplateMemory:
                 return t
         return universals[0]  # fallback to first universal
 
+    def re_render_template(self, template_id: str) -> str | None:
+        """Re-render a template from its stored spec. Returns new path or None.
+
+        Useful after brand color changes — re-renders the frame with updated spec.
+        """
+        manifest = self.load_manifest()
+        for entry in manifest:
+            if entry.get("id") == template_id:
+                spec_json = entry.get("spec_json")
+                if not spec_json:
+                    return None
+                from agent.template_spec import spec_from_dict
+                from agent.template_renderer import save_frame
+                spec = spec_from_dict(spec_json)
+                path = entry.get("path", "")
+                if path:
+                    save_frame(spec, path)
+                    return path
+        return None
+
 
 # ---------------------------------------------------------------------------
 # Template analysis — Claude Vision
@@ -228,7 +285,8 @@ async def analyze_template(image_path: str) -> dict:
     media_type = media_type_map.get(suffix, "image/jpeg")
     data = base64.standard_b64encode(path.read_bytes()).decode("utf-8")
 
-    client = anthropic.AsyncAnthropic(api_key=settings.ANTHROPIC_API_KEY)
+    from agent._client import get_anthropic
+    client = get_anthropic()
     response = await client.messages.create(
         model="claude-sonnet-4-20250514",
         max_tokens=1000,
@@ -372,7 +430,8 @@ async def parse_region_description(
         width=width, height=height, description=description,
     )
 
-    client = anthropic.AsyncAnthropic(api_key=settings.ANTHROPIC_API_KEY)
+    from agent._client import get_anthropic
+    client = get_anthropic()
     response = await client.messages.create(
         model="claude-haiku-4-5-20251001",
         max_tokens=500,
@@ -580,13 +639,13 @@ def _draw_fitted_text(
     Binary-searches from a large font size down to 16px to find the largest
     size where the word-wrapped text fits within the region.
 
-    style='meme' uses Impact font, ALL CAPS, 3px black outline, 48pt base at 1200px.
-    style='default' uses Orbitron/Inter with adaptive outline.
+    Region-level overrides (font_family, color, uppercase, etc.) take precedence
+    when present. Falls back to style-based defaults (meme/default).
     """
     is_meme = style == "meme"
 
-    # Meme style: ALL CAPS
-    if is_meme:
+    # Uppercase: region override > meme style
+    if region.uppercase or is_meme:
         text = text.upper()
 
     draw = ImageDraw.Draw(canvas)
@@ -596,8 +655,14 @@ def _draw_fitted_text(
     if max_w <= 0 or max_h <= 0:
         return
 
-    # Font getter for current style
+    # Font getter: region font_family override > style default
     def get_font(size: int) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
+        if region.font_family:
+            try:
+                from agent.font_manager import get_font as _fm_get
+                return _fm_get(region.font_family, size, region.font_weight or "Regular")
+            except Exception:
+                pass
         if is_meme:
             return _get_meme_font(size)
         return _get_text_font(size, role)
@@ -636,9 +701,24 @@ def _draw_fitted_text(
     # Vertical centering
     y_offset = region.y + (region.height - total_h) // 2
 
-    # Outline: meme uses fixed 3px black, default scales with font size
-    outline_w = 3 if is_meme else max(2, best_size // 15)
-    outline_fill = (0, 0, 0, 255) if is_meme else (0, 0, 0, 220)
+    # Outline: region override > meme fixed 3px > default adaptive
+    if region.outline_width:
+        outline_w = region.outline_width
+    else:
+        outline_w = 3 if is_meme else max(2, best_size // 15)
+
+    if region.outline_color:
+        from agent.template_renderer import _parse_color
+        outline_fill = _parse_color(region.outline_color)
+    else:
+        outline_fill = (0, 0, 0, 255) if is_meme else (0, 0, 0, 220)
+
+    # Text fill color: region override > white default
+    if region.color:
+        from agent.template_renderer import _parse_color
+        text_fill = _parse_color(region.color)
+    else:
+        text_fill = (255, 255, 255, 255)
 
     for line in lines:
         # Measure line width (accounting for letter spacing)
@@ -658,7 +738,7 @@ def _draw_fitted_text(
                         if dx == 0 and dy == 0:
                             continue
                         draw.text((cx + dx, y_offset + dy), ch, fill=outline_fill, font=font)
-                draw.text((cx, y_offset), ch, fill=(255, 255, 255, 255), font=font)
+                draw.text((cx, y_offset), ch, fill=text_fill, font=font)
                 cx += draw.textbbox((0, 0), ch, font=font)[2] + meme_spacing
         else:
             # Default: draw whole line at once
@@ -670,7 +750,7 @@ def _draw_fitted_text(
                         (x_offset + dx, y_offset + dy), line,
                         fill=outline_fill, font=font,
                     )
-            draw.text((x_offset, y_offset), line, fill=(255, 255, 255, 255), font=font)
+            draw.text((x_offset, y_offset), line, fill=text_fill, font=font)
         y_offset += line_height
 
 
@@ -783,7 +863,8 @@ async def detect_if_template(image_path: str) -> bool:
         media_type = media_type_map.get(suffix, "image/jpeg")
         data = base64.standard_b64encode(path.read_bytes()).decode("utf-8")
 
-        client = anthropic.AsyncAnthropic(api_key=settings.ANTHROPIC_API_KEY)
+        from agent._client import get_anthropic
+        client = get_anthropic()
         response = await client.messages.create(
             model="claude-sonnet-4-20250514",
             max_tokens=200,

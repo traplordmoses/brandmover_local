@@ -200,7 +200,8 @@ async def _call_discovery(session: OnboardingSession, user_message: str) -> dict
     messages = list(session.conversation_history)
     messages.append({"role": "user", "content": user_message})
 
-    client = anthropic.AsyncAnthropic(api_key=settings.ANTHROPIC_API_KEY)
+    from agent._client import get_anthropic
+    client = get_anthropic()
     response = await client.messages.create(
         model="claude-sonnet-4-20250514",
         max_tokens=500,
@@ -740,7 +741,8 @@ async def generate_guidelines_from_audit(
     # Merge mode needs more tokens since the existing guidelines are included in output
     max_tokens = 8000 if existing_guidelines else 4000
 
-    client = anthropic.AsyncAnthropic(api_key=settings.ANTHROPIC_API_KEY)
+    from agent._client import get_anthropic
+    client = get_anthropic()
     response = await client.messages.create(
         model="claude-sonnet-4-20250514",
         max_tokens=max_tokens,

@@ -64,7 +64,7 @@ class TestHandleGreeting:
 class TestHandleCasualChat:
     def test_returns_haiku_response(self):
         async def _run():
-            with patch("agent.chat.anthropic.AsyncAnthropic") as mock_cls:
+            with patch("agent._client.anthropic.AsyncAnthropic") as mock_cls:
                 mock_client = AsyncMock()
                 mock_resp = MagicMock()
                 mock_resp.content = [MagicMock(text="Sure, I can help with that!")]
@@ -77,7 +77,7 @@ class TestHandleCasualChat:
 
     def test_fallback_on_error(self):
         async def _run():
-            with patch("agent.chat.anthropic.AsyncAnthropic") as mock_cls:
+            with patch("agent._client.anthropic.AsyncAnthropic") as mock_cls:
                 mock_client = AsyncMock()
                 mock_client.messages.create = AsyncMock(side_effect=Exception("API down"))
                 mock_cls.return_value = mock_client
@@ -105,7 +105,7 @@ class TestHandleModifyLast:
 
         async def _run():
             with patch("agent.chat.state.get_pending", return_value=pending):
-                with patch("agent.chat.anthropic.AsyncAnthropic") as mock_cls:
+                with patch("agent._client.anthropic.AsyncAnthropic") as mock_cls:
                     mock_client = AsyncMock()
                     mock_resp = MagicMock()
                     mock_resp.content = [MagicMock(text=modified_json)]
@@ -133,7 +133,7 @@ class TestHandleModifyLast:
 
         async def _run():
             with patch("agent.chat.state.get_pending", return_value=pending):
-                with patch("agent.chat.anthropic.AsyncAnthropic") as mock_cls:
+                with patch("agent._client.anthropic.AsyncAnthropic") as mock_cls:
                     mock_client = AsyncMock()
                     mock_client.messages.create = AsyncMock(side_effect=Exception("API error"))
                     mock_cls.return_value = mock_client
@@ -147,7 +147,7 @@ class TestHandleModifyLast:
 
         async def _run():
             with patch("agent.chat.state.get_pending", return_value=pending):
-                with patch("agent.chat.anthropic.AsyncAnthropic") as mock_cls:
+                with patch("agent._client.anthropic.AsyncAnthropic") as mock_cls:
                     mock_client = AsyncMock()
                     mock_resp = MagicMock()
                     mock_resp.content = [MagicMock(text="Not valid JSON")]
@@ -164,7 +164,7 @@ class TestHandleModifyLast:
 
         async def _run():
             with patch("agent.chat.state.get_pending", return_value=pending):
-                with patch("agent.chat.anthropic.AsyncAnthropic") as mock_cls:
+                with patch("agent._client.anthropic.AsyncAnthropic") as mock_cls:
                     mock_client = AsyncMock()
                     mock_resp = MagicMock()
                     mock_resp.content = [MagicMock(text=fenced_json)]
@@ -185,7 +185,7 @@ class TestHandleModifyLast:
 
         async def _run():
             with patch("agent.chat.state.get_pending", return_value=pending):
-                with patch("agent.chat.anthropic.AsyncAnthropic") as mock_cls:
+                with patch("agent._client.anthropic.AsyncAnthropic") as mock_cls:
                     mock_client = AsyncMock()
                     mock_resp = MagicMock()
                     mock_resp.content = [MagicMock(text=modified_json)]

@@ -20,6 +20,22 @@ os.environ.setdefault("ANTHROPIC_API_KEY", "test-key")
 os.environ.setdefault("BRAND_FOLDER", str(_project_root / "brand"))
 
 
+@pytest.fixture(autouse=True)
+def _reset_singletons():
+    """Reset shared singletons before each test.
+
+    - API client singletons: ensures mocked constructors take effect
+    - State cache: ensures tests with patched _STATE_FILE get fresh reads
+    """
+    from agent._client import reset
+    from agent.state import invalidate_state_cache
+    reset()
+    invalidate_state_cache()
+    yield
+    reset()
+    invalidate_state_cache()
+
+
 @pytest.fixture
 def tmp_state_dir(tmp_path):
     """Provide a temporary directory for state files."""

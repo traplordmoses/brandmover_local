@@ -329,7 +329,8 @@ async def classify_intent(
 
 async def _call_haiku(message: str, context: ConversationContext) -> RoutingResult:
     """Call Claude Haiku for intent classification."""
-    client = anthropic.AsyncAnthropic(api_key=settings.ANTHROPIC_API_KEY)
+    from agent._client import get_anthropic
+    client = get_anthropic()
     user_msg = _build_classify_user_message(message, context)
 
     response = await client.messages.create(

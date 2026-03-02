@@ -150,7 +150,8 @@ async def summarize_preferences() -> str:
     # Build analysis prompt
     feedback_text = json.dumps(entries[-50:], indent=2)  # last 50 max
 
-    client = anthropic.AsyncAnthropic(api_key=settings.ANTHROPIC_API_KEY)
+    from agent._client import get_anthropic
+    client = get_anthropic()
     response = await client.messages.create(
         model="claude-sonnet-4-6",
         max_tokens=1500,

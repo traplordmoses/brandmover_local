@@ -217,7 +217,7 @@ class TestGenerateGuidelinesFromAudit:
                 "| Accent | Cyan | #00d4ff | (0, 212, 255) |\n"
             ))]
 
-            with patch("agent.onboarding.anthropic.AsyncAnthropic") as mock_cls:
+            with patch("agent._client.anthropic.AsyncAnthropic") as mock_cls:
                 mock_client = AsyncMock()
                 mock_client.messages.create = AsyncMock(return_value=mock_response)
                 mock_cls.return_value = mock_client
@@ -243,7 +243,7 @@ class TestGenerateGuidelinesFromAudit:
                 "- **Bold, geometric** aesthetic with modern tech-forward elements\n"
             ))]
 
-            with patch("agent.onboarding.anthropic.AsyncAnthropic") as mock_cls:
+            with patch("agent._client.anthropic.AsyncAnthropic") as mock_cls:
                 mock_client = AsyncMock()
                 mock_client.messages.create = AsyncMock(return_value=mock_response)
                 mock_cls.return_value = mock_client
@@ -266,7 +266,7 @@ class TestGenerateGuidelinesFromAudit:
             mock_response = MagicMock()
             mock_response.content = [MagicMock(text="# Guidelines\n")]
 
-            with patch("agent.onboarding.anthropic.AsyncAnthropic") as mock_cls:
+            with patch("agent._client.anthropic.AsyncAnthropic") as mock_cls:
                 mock_client = AsyncMock()
                 async def capture_create(**kwargs):
                     captured_prompt["messages"] = kwargs.get("messages", [])
@@ -311,7 +311,7 @@ class TestGenerateGuidelinesFromAudit:
             with tempfile.TemporaryDirectory() as tmpdir:
                 with patch("agent.onboarding.settings") as mock_settings, \
                      patch("agent.onboarding.generate_guidelines_from_audit", side_effect=Exception("API error")), \
-                     patch("agent.onboarding.anthropic"):
+                     patch("agent._client.anthropic"):
                     mock_settings.BRAND_FOLDER = tmpdir
                     mock_settings.ANTHROPIC_API_KEY = "test"
 
@@ -363,7 +363,7 @@ class TestGenerateGuidelinesFromAudit:
             mock_response = MagicMock()
             mock_response.content = [MagicMock(text="# Guidelines\n")]
 
-            with patch("agent.onboarding.anthropic.AsyncAnthropic") as mock_cls:
+            with patch("agent._client.anthropic.AsyncAnthropic") as mock_cls:
                 mock_client = AsyncMock()
                 async def capture_create(**kwargs):
                     captured_prompt["messages"] = kwargs.get("messages", [])
@@ -394,7 +394,7 @@ class TestGenerateGuidelinesFromAudit:
             mock_response = MagicMock()
             mock_response.content = [MagicMock(text="# Guidelines\n")]
 
-            with patch("agent.onboarding.anthropic.AsyncAnthropic") as mock_cls:
+            with patch("agent._client.anthropic.AsyncAnthropic") as mock_cls:
                 mock_client = AsyncMock()
                 async def capture_create(**kwargs):
                     captured_prompt["messages"] = kwargs.get("messages", [])
@@ -421,7 +421,7 @@ class TestGenerateGuidelinesFromAudit:
             mock_response = MagicMock()
             mock_response.content = [MagicMock(text=fenced)]
 
-            with patch("agent.onboarding.anthropic.AsyncAnthropic") as mock_cls:
+            with patch("agent._client.anthropic.AsyncAnthropic") as mock_cls:
                 mock_client = AsyncMock()
                 mock_client.messages.create = AsyncMock(return_value=mock_response)
                 mock_cls.return_value = mock_client
@@ -692,7 +692,7 @@ class TestMergePromptRules:
             mock_response = MagicMock()
             mock_response.content = [MagicMock(text="# Guidelines\n")]
 
-            with patch("agent.onboarding.anthropic.AsyncAnthropic") as mock_cls, \
+            with patch("agent._client.anthropic.AsyncAnthropic") as mock_cls, \
                  patch("agent.onboarding._detect_available_fonts", return_value=["Orbitron", "Inter"]):
                 mock_client = AsyncMock()
                 async def capture_create(**kwargs):
@@ -727,7 +727,7 @@ class TestMergePromptRules:
             mock_response = MagicMock()
             mock_response.content = [MagicMock(text="# Guidelines\n")]
 
-            with patch("agent.onboarding.anthropic.AsyncAnthropic") as mock_cls, \
+            with patch("agent._client.anthropic.AsyncAnthropic") as mock_cls, \
                  patch("agent.onboarding._detect_available_fonts", return_value=[]):
                 mock_client = AsyncMock()
                 async def capture_create(**kwargs):
@@ -788,7 +788,7 @@ class TestFinalizeOnboardingPreservesGuidelines:
                      patch("agent.onboarding.generate_guidelines_from_audit", AsyncMock(
                          return_value="# New Guidelines"
                      )) as mock_gen, \
-                     patch("agent.onboarding.anthropic"), \
+                     patch("agent._client.anthropic"), \
                      patch("agent.onboarding._STATE_PATH", Path(tmpdir) / "onboarding.json"), \
                      patch("agent.strategy.save_strategy"), \
                      patch("agent.strategy.generate_content_calendar", AsyncMock()), \
@@ -831,7 +831,7 @@ class TestFinalizeOnboardingPreservesGuidelines:
                      patch("agent.onboarding.generate_guidelines_from_audit", AsyncMock(
                          return_value="# NewBrand Guidelines\n## COLOR PALETTE\n"
                      )), \
-                     patch("agent.onboarding.anthropic"), \
+                     patch("agent._client.anthropic"), \
                      patch("agent.onboarding._STATE_PATH", Path(tmpdir) / "onboarding.json"), \
                      patch("agent.strategy.save_strategy"), \
                      patch("agent.strategy.generate_content_calendar", AsyncMock()), \

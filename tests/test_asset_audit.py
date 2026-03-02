@@ -125,7 +125,7 @@ class TestAuditSingleAsset:
 
         async def _run():
             with patch("agent.asset_audit._encode_image", return_value=("base64data", "image/png")):
-                with patch("agent.asset_audit.anthropic.AsyncAnthropic") as mock_cls:
+                with patch("agent._client.anthropic.AsyncAnthropic") as mock_cls:
                     mock_client = AsyncMock()
                     mock_client.messages.create = AsyncMock(return_value=response)
                     mock_cls.return_value = mock_client
@@ -149,7 +149,7 @@ class TestAuditSingleAsset:
 
         async def _run():
             with patch("agent.asset_audit._encode_image", return_value=("base64data", "image/png")):
-                with patch("agent.asset_audit.anthropic.AsyncAnthropic") as mock_cls:
+                with patch("agent._client.anthropic.AsyncAnthropic") as mock_cls:
                     mock_client = AsyncMock()
                     mock_client.messages.create = AsyncMock(return_value=response)
                     mock_cls.return_value = mock_client
@@ -172,7 +172,7 @@ class TestAuditSingleAsset:
 
         async def _run():
             with patch("agent.asset_audit._encode_image", return_value=("base64data", "image/png")):
-                with patch("agent.asset_audit.anthropic.AsyncAnthropic") as mock_cls:
+                with patch("agent._client.anthropic.AsyncAnthropic") as mock_cls:
                     mock_client = AsyncMock()
                     mock_client.messages.create = AsyncMock(return_value=response)
                     mock_cls.return_value = mock_client
@@ -212,7 +212,7 @@ class TestAuditSingleAsset:
 
         async def _run():
             with patch("agent.asset_audit._encode_image", return_value=("base64data", "image/png")):
-                with patch("agent.asset_audit.anthropic.AsyncAnthropic") as mock_cls:
+                with patch("agent._client.anthropic.AsyncAnthropic") as mock_cls:
                     mock_client = AsyncMock()
                     mock_client.messages.create = AsyncMock(return_value=response)
                     mock_cls.return_value = mock_client
@@ -261,7 +261,7 @@ class TestAnalyzeCollection:
         }))]
 
         async def _run():
-            with patch("agent.asset_audit.anthropic.AsyncAnthropic") as mock_cls:
+            with patch("agent._client.anthropic.AsyncAnthropic") as mock_cls:
                 mock_client = AsyncMock()
                 mock_client.messages.create = AsyncMock(return_value=mock_response)
                 mock_cls.return_value = mock_client
@@ -280,7 +280,7 @@ class TestAnalyzeCollection:
         mock_response.content = [MagicMock(text="This is not JSON")]
 
         async def _run():
-            with patch("agent.asset_audit.anthropic.AsyncAnthropic") as mock_cls:
+            with patch("agent._client.anthropic.AsyncAnthropic") as mock_cls:
                 mock_client = AsyncMock()
                 mock_client.messages.create = AsyncMock(return_value=mock_response)
                 mock_cls.return_value = mock_client
@@ -345,7 +345,7 @@ class TestAuditBatch:
 
         async def _run():
             with patch("agent.asset_audit._encode_image", return_value=("data", "image/png")):
-                with patch("agent.asset_audit.anthropic.AsyncAnthropic") as mock_cls:
+                with patch("agent._client.anthropic.AsyncAnthropic") as mock_cls:
                     mock_client = AsyncMock()
                     mock_client.messages.create = AsyncMock(side_effect=_create_side_effect)
                     mock_cls.return_value = mock_client
@@ -362,7 +362,7 @@ class TestAuditBatch:
 
         async def _run():
             with patch("agent.asset_audit._encode_image", return_value=("data", "image/png")):
-                with patch("agent.asset_audit.anthropic.AsyncAnthropic") as mock_cls:
+                with patch("agent._client.anthropic.AsyncAnthropic") as mock_cls:
                     mock_client = AsyncMock()
                     mock_client.messages.create = AsyncMock(return_value=single_resp)
                     mock_cls.return_value = mock_client
@@ -394,7 +394,7 @@ class TestAuditBatch:
 
         async def _run():
             with patch("agent.asset_audit._encode_image", return_value=("data", "image/png")):
-                with patch("agent.asset_audit.anthropic.AsyncAnthropic") as mock_cls:
+                with patch("agent._client.anthropic.AsyncAnthropic") as mock_cls:
                     mock_client = AsyncMock()
                     mock_client.messages.create = AsyncMock(side_effect=_create_side_effect)
                     mock_cls.return_value = mock_client

@@ -227,7 +227,7 @@ class TestAnalyzeTemplate:
         }))]
 
         async def _run():
-            with patch("agent.template_memory.anthropic.AsyncAnthropic") as mock_cls:
+            with patch("agent._client.anthropic.AsyncAnthropic") as mock_cls:
                 mock_client = AsyncMock()
                 mock_client.messages.create = AsyncMock(return_value=mock_response)
                 mock_cls.return_value = mock_client
@@ -246,7 +246,7 @@ class TestAnalyzeTemplate:
         mock_response.content = [MagicMock(text="Not JSON")]
 
         async def _run():
-            with patch("agent.template_memory.anthropic.AsyncAnthropic") as mock_cls:
+            with patch("agent._client.anthropic.AsyncAnthropic") as mock_cls:
                 mock_client = AsyncMock()
                 mock_client.messages.create = AsyncMock(return_value=mock_response)
                 mock_cls.return_value = mock_client
@@ -274,7 +274,7 @@ class TestRegisterTemplate:
         }))]
 
         async def _run():
-            with patch("agent.template_memory.anthropic.AsyncAnthropic") as mock_cls:
+            with patch("agent._client.anthropic.AsyncAnthropic") as mock_cls:
                 mock_client = AsyncMock()
                 mock_client.messages.create = AsyncMock(return_value=mock_response)
                 mock_cls.return_value = mock_client
@@ -536,7 +536,7 @@ class TestDetectIfTemplate:
         }))]
 
         async def _run():
-            with patch("agent.template_memory.anthropic.AsyncAnthropic") as mock_cls:
+            with patch("agent._client.anthropic.AsyncAnthropic") as mock_cls:
                 mock_client = AsyncMock()
                 mock_client.messages.create = AsyncMock(return_value=mock_response)
                 mock_cls.return_value = mock_client
@@ -553,7 +553,7 @@ class TestDetectIfTemplate:
         }))]
 
         async def _run():
-            with patch("agent.template_memory.anthropic.AsyncAnthropic") as mock_cls:
+            with patch("agent._client.anthropic.AsyncAnthropic") as mock_cls:
                 mock_client = AsyncMock()
                 mock_client.messages.create = AsyncMock(return_value=mock_response)
                 mock_cls.return_value = mock_client
@@ -563,7 +563,7 @@ class TestDetectIfTemplate:
 
     def test_returns_false_on_error(self, tmp_path):
         async def _run():
-            with patch("agent.template_memory.anthropic.AsyncAnthropic") as mock_cls:
+            with patch("agent._client.anthropic.AsyncAnthropic") as mock_cls:
                 mock_client = AsyncMock()
                 mock_client.messages.create = AsyncMock(side_effect=Exception("API error"))
                 mock_cls.return_value = mock_client
@@ -648,7 +648,7 @@ class TestParseRegionDescription:
         }))]
 
         async def _run():
-            with patch("agent.template_memory.anthropic.AsyncAnthropic") as mock_cls:
+            with patch("agent._client.anthropic.AsyncAnthropic") as mock_cls:
                 mock_client = AsyncMock()
                 mock_client.messages.create = AsyncMock(return_value=mock_response)
                 mock_cls.return_value = mock_client
@@ -671,7 +671,7 @@ class TestParseRegionDescription:
         mock_response.content = [MagicMock(text="Not valid JSON")]
 
         async def _run():
-            with patch("agent.template_memory.anthropic.AsyncAnthropic") as mock_cls:
+            with patch("agent._client.anthropic.AsyncAnthropic") as mock_cls:
                 mock_client = AsyncMock()
                 mock_client.messages.create = AsyncMock(return_value=mock_response)
                 mock_cls.return_value = mock_client
@@ -682,7 +682,7 @@ class TestParseRegionDescription:
 
     def test_returns_empty_on_api_error(self):
         async def _run():
-            with patch("agent.template_memory.anthropic.AsyncAnthropic") as mock_cls:
+            with patch("agent._client.anthropic.AsyncAnthropic") as mock_cls:
                 mock_client = AsyncMock()
                 mock_client.messages.create = AsyncMock(side_effect=Exception("API error"))
                 mock_cls.return_value = mock_client

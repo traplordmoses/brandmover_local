@@ -43,7 +43,8 @@ async def extract_brand_from_image(image_path: str) -> dict:
     """
     image_data, media_type = _encode_image(image_path)
 
-    client = anthropic.AsyncAnthropic(api_key=settings.ANTHROPIC_API_KEY)
+    from agent._client import get_anthropic
+    client = get_anthropic()
 
     response = await client.messages.create(
         model="claude-sonnet-4-20250514",
@@ -111,7 +112,8 @@ async def diff_against_guidelines(extracted: dict) -> str:
     cfg = compositor_config.get_config()
     summary = compositor_config.get_brand_summary()
 
-    client = anthropic.AsyncAnthropic(api_key=settings.ANTHROPIC_API_KEY)
+    from agent._client import get_anthropic
+    client = get_anthropic()
 
     response = await client.messages.create(
         model="claude-sonnet-4-20250514",
@@ -149,7 +151,8 @@ async def apply_extracted_to_guidelines(extracted: dict) -> str:
     if guidelines_path.exists():
         current_content = guidelines_path.read_text(encoding="utf-8")
 
-    client = anthropic.AsyncAnthropic(api_key=settings.ANTHROPIC_API_KEY)
+    from agent._client import get_anthropic
+    client = get_anthropic()
 
     response = await client.messages.create(
         model="claude-sonnet-4-20250514",

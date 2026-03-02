@@ -139,7 +139,8 @@ async def audit_single_asset(image_path: str) -> AssetAuditEntry:
     """Use Claude Vision to categorize and analyze a single brand asset."""
     image_data, media_type = _encode_image(image_path)
 
-    client = anthropic.AsyncAnthropic(api_key=settings.ANTHROPIC_API_KEY)
+    from agent._client import get_anthropic
+    client = get_anthropic()
 
     response = await client.messages.create(
         model="claude-sonnet-4-20250514",
@@ -239,7 +240,8 @@ async def _analyze_collection(entries: list[AssetAuditEntry]) -> tuple[dict, dic
 
     prompt = _COLLECTION_PROMPT.format(asset_summaries="\n".join(summaries))
 
-    client = anthropic.AsyncAnthropic(api_key=settings.ANTHROPIC_API_KEY)
+    from agent._client import get_anthropic
+    client = get_anthropic()
     response = await client.messages.create(
         model="claude-sonnet-4-20250514",
         max_tokens=1000,

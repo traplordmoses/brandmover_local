@@ -176,7 +176,8 @@ async def run_agent(
     tracker = ResourceTracker()
     result.resources = tracker
 
-    client = anthropic.AsyncAnthropic(api_key=settings.ANTHROPIC_API_KEY)
+    from agent._client import get_anthropic
+    client = get_anthropic()
 
     system_prompt = build_system_prompt()
 

@@ -209,14 +209,13 @@ async def _do_approve(update: Update, context: ContextTypes.DEFAULT_TYPE, option
     )
     if _is_mascot_draft and pending.get("image_url"):
         try:
-            import httpx as _httpx
-            async with _httpx.AsyncClient(timeout=20, follow_redirects=True) as _c:
-                _r = await _c.get(pending["image_url"])
-                _r.raise_for_status()
-                ts = int(time.time())
-                save_path = Path(settings.BRAND_FOLDER) / "assets" / f"mascot_approved_{ts}.png"
-                _PILImage.open(io.BytesIO(_r.content)).convert("RGB").save(str(save_path), "PNG")
-                logger.info("Saved approved mascot output: %s", save_path)
+            from agent._client import get_httpx as _get_httpx
+            _r = await _get_httpx().get(pending["image_url"])
+            _r.raise_for_status()
+            ts = int(time.time())
+            save_path = Path(settings.BRAND_FOLDER) / "assets" / f"mascot_approved_{ts}.png"
+            _PILImage.open(io.BytesIO(_r.content)).convert("RGB").save(str(save_path), "PNG")
+            logger.info("Saved approved mascot output: %s", save_path)
         except Exception as e:
             logger.warning("Failed to save mascot output: %s", e)
 
@@ -254,7 +253,7 @@ async def _do_approve(update: Update, context: ContextTypes.DEFAULT_TYPE, option
     except Exception as e:
         logger.error("Failed to post to X: %s", e)
         await update.message.reply_text(
-            f"Approved, but X posting failed: {_esc(str(e))}\n"
+            f"Approved, but X posting failed. Check logs for details.\n"
             f"Feedback logged ({count} total entries).",
             parse_mode="HTML",
         )
@@ -449,7 +448,9 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         "/apply — Apply extracted brand info to guidelines\n"
         "/template — Toggle image composition on/off\n"
         "/template_upload — Upload a custom visual template\n"
-        "/template_from_reference — Generate a branded template from a reference image\n"
+        "/template_from_reference — Generate a template from a reference image\n"
+        "/template_import — Import a template from Figma\n"
+        "/font_upload — Upload a custom TTF/OTF font\n"
         "/onboard — Start conversational brand onboarding\n"
         "/onboard_cancel — Cancel onboarding\n"
         "/library — List or search the asset library\n"
@@ -1020,11 +1021,58 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         return
 
     file_name = document.file_name or ""
+
+    # Font upload handling
+    is_font = file_name.lower().endswith((".ttf", ".otf"))
+    if is_font or context.user_data.get("awaiting_font_upload"):
+        context.user_data.pop("awaiting_font_upload", None)
+        if not file_name.lower().endswith((".ttf", ".otf")):
+            await update.message.reply_text("Please send a .ttf or .otf font file.")
+            return
+        try:
+            # Sanitize filename to prevent path traversal
+            import os as _os
+            safe_name = _os.path.basename(file_name)
+            if not safe_name.lower().endswith((".ttf", ".otf")):
+                await update.message.reply_text("Invalid font filename.")
+                return
+            # Reject oversized files (10 MB limit)
+            _fsize = getattr(document, "file_size", None)
+            if isinstance(_fsize, int) and _fsize > 10 * 1024 * 1024:
+                await update.message.reply_text("Font file too large (max 10 MB).")
+                return
+            fonts_dir = Path(settings.BRAND_FOLDER) / "assets" / "fonts"
+            fonts_dir.mkdir(parents=True, exist_ok=True)
+            tg_file = await document.get_file()
+            save_path = fonts_dir / safe_name
+            await tg_file.download_to_drive(str(save_path))
+            # Clear font caches
+            try:
+                from agent.font_manager import clear_cache as _fm_clear
+                _fm_clear()
+            except ImportError:
+                pass
+            try:
+                from agent.compositor import clear_font_cache
+                clear_font_cache()
+            except ImportError:
+                pass
+            await update.message.reply_text(
+                f"Font <b>{_esc(file_name)}</b> saved to brand fonts.\n"
+                "It's now available for templates and compositions.",
+                parse_mode="HTML",
+            )
+        except Exception as e:
+            logger.error("Font upload failed: %s", e)
+            await update.message.reply_text("Font upload failed. Check logs for details.")
+        return
+
     is_pdf = file_name.lower().endswith(".pdf")
 
     if not is_pdf:
         await update.message.reply_text(
-            "I can accept PDFs and image files. send a PDF or image to add to your brand."
+            "I can accept PDFs, image files, and font files (.ttf/.otf). "
+            "Send a PDF or image to add to your brand."
         )
         return
 
@@ -1032,10 +1080,21 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     if not context.user_data.get("awaiting_setup_pdf"):
         await update.message.chat.send_action("typing")
         try:
+            # Sanitize filename to prevent path traversal
+            import os as _os
+            safe_name = _os.path.basename(file_name)
+            if not safe_name:
+                await update.message.reply_text("Invalid filename.")
+                return
+            # Reject oversized files (50 MB limit)
+            _fsize = getattr(document, "file_size", None)
+            if isinstance(_fsize, int) and _fsize > 50 * 1024 * 1024:
+                await update.message.reply_text("File too large (max 50 MB).")
+                return
             tg_file = await document.get_file()
             refs_dir = Path(settings.BRAND_FOLDER) / "references"
             refs_dir.mkdir(parents=True, exist_ok=True)
-            ref_path = refs_dir / file_name
+            ref_path = refs_dir / safe_name
             await tg_file.download_to_drive(str(ref_path))
 
             guidelines_path = Path(settings.BRAND_FOLDER) / "guidelines.md"
@@ -2091,7 +2150,12 @@ async def template_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             tpl_lines = "\n\n<b>Active Templates:</b>\n"
             for t in templates:
                 types_str = ", ".join(t.content_types) if t.content_types else "all"
-                tpl_lines += f"- <code>{_esc(t.id)}</code> {_esc(t.name)} ({t.aspect_ratio}, {types_str})\n"
+                source_tag = f" [{t.source}]" if t.source else ""
+                has_spec = " (spec)" if t.spec_json else ""
+                tpl_lines += (
+                    f"- <code>{_esc(t.id)}</code> {_esc(t.name)} "
+                    f"({t.aspect_ratio}, {types_str}){source_tag}{has_spec}\n"
+                )
 
         await update.message.reply_text(
             f"<b>Compositor Status</b>\n\n"
@@ -2101,7 +2165,9 @@ async def template_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             f"<code>/template on</code> — enable\n"
             f"<code>/template off</code> — disable\n"
             f"<code>/template_upload</code> — upload a custom template\n"
-            f"<code>/template_from_reference</code> — generate template from reference"
+            f"<code>/template_from_reference</code> — generate from reference image\n"
+            f"<code>/template_import</code> — import from Figma\n"
+            f"<code>/font_upload</code> — upload custom font"
             f"{tpl_lines}",
             parse_mode="HTML",
         )
@@ -2245,10 +2311,10 @@ async def _handle_template_from_reference(update: Update, context: ContextTypes.
 
     context.user_data["awaiting_template_from_ref"] = False
     await update.message.chat.send_action("typing")
-    await update.message.reply_text("Analyzing layout and generating branded template via AI...")
+    await update.message.reply_text("Analyzing layout and building template spec...")
 
     try:
-        design, generated_img = await _tg.analyze_and_generate(tmp_path)
+        design, preview_img = await _tg.analyze_and_generate(tmp_path)
 
         # Store design and metadata in user_data for adjustments
         context.user_data["tplref_pending"] = {
@@ -2256,7 +2322,7 @@ async def _handle_template_from_reference(update: Update, context: ContextTypes.
             "name": (context.user_data or {}).get("template_from_ref_name", ""),
         }
 
-        await _send_template_preview(update, context, design, generated_img)
+        await _send_template_preview(update, context, design, preview_img)
     except Exception as e:
         logger.error("Template generation from reference failed: %s", e)
         context.user_data.pop("tplref_pending", None)
@@ -2283,8 +2349,10 @@ async def _send_template_preview(
     aspect = _tg._compute_aspect_ratio(design.canvas_width, design.canvas_height)
     name = (context.user_data.get("tplref_pending") or {}).get("name", "")
 
+    has_spec = hasattr(design, "spec") and design.spec is not None
+    method_note = "spec-rendered" if has_spec else "analyzed"
     caption = (
-        f"<b>Template Preview</b> (AI-generated)\n\n"
+        f"<b>Template Preview</b> ({method_note})\n\n"
         f"Size: {design.canvas_width}x{design.canvas_height} ({aspect})\n"
         f"Style: {_esc(design.visual_style or 'detected')}\n"
         f"Regions: {_esc(regions_str) or 'none detected'}\n"
@@ -2322,7 +2390,7 @@ async def _handle_tplref_adjustment(update: Update, context: ContextTypes.DEFAUL
     if lower in ("looks good", "save", "save it", "done", "perfect", "yes", "keep it", "ok", "okay"):
         design = _tg.design_from_dict(pending["design"])
         name = pending.get("name") or None
-        saved_path = await _tg.save_generated_image(design)
+        saved_path = await _tg.save_generated_image(design)  # renders locally if spec available
         template = _tg.register_design(design, saved_path, name)
         context.user_data.pop("tplref_pending", None)
 
@@ -2344,26 +2412,31 @@ async def _handle_tplref_adjustment(update: Update, context: ContextTypes.DEFAUL
         await update.message.reply_text("Template discarded.")
         return
 
-    # Otherwise treat as adjustment feedback — modify prompt and regenerate
+    # Otherwise treat as adjustment feedback — modify spec and re-render locally
     await update.message.chat.send_action("typing")
-    await update.message.reply_text("Adjusting prompt and regenerating template...")
+    await update.message.reply_text("Adjusting template spec and re-rendering...")
 
     try:
         design = _tg.design_from_dict(pending["design"])
-        adjusted = await _tg.adjust_design(design, feedback)
+        adjusted = await _tg.adjust_spec(design, feedback)
 
-        if not adjusted.generated_image_url:
-            raise ValueError("Regeneration failed after prompt adjustment.")
-
-        generated_img = await _tg.download_image(adjusted.generated_image_url)
-        if not generated_img:
-            raise ValueError("Failed to download regenerated template image.")
+        # Re-render preview locally (instant, no API cost for image gen)
+        if adjusted.spec:
+            from agent.template_renderer import render_preview
+            preview_img = render_preview(adjusted.spec)
+        elif adjusted.generated_image_url:
+            preview_img = await _tg.download_image(adjusted.generated_image_url)
+            if not preview_img:
+                raise ValueError("Failed to download regenerated template image.")
+        else:
+            from PIL import Image as _PILImage
+            preview_img = _PILImage.new("RGB", (adjusted.canvas_width, adjusted.canvas_height), (14, 15, 43))
 
         # Update stored design
         pending["design"] = _tg.design_to_dict(adjusted)
         context.user_data["tplref_pending"] = pending
 
-        await _send_template_preview(update, context, adjusted, generated_img)
+        await _send_template_preview(update, context, adjusted, preview_img)
     except Exception as e:
         logger.error("Template adjustment failed: %s", e)
         await update.message.reply_text(
@@ -2393,7 +2466,7 @@ async def tplref_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         design = _tg.design_from_dict(pending["design"])
         name = pending.get("name") or None
 
-        # Download and save the generated image
+        # Render and save the template frame (locally, no download needed)
         saved_path = await _tg.save_generated_image(design)
         template = _tg.register_design(design, saved_path, name)
 
@@ -2678,8 +2751,16 @@ async def _send_draft(
 
     # --- Multi-option path (N>1 images) ---
     if image_urls and len(image_urls) > 1:
-        for idx, url in enumerate(image_urls, 1):
-            photo, composed = await _maybe_compose(draft, url, content_type)
+        # Compose all options in parallel for faster response
+        import asyncio as _asyncio
+        compose_tasks = [_maybe_compose(draft, url, content_type) for url in image_urls]
+        compose_results = await _asyncio.gather(*compose_tasks, return_exceptions=True)
+
+        for idx, result in enumerate(compose_results, 1):
+            if isinstance(result, Exception):
+                logger.warning("Failed to compose option %d: %s", idx, result)
+                continue
+            photo, composed = result
 
             # Save composed image for approve-time archiving (save last option)
             if composed and isinstance(composed, io.BytesIO):
@@ -4188,3 +4269,69 @@ async def preview_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             f"Preview failed: {_esc(str(e))}",
             parse_mode="HTML",
         )
+
+
+# ---------------------------------------------------------------------------
+# /template_import <figma_url> [name] — Figma template import (Phase 5)
+# ---------------------------------------------------------------------------
+
+async def template_import_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /template_import <figma_url> [name] — import a template from Figma."""
+    if not _authorized(update.effective_user.id):
+        return
+
+    args = context.args or []
+    if not args:
+        await update.message.reply_text(
+            "Usage: <code>/template_import &lt;figma_url&gt; [name]</code>\n\n"
+            "Example:\n<code>/template_import https://figma.com/design/abc123/MyFile?node-id=1-2 Hero Card</code>",
+            parse_mode="HTML",
+        )
+        return
+
+    figma_url = args[0]
+    name = " ".join(args[1:]) if len(args) > 1 else ""
+
+    from config import settings as _settings
+    if not _settings.FIGMA_ACCESS_TOKEN:
+        await update.message.reply_text(
+            "Figma integration requires <code>FIGMA_ACCESS_TOKEN</code> in .env",
+            parse_mode="HTML",
+        )
+        return
+
+    await update.message.chat.send_action("typing")
+    await update.message.reply_text("Importing template from Figma...")
+
+    try:
+        from agent import template_generator as _tg
+        design, screenshot_img = await _tg.import_from_figma(figma_url, name or None)
+
+        context.user_data["tplref_pending"] = {
+            "design": _tg.design_to_dict(design),
+            "name": name,
+        }
+
+        await _send_template_preview(update, context, design, screenshot_img)
+    except Exception as e:
+        logger.error("Figma template import failed: %s", e)
+        await update.message.reply_text(
+            f"Figma import failed: {_esc(str(e))}",
+            parse_mode="HTML",
+        )
+
+
+# ---------------------------------------------------------------------------
+# /font_upload — upload custom TTF/OTF font
+# ---------------------------------------------------------------------------
+
+async def font_upload_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /font_upload — mark next file upload as a font file."""
+    if not _authorized(update.effective_user.id):
+        return
+
+    context.user_data["awaiting_font_upload"] = True
+    await update.message.reply_text(
+        "Send me a TTF or OTF font file. It will be saved to the brand fonts directory "
+        "and available for use in templates and compositions.",
+    )

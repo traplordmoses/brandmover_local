@@ -149,7 +149,7 @@ class TestTableClassification:
 class TestHaikuClassification:
     def test_routes_to_haiku_for_complex_messages(self):
         async def _run():
-            with patch("agent.intent_router.anthropic.AsyncAnthropic") as mock_cls:
+            with patch("agent._client.anthropic.AsyncAnthropic") as mock_cls:
                 mock_client = AsyncMock()
                 mock_client.messages.create = AsyncMock(
                     return_value=_mock_haiku_response("generate_content", 0.9, {"topic": "weekly update"})
@@ -168,7 +168,7 @@ class TestHaikuClassification:
 
     def test_edit_request_with_feedback(self):
         async def _run():
-            with patch("agent.intent_router.anthropic.AsyncAnthropic") as mock_cls:
+            with patch("agent._client.anthropic.AsyncAnthropic") as mock_cls:
                 mock_client = AsyncMock()
                 mock_client.messages.create = AsyncMock(
                     return_value=_mock_haiku_response(
@@ -187,7 +187,7 @@ class TestHaikuClassification:
 
     def test_invalid_intent_remapped_to_unknown(self):
         async def _run():
-            with patch("agent.intent_router.anthropic.AsyncAnthropic") as mock_cls:
+            with patch("agent._client.anthropic.AsyncAnthropic") as mock_cls:
                 mock_client = AsyncMock()
                 mock_client.messages.create = AsyncMock(
                     return_value=_mock_haiku_response("nonexistent_intent", 0.8)
@@ -201,7 +201,7 @@ class TestHaikuClassification:
 
     def test_low_confidence_forced_to_unknown(self):
         async def _run():
-            with patch("agent.intent_router.anthropic.AsyncAnthropic") as mock_cls:
+            with patch("agent._client.anthropic.AsyncAnthropic") as mock_cls:
                 mock_client = AsyncMock()
                 mock_client.messages.create = AsyncMock(
                     return_value=_mock_haiku_response("approve", 0.2)
@@ -214,7 +214,7 @@ class TestHaikuClassification:
 
     def test_bad_json_response(self):
         async def _run():
-            with patch("agent.intent_router.anthropic.AsyncAnthropic") as mock_cls:
+            with patch("agent._client.anthropic.AsyncAnthropic") as mock_cls:
                 mock_client = AsyncMock()
                 mock_resp = MagicMock()
                 mock_resp.content = [MagicMock(text="Not valid JSON")]
@@ -231,7 +231,7 @@ class TestHaikuClassification:
         fenced = '```json\n{"intent": "generate_content", "confidence": 0.85, "parameters": {"topic": "brand vision"}}\n```'
 
         async def _run():
-            with patch("agent.intent_router.anthropic.AsyncAnthropic") as mock_cls:
+            with patch("agent._client.anthropic.AsyncAnthropic") as mock_cls:
                 mock_client = AsyncMock()
                 mock_resp = MagicMock()
                 mock_resp.content = [MagicMock(text=fenced)]
@@ -248,7 +248,7 @@ class TestHaikuClassification:
     def test_upload_assets_classification(self):
         """Upload-related messages should classify as upload_assets."""
         async def _run():
-            with patch("agent.intent_router.anthropic.AsyncAnthropic") as mock_cls:
+            with patch("agent._client.anthropic.AsyncAnthropic") as mock_cls:
                 mock_client = AsyncMock()
                 mock_client.messages.create = AsyncMock(
                     return_value=_mock_haiku_response("upload_assets", 0.9)
@@ -270,7 +270,7 @@ class TestHaikuClassification:
     def test_haiku_context_aware_approve_without_draft(self):
         """Haiku returns approve but no draft pending → remap to casual_chat."""
         async def _run():
-            with patch("agent.intent_router.anthropic.AsyncAnthropic") as mock_cls:
+            with patch("agent._client.anthropic.AsyncAnthropic") as mock_cls:
                 mock_client = AsyncMock()
                 mock_client.messages.create = AsyncMock(
                     return_value=_mock_haiku_response("approve", 0.9)
@@ -358,7 +358,7 @@ class TestCaching:
 
         async def _run():
             nonlocal call_count
-            with patch("agent.intent_router.anthropic.AsyncAnthropic") as mock_cls:
+            with patch("agent._client.anthropic.AsyncAnthropic") as mock_cls:
                 mock_client = AsyncMock()
                 async def _create(**kwargs):
                     nonlocal call_count
@@ -384,7 +384,7 @@ class TestCaching:
 class TestErrorHandling:
     def test_timeout_falls_back(self):
         async def _run():
-            with patch("agent.intent_router.anthropic.AsyncAnthropic") as mock_cls:
+            with patch("agent._client.anthropic.AsyncAnthropic") as mock_cls:
                 mock_client = AsyncMock()
                 async def _slow(**kwargs):
                     await asyncio.sleep(10)
@@ -401,7 +401,7 @@ class TestErrorHandling:
 
     def test_api_error_falls_back(self):
         async def _run():
-            with patch("agent.intent_router.anthropic.AsyncAnthropic") as mock_cls:
+            with patch("agent._client.anthropic.AsyncAnthropic") as mock_cls:
                 mock_client = AsyncMock()
                 mock_client.messages.create = AsyncMock(
                     side_effect=Exception("API error")

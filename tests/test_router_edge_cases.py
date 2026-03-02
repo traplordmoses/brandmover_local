@@ -67,7 +67,7 @@ class TestTimeoutFallback:
     def test_haiku_timeout_returns_generate_content(self):
         """When Haiku times out, classify_intent returns generate_content as fallback."""
         async def _run():
-            with patch("agent.intent_router.anthropic.AsyncAnthropic") as mock_cls:
+            with patch("agent._client.anthropic.AsyncAnthropic") as mock_cls:
                 mock_client = AsyncMock()
                 async def _slow(**kwargs):
                     await asyncio.sleep(10)
@@ -117,7 +117,7 @@ class TestRateLimitEdgeCases:
 
         # User 2 is NOT rate limited
         async def _run():
-            with patch("agent.intent_router.anthropic.AsyncAnthropic") as mock_cls:
+            with patch("agent._client.anthropic.AsyncAnthropic") as mock_cls:
                 mock_client = AsyncMock()
                 resp = MagicMock()
                 resp.content = [MagicMock(text='{"intent":"casual_chat","confidence":0.9,"parameters":{}}')]
@@ -137,7 +137,7 @@ class TestErrorRecovery:
     def test_api_exception_returns_fallback(self):
         """Any API exception falls back to generate_content."""
         async def _run():
-            with patch("agent.intent_router.anthropic.AsyncAnthropic") as mock_cls:
+            with patch("agent._client.anthropic.AsyncAnthropic") as mock_cls:
                 mock_client = AsyncMock()
                 mock_client.messages.create = AsyncMock(
                     side_effect=ConnectionError("Network down")
@@ -188,7 +188,7 @@ class TestRepeatedMessages:
 
         async def _run():
             nonlocal call_count
-            with patch("agent.intent_router.anthropic.AsyncAnthropic") as mock_cls:
+            with patch("agent._client.anthropic.AsyncAnthropic") as mock_cls:
                 mock_client = AsyncMock()
                 async def _create(**kwargs):
                     nonlocal call_count
@@ -216,7 +216,7 @@ class TestRepeatedMessages:
 
         async def _run():
             nonlocal call_count
-            with patch("agent.intent_router.anthropic.AsyncAnthropic") as mock_cls:
+            with patch("agent._client.anthropic.AsyncAnthropic") as mock_cls:
                 mock_client = AsyncMock()
                 async def _create(**kwargs):
                     nonlocal call_count

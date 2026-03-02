@@ -54,7 +54,8 @@ Do NOT generate social media posts or drafts — just respond conversationally.
 async def handle_casual_chat(message: str, context: ConversationContext) -> str:
     """Generate a brief, conversational response using Haiku."""
     try:
-        client = anthropic.AsyncAnthropic(api_key=settings.ANTHROPIC_API_KEY)
+        from agent._client import get_anthropic
+        client = get_anthropic()
         response = await client.messages.create(
             model=_HAIKU_MODEL,
             max_tokens=150,
@@ -103,7 +104,8 @@ async def handle_modify_last(
     )
 
     try:
-        client = anthropic.AsyncAnthropic(api_key=settings.ANTHROPIC_API_KEY)
+        from agent._client import get_anthropic
+        client = get_anthropic()
         response = await client.messages.create(
             model="claude-sonnet-4-6",
             max_tokens=1024,

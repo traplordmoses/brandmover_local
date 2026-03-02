@@ -80,7 +80,7 @@ class TestSmartDiscovery:
         )
 
         async def _run():
-            with patch("agent.onboarding.anthropic.AsyncAnthropic") as mock_cls:
+            with patch("agent._client.anthropic.AsyncAnthropic") as mock_cls:
                 mock_client = AsyncMock()
                 mock_client.messages.create = AsyncMock(return_value=response)
                 mock_cls.return_value = mock_client
@@ -104,7 +104,7 @@ class TestSmartDiscovery:
         )
 
         async def _run():
-            with patch("agent.onboarding.anthropic.AsyncAnthropic") as mock_cls:
+            with patch("agent._client.anthropic.AsyncAnthropic") as mock_cls:
                 mock_client = AsyncMock()
                 mock_client.messages.create = AsyncMock(return_value=response)
                 mock_cls.return_value = mock_client
@@ -129,7 +129,7 @@ class TestSmartDiscovery:
         )
 
         async def _run():
-            with patch("agent.onboarding.anthropic.AsyncAnthropic") as mock_cls:
+            with patch("agent._client.anthropic.AsyncAnthropic") as mock_cls:
                 mock_client = AsyncMock()
                 mock_client.messages.create = AsyncMock(return_value=response)
                 mock_cls.return_value = mock_client
@@ -152,7 +152,7 @@ class TestSmartDiscovery:
         )
 
         async def _run():
-            with patch("agent.onboarding.anthropic.AsyncAnthropic") as mock_cls:
+            with patch("agent._client.anthropic.AsyncAnthropic") as mock_cls:
                 mock_client = AsyncMock()
                 mock_client.messages.create = AsyncMock(return_value=response)
                 mock_cls.return_value = mock_client
@@ -173,7 +173,7 @@ class TestSmartDiscovery:
         )
 
         async def _run():
-            with patch("agent.onboarding.anthropic.AsyncAnthropic") as mock_cls:
+            with patch("agent._client.anthropic.AsyncAnthropic") as mock_cls:
                 mock_client = AsyncMock()
                 mock_client.messages.create = AsyncMock(return_value=response)
                 mock_cls.return_value = mock_client
@@ -187,7 +187,7 @@ class TestSmartDiscovery:
         response = self._mock_claude_response("Tell me more!")
 
         async def _run():
-            with patch("agent.onboarding.anthropic.AsyncAnthropic") as mock_cls:
+            with patch("agent._client.anthropic.AsyncAnthropic") as mock_cls:
                 mock_client = AsyncMock()
                 mock_client.messages.create = AsyncMock(return_value=response)
                 mock_cls.return_value = mock_client
@@ -204,7 +204,7 @@ class TestSmartDiscovery:
         mock_response.content = [MagicMock(text="Just a plain text response")]
 
         async def _run():
-            with patch("agent.onboarding.anthropic.AsyncAnthropic") as mock_cls:
+            with patch("agent._client.anthropic.AsyncAnthropic") as mock_cls:
                 mock_client = AsyncMock()
                 mock_client.messages.create = AsyncMock(return_value=mock_response)
                 mock_cls.return_value = mock_client

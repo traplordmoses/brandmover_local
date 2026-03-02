@@ -6,5 +6,6 @@ tweepy>=4.0
 python-dotenv
 httpx
 Pillow
+numpy
 cairosvg
 pymupdf>=1.25.0

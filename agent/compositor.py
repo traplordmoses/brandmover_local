@@ -143,11 +143,14 @@ _font_cache: dict[str, ImageFont.FreeTypeFont] = {}
 
 
 def clear_font_cache() -> None:
-    """Clear cached font objects. Called after brand change via /setup."""
+    """Clear cached font objects and background cache. Called after brand change via /setup."""
     _font_cache.clear()
+    _bg_cache.clear()
+    _fade_mask_cache.clear()
 
 
-def _ensure_fonts() -> None:
+async def _ensure_fonts_async() -> None:
+    """Download missing brand fonts asynchronously (non-blocking)."""
     _FONT_DIR.mkdir(parents=True, exist_ok=True)
     font_map = _brand_cfg.get_font_map()
     seen: set[str] = set()
@@ -160,11 +163,17 @@ def _ensure_fonts() -> None:
         if path.exists():
             continue
         try:
-            resp = httpx.get(info["url"], follow_redirects=True, timeout=15)
+            from agent._client import get_httpx
+            resp = await get_httpx().get(info["url"])
             resp.raise_for_status()
             path.write_bytes(resp.content)
         except Exception as e:
             logger.warning("Font download failed %s: %s", filename, e)
+
+
+def _ensure_fonts() -> None:
+    """Synchronous font check — only verifies local files, no downloads."""
+    _FONT_DIR.mkdir(parents=True, exist_ok=True)
 
 
 def _load_font(style: str, size: int) -> ImageFont.FreeTypeFont:
@@ -287,13 +296,21 @@ def _draw_tracked(
 # Background
 # ---------------------------------------------------------------------------
 
+_bg_cache: dict[str, Image.Image] = {}
+
+
 def _create_background(profile: CompositorProfile) -> Image.Image:
     """Create a branded background with glass-morphism orbs.
 
     Colors and effects read from brand config. Glow geometry is relative
     to canvas dimensions so layouts scale with config changes.
+    Cached by config hash + profile key to avoid recomputing.
     """
     cfg = _brand_cfg.get_config()
+    cache_key = f"{cfg.raw_hash}_{cfg.canvas_width}x{cfg.canvas_height}_{profile.glow_color}_{profile.glow_intensity_1}_{profile.layout}"
+    if cache_key in _bg_cache:
+        return _bg_cache[cache_key].copy()
+
     cw, ch = cfg.canvas_width, cfg.canvas_height
     canvas = Image.new("RGBA", (cw, ch), _c("background", (14, 15, 43)) + (255,))
     r, g, b = profile.glow_color
@@ -354,12 +371,14 @@ def _create_background(profile: CompositorProfile) -> Image.Image:
     frost = frost.filter(ImageFilter.GaussianBlur(radius=cfg.glass_blur))
     canvas = Image.alpha_composite(canvas, frost)
 
+    _bg_cache[cache_key] = canvas.copy()
     return canvas
 
 
 # ---------------------------------------------------------------------------
 # Image blend — elliptical fade into black, no card/border
 # ---------------------------------------------------------------------------
+_fade_mask_cache: dict[tuple[int, int, float], Image.Image] = {}
 
 def _blend_image_into_canvas(
     canvas: Image.Image,
@@ -369,17 +388,23 @@ def _blend_image_into_canvas(
 ) -> None:
     filled = _crop_fill(feature_img.convert("RGB"), w, h)
 
-    mask = Image.new("L", (w, h), 0)
-    for i in range(100):
-        t     = i / 100
-        alpha = int(255 * (t ** fade_strength))
-        pad_x = int((1 - t) * w * 0.52)
-        pad_y = int((1 - t) * h * 0.38)
-        if pad_x < w // 2 and pad_y < h // 2:
-            ImageDraw.Draw(mask).ellipse(
-                [pad_x, pad_y, w - pad_x, h - pad_y], fill=alpha
-            )
-    mask = mask.filter(ImageFilter.GaussianBlur(radius=w // 10))
+    # Cache the fade mask — it only depends on dimensions and strength
+    cache_key = (w, h, round(fade_strength, 2))
+    if cache_key in _fade_mask_cache:
+        mask = _fade_mask_cache[cache_key].copy()
+    else:
+        mask = Image.new("L", (w, h), 0)
+        for i in range(100):
+            t     = i / 100
+            alpha = int(255 * (t ** fade_strength))
+            pad_x = int((1 - t) * w * 0.52)
+            pad_y = int((1 - t) * h * 0.38)
+            if pad_x < w // 2 and pad_y < h // 2:
+                ImageDraw.Draw(mask).ellipse(
+                    [pad_x, pad_y, w - pad_x, h - pad_y], fill=alpha
+                )
+        mask = mask.filter(ImageFilter.GaussianBlur(radius=w // 10))
+        _fade_mask_cache[cache_key] = mask.copy()
 
     black_base = Image.new("RGB", (w, h), (0, 0, 0))
     black_base.paste(filled, (0, 0), mask)
@@ -412,7 +437,8 @@ def _wrap(text: str, font: ImageFont.FreeTypeFont, max_w: int) -> list[str]:
     lines, cur = [], words[0]
     for w in words[1:]:
         test = cur + " " + w
-        if (font.getbbox(test)[2] - font.getbbox(test)[0]) <= max_w:
+        bb = font.getbbox(test)
+        if (bb[2] - bb[0]) <= max_w:
             cur = test
         else:
             lines.append(cur)
@@ -583,10 +609,10 @@ def _render_centered(
 
 async def _download_image(url: str) -> bytes | None:
     try:
-        async with httpx.AsyncClient(timeout=20, follow_redirects=True) as c:
-            r = await c.get(url)
-            r.raise_for_status()
-            return r.content
+        from agent._client import get_httpx
+        r = await get_httpx().get(url)
+        r.raise_for_status()
+        return r.content
     except Exception as e:
         logger.warning("Image download failed: %s", e)
         return None
@@ -611,7 +637,7 @@ async def compose_branded_image(
     profile = profiles.get(profile_key, profiles["default"])
 
     try:
-        _ensure_fonts()
+        await _ensure_fonts_async()
 
         feature_img = None
         if image_url:

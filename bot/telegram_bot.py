@@ -71,6 +71,8 @@ def create_bot() -> Application:
     app.add_handler(CommandHandler("upload", handlers.upload_command))
     app.add_handler(CommandHandler("done", handlers.done_command))
     app.add_handler(CommandHandler("preview", handlers.preview_command))
+    app.add_handler(CommandHandler("template_import", handlers.template_import_command))
+    app.add_handler(CommandHandler("font_upload", handlers.font_upload_command))
 
     # Inline button callbacks (e.g. /generate approve/reject buttons)
     app.add_handler(CallbackQueryHandler(handlers.generate_callback, pattern=r"^gen_"))

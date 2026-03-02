@@ -25,19 +25,42 @@ if _OLD_STATE_FILE.exists() and not _STATE_FILE.exists():
     shutil.move(str(_OLD_STATE_FILE), str(_STATE_FILE))
 
 
+# In-memory cache to reduce repeated file I/O within the same request flow
+_state_cache: dict | None = None
+# asyncio.Lock for safe concurrent access from handlers + auto-poster
+_state_lock = asyncio.Lock()
+
+
+def invalidate_state_cache() -> None:
+    """Clear the in-memory state cache. Called by tests and after file changes."""
+    global _state_cache
+    _state_cache = None
+
+
 def _read_state() -> dict:
-    """Read state.json, return empty dict if missing or corrupt."""
+    """Read state.json, return empty dict if missing or corrupt.
+
+    Uses an in-memory cache so multiple reads within the same request
+    (has_pending → get_pending → clear_pending) don't re-parse the file.
+    """
+    global _state_cache
+    if _state_cache is not None:
+        return _state_cache
     if not _STATE_FILE.exists():
         return {}
     try:
-        return json.loads(_STATE_FILE.read_text(encoding="utf-8"))
+        data = json.loads(_STATE_FILE.read_text(encoding="utf-8"))
+        _state_cache = data
+        return data
     except (json.JSONDecodeError, OSError) as e:
         logger.warning("Failed to read state.json: %s", e)
         return {}
 
 
 def _write_state(data: dict) -> None:
-    """Write state dict to state.json."""
+    """Write state dict to state.json and update in-memory cache."""
+    global _state_cache
+    _state_cache = data
     _STATE_FILE.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
 
 
@@ -357,10 +380,13 @@ def list_profiles() -> list[dict]:
 # ---------------------------------------------------------------------------
 
 async def async_save_pending(*args, **kwargs) -> None:
-    await asyncio.to_thread(save_pending, *args, **kwargs)
+    async with _state_lock:
+        await asyncio.to_thread(save_pending, *args, **kwargs)
 
 async def async_clear_pending() -> None:
-    await asyncio.to_thread(clear_pending)
+    async with _state_lock:
+        await asyncio.to_thread(clear_pending)
 
 async def async_get_pending() -> dict | None:
-    return await asyncio.to_thread(get_pending)
+    async with _state_lock:
+        return await asyncio.to_thread(get_pending)

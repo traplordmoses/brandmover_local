@@ -355,7 +355,8 @@ def _parse_json_response(text: str) -> dict:
 
 async def _call_anthropic(system_prompt: str, user_message: str) -> str:
     """Call Anthropic Claude API."""
-    client = anthropic.AsyncAnthropic(api_key=settings.ANTHROPIC_API_KEY)
+    from agent._client import get_anthropic
+    client = get_anthropic()
     response = await client.messages.create(
         model="claude-sonnet-4-6",
         max_tokens=2048,
@@ -381,16 +382,18 @@ async def _call_openai(system_prompt: str, user_message: str) -> str:
 
 async def _call_gemini(system_prompt: str, user_message: str) -> str:
     """Call Google Gemini API via REST."""
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={settings.GEMINI_API_KEY}"
+    url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent"
+    headers = {"x-goog-api-key": settings.GEMINI_API_KEY}
     payload = {
         "systemInstruction": {"parts": [{"text": system_prompt}]},
         "contents": [{"parts": [{"text": user_message}]}],
         "generationConfig": {"maxOutputTokens": 2048},
     }
-    async with httpx.AsyncClient(timeout=60) as client:
-        resp = await client.post(url, json=payload)
-        resp.raise_for_status()
-        data = resp.json()
+    from agent._client import get_httpx
+    client = get_httpx()
+    resp = await client.post(url, json=payload, headers=headers)
+    resp.raise_for_status()
+    data = resp.json()
     return data["candidates"][0]["content"]["parts"][0]["text"]
 
 

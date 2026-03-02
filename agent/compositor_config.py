@@ -604,13 +604,24 @@ def get_font_map() -> dict[str, dict]:
     display_family = display_entry.family if display_entry else "Poppins"
     body_family    = body_entry.family if body_entry else "Poppins"
 
-    # Fall back to Poppins if the font isn't in our known registry
+    # Fall back to Poppins if the font isn't in our known registry —
+    # but first try font_manager for dynamic Google Fonts resolution
     if display_family not in _KNOWN_FONTS:
-        logger.warning("Font %r not in known registry, falling back to Poppins", display_family)
-        display_family = "Poppins"
+        try:
+            from agent.font_manager import get_font as _fm_get
+            _fm_get(display_family, 20, "Bold")  # trigger download
+            logger.info("Font %r resolved via font_manager", display_family)
+        except Exception:
+            logger.warning("Font %r not in known registry, falling back to Poppins", display_family)
+            display_family = "Poppins"
     if body_family not in _KNOWN_FONTS:
-        logger.warning("Font %r not in known registry, falling back to Poppins", body_family)
-        body_family = "Poppins"
+        try:
+            from agent.font_manager import get_font as _fm_get
+            _fm_get(body_family, 20, "Regular")  # trigger download
+            logger.info("Font %r resolved via font_manager", body_family)
+        except Exception:
+            logger.warning("Font %r not in known registry, falling back to Poppins", body_family)
+            body_family = "Poppins"
 
     font_map: dict[str, dict] = {}
     for style, suffix in _WEIGHT_SUFFIXES.items():

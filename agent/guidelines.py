@@ -189,7 +189,8 @@ async def extract_brand_from_pdf(pdf_path: str | Path) -> str:
     if len(raw_text) > 80000:
         raw_text = raw_text[:80000] + "\n\n[... truncated ...]"
 
-    client = anthropic.AsyncAnthropic(api_key=_settings.ANTHROPIC_API_KEY)
+    from agent._client import get_anthropic
+    client = get_anthropic()
 
     system = (
         "You are a brand strategist. Given raw text extracted from a brand guidelines PDF, "
@@ -221,6 +222,8 @@ async def extract_brand_from_pdf(pdf_path: str | Path) -> str:
 
 _context_cache: str | None = None
 _context_cache_mtimes: dict[str, float] = {}
+_last_mtime_check: float = 0
+_MTIME_CHECK_INTERVAL = 30  # seconds — skip re-scanning if checked recently
 
 
 def _collect_mtimes() -> dict[str, float]:
@@ -256,9 +259,16 @@ def get_brand_context() -> str:
     """Combine brand name, guidelines, example articles, and reference materials.
 
     Caches the result and only re-reads when file modification times change.
+    Skips the filesystem scan if checked within the last 30 seconds.
     """
-    global _context_cache, _context_cache_mtimes
+    global _context_cache, _context_cache_mtimes, _last_mtime_check
+    import time as _time
 
+    now = _time.time()
+    if _context_cache is not None and (now - _last_mtime_check) < _MTIME_CHECK_INTERVAL:
+        return _context_cache
+
+    _last_mtime_check = now
     current_mtimes = _collect_mtimes()
     if _context_cache is not None and current_mtimes == _context_cache_mtimes:
         logger.debug("Brand context cache hit (%d chars)", len(_context_cache))

@@ -126,7 +126,8 @@ async def recommend_strategy(
     else:
         inv_summary = "No assets uploaded. Archetype: starting_fresh"
 
-    client = anthropic.AsyncAnthropic(api_key=settings.ANTHROPIC_API_KEY)
+    from agent._client import get_anthropic
+    client = get_anthropic()
 
     prompt = _STRATEGY_PROMPT.format(
         brand_name=brand_name,
@@ -321,7 +322,8 @@ async def generate_content_calendar(
 
     Also saves to brand/content_calendar.md.
     """
-    client = anthropic.AsyncAnthropic(api_key=settings.ANTHROPIC_API_KEY)
+    from agent._client import get_anthropic
+    client = get_anthropic()
 
     prompt = _CALENDAR_PROMPT.format(
         brand_name=brand_name,

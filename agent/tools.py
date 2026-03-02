@@ -721,7 +721,7 @@ async def _handle_execute_openclaw_script(
         return json.dumps({"error": f"Script not found at {script_path}. Install OpenClaw skills first."})
 
     # Sanitize args — reject shell metacharacters, use shlex for safe splitting
-    _UNSAFE_CHARS = re.compile(r"[;&|`$(){}!<>\\]")
+    _UNSAFE_CHARS = re.compile(r"[;&|`$(){}!<>\\\n\r\t]")
     if args and _UNSAFE_CHARS.search(args):
         return json.dumps({"error": "Arguments contain unsafe characters. Only alphanumeric, hyphens, underscores, dots, and spaces are allowed."})
 

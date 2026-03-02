@@ -17,10 +17,10 @@ logger = logging.getLogger(__name__)
 async def _download_image(url_or_path: str) -> bytes:
     """Download an image from a URL or read from a local file path."""
     if url_or_path.startswith(("http://", "https://")):
-        async with httpx.AsyncClient(timeout=30, follow_redirects=True) as client:
-            resp = await client.get(url_or_path)
-            resp.raise_for_status()
-            return resp.content
+        from agent._client import get_httpx
+        resp = await get_httpx().get(url_or_path)
+        resp.raise_for_status()
+        return resp.content
     # Local file path
     return Path(url_or_path).read_bytes()
 

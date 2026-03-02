@@ -54,7 +54,7 @@ class TestRecommendStrategy:
         }))]
 
         async def _run():
-            with patch("agent.strategy.anthropic.AsyncAnthropic") as mock_cls:
+            with patch("agent._client.anthropic.AsyncAnthropic") as mock_cls:
                 mock_client = AsyncMock()
                 mock_client.messages.create = AsyncMock(return_value=mock_response)
                 mock_cls.return_value = mock_client
@@ -75,7 +75,7 @@ class TestRecommendStrategy:
         mock_response.content = [MagicMock(text="Not valid JSON")]
 
         async def _run():
-            with patch("agent.strategy.anthropic.AsyncAnthropic") as mock_cls:
+            with patch("agent._client.anthropic.AsyncAnthropic") as mock_cls:
                 mock_client = AsyncMock()
                 mock_client.messages.create = AsyncMock(return_value=mock_response)
                 mock_cls.return_value = mock_client
@@ -100,7 +100,7 @@ class TestRecommendStrategy:
         }))]
 
         async def _run():
-            with patch("agent.strategy.anthropic.AsyncAnthropic") as mock_cls:
+            with patch("agent._client.anthropic.AsyncAnthropic") as mock_cls:
                 mock_client = AsyncMock()
                 mock_client.messages.create = AsyncMock(return_value=mock_response)
                 mock_cls.return_value = mock_client
@@ -302,7 +302,7 @@ class TestGenerateContentCalendar:
         )
 
         async def _run():
-            with patch("agent.strategy.anthropic.AsyncAnthropic") as mock_cls:
+            with patch("agent._client.anthropic.AsyncAnthropic") as mock_cls:
                 mock_client = AsyncMock()
                 mock_client.messages.create = AsyncMock(return_value=mock_response)
                 mock_cls.return_value = mock_client
@@ -336,7 +336,7 @@ class TestGenerateContentCalendar:
         )
 
         async def _run():
-            with patch("agent.strategy.anthropic.AsyncAnthropic") as mock_cls:
+            with patch("agent._client.anthropic.AsyncAnthropic") as mock_cls:
                 mock_client = AsyncMock()
                 async def capture_create(**kwargs):
                     captured_prompt["messages"] = kwargs.get("messages", [])
@@ -373,7 +373,7 @@ class TestGenerateContentCalendar:
         )
 
         async def _run():
-            with patch("agent.strategy.anthropic.AsyncAnthropic") as mock_cls:
+            with patch("agent._client.anthropic.AsyncAnthropic") as mock_cls:
                 mock_client = AsyncMock()
                 async def capture_create(**kwargs):
                     captured_prompt["messages"] = kwargs.get("messages", [])
@@ -399,7 +399,7 @@ class TestGenerateContentCalendar:
         rec = StrategyRecommendation(archetype="starting_fresh")
 
         async def _run():
-            with patch("agent.strategy.anthropic.AsyncAnthropic") as mock_cls:
+            with patch("agent._client.anthropic.AsyncAnthropic") as mock_cls:
                 mock_client = AsyncMock()
                 mock_client.messages.create = AsyncMock(return_value=mock_response)
                 mock_cls.return_value = mock_client

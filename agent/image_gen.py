@@ -408,50 +408,51 @@ async def generate_image(
     try:
         logger.info("Generating image with enhanced prompt: %s", enhanced_prompt[:150])
 
-        async with httpx.AsyncClient(timeout=120) as client:
-            resp = await client.post(api_url, json=payload, headers=headers)
-            resp.raise_for_status()
-            data = resp.json()
+        from agent._client import get_httpx
+        client = get_httpx()
+        resp = await client.post(api_url, json=payload, headers=headers)
+        resp.raise_for_status()
+        data = resp.json()
 
-            # If Prefer: wait returned a completed prediction
-            if data.get("status") == "succeeded" and data.get("output"):
-                image_url = _extract_url(data["output"])
+        # If Prefer: wait returned a completed prediction
+        if data.get("status") == "succeeded" and data.get("output"):
+            image_url = _extract_url(data["output"])
+            if image_url:
+                logger.info("Image generated: %s", image_url[:120])
+                return image_url
+
+        # Otherwise poll for completion with exponential backoff
+        poll_url = data.get("urls", {}).get("get")
+        if not poll_url:
+            logger.error("No poll URL in Replicate response")
+            return None
+
+        poll_delay = 1.0
+        max_delay = 10.0
+        total_waited = 0.0
+        max_wait = 180.0  # 3 minutes
+
+        while total_waited < max_wait:
+            await asyncio.sleep(poll_delay)
+            total_waited += poll_delay
+            poll_resp = await client.get(poll_url, headers=headers)
+            poll_resp.raise_for_status()
+            poll_data = poll_resp.json()
+
+            status = poll_data.get("status")
+            if status == "succeeded":
+                image_url = _extract_url(poll_data.get("output"))
                 if image_url:
                     logger.info("Image generated: %s", image_url[:120])
                     return image_url
-
-            # Otherwise poll for completion with exponential backoff
-            poll_url = data.get("urls", {}).get("get")
-            if not poll_url:
-                logger.error("No poll URL in Replicate response")
+            elif status in ("failed", "canceled"):
+                logger.error("Image generation %s: %s", status, poll_data.get("error"))
                 return None
 
-            poll_delay = 1.0
-            max_delay = 10.0
-            total_waited = 0.0
-            max_wait = 180.0  # 3 minutes
+            poll_delay = min(poll_delay * 1.5, max_delay)
 
-            while total_waited < max_wait:
-                await asyncio.sleep(poll_delay)
-                total_waited += poll_delay
-                poll_resp = await client.get(poll_url, headers=headers)
-                poll_resp.raise_for_status()
-                poll_data = poll_resp.json()
-
-                status = poll_data.get("status")
-                if status == "succeeded":
-                    image_url = _extract_url(poll_data.get("output"))
-                    if image_url:
-                        logger.info("Image generated: %s", image_url[:120])
-                        return image_url
-                elif status in ("failed", "canceled"):
-                    logger.error("Image generation %s: %s", status, poll_data.get("error"))
-                    return None
-
-                poll_delay = min(poll_delay * 1.5, max_delay)
-
-            logger.error("Image generation timed out after %.0fs polling", total_waited)
-            return None
+        logger.error("Image generation timed out after %.0fs polling", total_waited)
+        return None
 
     except Exception as e:
         logger.error("Image generation failed: %s", e)
@@ -481,6 +482,22 @@ async def generate_img2img(
     model_id = "black-forest-labs/flux-kontext-pro"
     logger.info("img2img model: %s | input: %s | prompt: %s", model_id, input_image_path, prompt[:120])
 
+    # Validate the image path — only allow files within brand/ or temp directories
+    try:
+        resolved = Path(input_image_path).resolve()
+        brand_root = Path(settings.BRAND_FOLDER).resolve()
+        import tempfile as _tmpmod
+        tmp_root = Path(_tmpmod.gettempdir()).resolve()
+        if not (str(resolved).startswith(str(brand_root)) or str(resolved).startswith(str(tmp_root))):
+            logger.error("img2img path outside allowed directories: %s", input_image_path)
+            return None
+        if resolved.suffix.lower() not in (".png", ".jpg", ".jpeg", ".webp", ".gif"):
+            logger.error("img2img path not an image file: %s", input_image_path)
+            return None
+    except Exception as e:
+        logger.error("img2img path validation failed: %s", e)
+        return None
+
     try:
         image_bytes = Path(input_image_path).read_bytes()
         b64 = base64.b64encode(image_bytes).decode("utf-8")
@@ -506,48 +523,49 @@ async def generate_img2img(
     }
 
     try:
-        async with httpx.AsyncClient(timeout=120) as client:
-            resp = await client.post(api_url, json=payload, headers=headers)
-            resp.raise_for_status()
-            data = resp.json()
+        from agent._client import get_httpx
+        client = get_httpx()
+        resp = await client.post(api_url, json=payload, headers=headers)
+        resp.raise_for_status()
+        data = resp.json()
 
-            if data.get("status") == "succeeded" and data.get("output"):
-                image_url = _extract_url(data["output"])
+        if data.get("status") == "succeeded" and data.get("output"):
+            image_url = _extract_url(data["output"])
+            if image_url:
+                logger.info("img2img generated: %s", image_url[:120])
+                return image_url
+
+        poll_url = data.get("urls", {}).get("get")
+        if not poll_url:
+            logger.error("No poll URL in Replicate img2img response")
+            return None
+
+        poll_delay = 1.0
+        max_delay = 10.0
+        total_waited = 0.0
+        max_wait = 180.0
+
+        while total_waited < max_wait:
+            await asyncio.sleep(poll_delay)
+            total_waited += poll_delay
+            poll_resp = await client.get(poll_url, headers=headers)
+            poll_resp.raise_for_status()
+            poll_data = poll_resp.json()
+
+            status = poll_data.get("status")
+            if status == "succeeded":
+                image_url = _extract_url(poll_data.get("output"))
                 if image_url:
                     logger.info("img2img generated: %s", image_url[:120])
                     return image_url
-
-            poll_url = data.get("urls", {}).get("get")
-            if not poll_url:
-                logger.error("No poll URL in Replicate img2img response")
+            elif status in ("failed", "canceled"):
+                logger.error("img2img %s: %s", status, poll_data.get("error"))
                 return None
 
-            poll_delay = 1.0
-            max_delay = 10.0
-            total_waited = 0.0
-            max_wait = 180.0
+            poll_delay = min(poll_delay * 1.5, max_delay)
 
-            while total_waited < max_wait:
-                await asyncio.sleep(poll_delay)
-                total_waited += poll_delay
-                poll_resp = await client.get(poll_url, headers=headers)
-                poll_resp.raise_for_status()
-                poll_data = poll_resp.json()
-
-                status = poll_data.get("status")
-                if status == "succeeded":
-                    image_url = _extract_url(poll_data.get("output"))
-                    if image_url:
-                        logger.info("img2img generated: %s", image_url[:120])
-                        return image_url
-                elif status in ("failed", "canceled"):
-                    logger.error("img2img %s: %s", status, poll_data.get("error"))
-                    return None
-
-                poll_delay = min(poll_delay * 1.5, max_delay)
-
-            logger.error("img2img timed out after %.0fs polling", total_waited)
-            return None
+        logger.error("img2img timed out after %.0fs polling", total_waited)
+        return None
 
     except Exception as e:
         logger.error("img2img generation failed: %s", e)
