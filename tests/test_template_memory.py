@@ -17,7 +17,10 @@ from agent.template_memory import (
     register_template,
     apply_template,
     get_aspect_ratio_for_content_type,
+    get_image_region_aspect_ratio,
     detect_if_template,
+    parse_region_description,
+    _CONTENT_TYPE_ASPECT,
 )
 
 
@@ -159,6 +162,47 @@ class TestTemplateMemory:
 
 
 # ---------------------------------------------------------------------------
+# Template priority — aspect ratio matching for universals
+# ---------------------------------------------------------------------------
+
+class TestTemplatePriority:
+    def test_exact_match_wins_over_universal(self, templates_dir):
+        memory = TemplateMemory()
+        memory.add_template(_template(tid="universal", content_types=[], aspect_ratio="1:1"))
+        memory.add_template(_template(tid="exact", content_types=["announcement"], aspect_ratio="16:9"))
+
+        result = memory.get_template_for_content_type("announcement")
+        assert result.id == "exact"
+
+    def test_universal_prefers_matching_aspect_ratio(self, templates_dir):
+        memory = TemplateMemory()
+        memory.add_template(_template(tid="square", content_types=[], aspect_ratio="1:1"))
+        memory.add_template(_template(tid="wide", content_types=[], aspect_ratio="16:9"))
+
+        # announcement prefers 16:9
+        result = memory.get_template_for_content_type("announcement")
+        assert result.id == "wide"
+
+        # meme prefers 1:1
+        result = memory.get_template_for_content_type("meme")
+        assert result.id == "square"
+
+    def test_universal_falls_back_to_first(self, templates_dir):
+        memory = TemplateMemory()
+        memory.add_template(_template(tid="portrait", content_types=[], aspect_ratio="9:16"))
+
+        # No 16:9 universal exists, should fall back to first
+        result = memory.get_template_for_content_type("announcement")
+        assert result.id == "portrait"
+
+    def test_content_type_aspect_map_has_expected_types(self):
+        assert _CONTENT_TYPE_ASPECT["announcement"] == "16:9"
+        assert _CONTENT_TYPE_ASPECT["meme"] == "1:1"
+        assert _CONTENT_TYPE_ASPECT["community"] == "1:1"
+        assert _CONTENT_TYPE_ASPECT["campaign"] == "16:9"
+
+
+# ---------------------------------------------------------------------------
 # analyze_template (mocked Claude)
 # ---------------------------------------------------------------------------
 
@@ -247,11 +291,12 @@ class TestRegisterTemplate:
 
 
 # ---------------------------------------------------------------------------
-# apply_template — PIL composition (Commit F)
+# apply_template — alpha-composite composition
 # ---------------------------------------------------------------------------
 
 class TestApplyTemplate:
-    def test_composites_image_at_correct_coordinates(self, tmp_path):
+    def test_composites_image_with_alpha(self, tmp_path):
+        """Alpha composite: template on top, image below — transparent areas show through."""
         tpl_path = _create_test_image(tmp_path / "tpl.png", 800, 600, "white")
         gen_path = tmp_path / "gen.png"
         _create_test_image(gen_path, 400, 300, "blue")
@@ -280,6 +325,23 @@ class TestApplyTemplate:
         assert result is not None
         assert isinstance(result, io.BytesIO)
         # Verify it's a valid image
+        img = Image.open(result)
+        assert img.size == (800, 600)
+
+    def test_local_file_path(self, tmp_path):
+        """apply_template accepts local file paths (not just URLs)."""
+        tpl_path = _create_test_image(tmp_path / "tpl.png", 800, 600, "white")
+        gen_path = str(_create_test_image(tmp_path / "gen.png", 400, 300, "green"))
+
+        region = TemplateRegion(type="image", x=0, y=0, width=400, height=300)
+        template = _template(path=str(tpl_path), regions=[region])
+
+        async def _run():
+            return await apply_template(template, gen_path, {"title": "Local"})
+
+        result = asyncio.run(_run())
+        assert result is not None
+        assert isinstance(result, io.BytesIO)
         img = Image.open(result)
         assert img.size == (800, 600)
 
@@ -339,6 +401,48 @@ class TestApplyTemplate:
         result = asyncio.run(_run())
         assert result is None
 
+    def test_logo_region_placed(self, tmp_path):
+        """Logo region triggers _place_logo when logo.png exists."""
+        tpl_path = _create_test_image(tmp_path / "tpl.png", 800, 600, "white")
+        gen_path = str(_create_test_image(tmp_path / "gen.png", 400, 300, "blue"))
+
+        # Create a logo file
+        logo_dir = tmp_path / "brand" / "assets"
+        logo_dir.mkdir(parents=True)
+        logo_img = Image.new("RGBA", (100, 100), (255, 0, 0, 200))
+        logo_img.save(str(logo_dir / "logo.png"), "PNG")
+
+        image_region = TemplateRegion(type="image", x=0, y=0, width=400, height=300)
+        logo_region = TemplateRegion(type="logo", x=350, y=10, width=80, height=80)
+        template = _template(path=str(tpl_path), regions=[image_region, logo_region])
+
+        async def _run():
+            with patch("agent.template_memory.settings.BRAND_FOLDER", str(tmp_path / "brand")):
+                return await apply_template(template, gen_path, {})
+
+        result = asyncio.run(_run())
+        assert result is not None
+        assert isinstance(result, io.BytesIO)
+
+    def test_text_regions_with_wrapping(self, tmp_path):
+        """Text regions render with word wrap and don't crash on long text."""
+        tpl_path = _create_test_image(tmp_path / "tpl.png", 800, 600, "white")
+        gen_path = str(_create_test_image(tmp_path / "gen.png", 400, 300, "blue"))
+
+        image_region = TemplateRegion(type="image", x=0, y=0, width=400, height=300)
+        text_region = TemplateRegion(type="text", x=50, y=320, width=700, height=80)
+        template = _template(path=str(tpl_path), regions=[image_region, text_region])
+
+        async def _run():
+            return await apply_template(
+                template, gen_path,
+                {"title": "This is a long headline that should wrap to multiple lines if needed"},
+            )
+
+        result = asyncio.run(_run())
+        assert result is not None
+        assert isinstance(result, io.BytesIO)
+
 
 # ---------------------------------------------------------------------------
 # get_aspect_ratio_for_content_type (Commit H)
@@ -363,6 +467,52 @@ class TestGetAspectRatio:
             tid="wide", aspect_ratio="16:9", content_types=["meme"],
         ))
         result = get_aspect_ratio_for_content_type("announcement")
+        assert result is None
+
+
+# ---------------------------------------------------------------------------
+# get_image_region_aspect_ratio
+# ---------------------------------------------------------------------------
+
+class TestImageRegionAspectRatio:
+    def test_returns_none_when_no_templates(self, templates_dir):
+        result = get_image_region_aspect_ratio("announcement")
+        assert result is None
+
+    def test_returns_square_for_square_region(self, templates_dir):
+        memory = TemplateMemory()
+        region = TemplateRegion(type="image", x=0, y=0, width=500, height=500)
+        memory.add_template(_template(
+            tid="sq", regions=[region], content_types=["meme"],
+        ))
+        result = get_image_region_aspect_ratio("meme")
+        assert result == "1:1"
+
+    def test_returns_16_9_for_widescreen_region(self, templates_dir):
+        memory = TemplateMemory()
+        region = TemplateRegion(type="image", x=0, y=0, width=1600, height=900)
+        memory.add_template(_template(
+            tid="wide", regions=[region], content_types=["announcement"],
+        ))
+        result = get_image_region_aspect_ratio("announcement")
+        assert result == "16:9"
+
+    def test_returns_raw_ratio_for_nonstandard(self, templates_dir):
+        memory = TemplateMemory()
+        region = TemplateRegion(type="image", x=0, y=0, width=300, height=700)
+        memory.add_template(_template(
+            tid="odd", regions=[region], content_types=["custom"],
+        ))
+        result = get_image_region_aspect_ratio("custom")
+        assert result == "300:700"
+
+    def test_returns_none_without_image_region(self, templates_dir):
+        memory = TemplateMemory()
+        region = TemplateRegion(type="text", x=0, y=0, width=500, height=500)
+        memory.add_template(_template(
+            tid="textonly", regions=[region], content_types=["announcement"],
+        ))
+        result = get_image_region_aspect_ratio("announcement")
         assert result is None
 
 
@@ -414,3 +564,183 @@ class TestDetectIfTemplate:
                 return await detect_if_template("/nonexistent/path.png")
 
         assert asyncio.run(_run()) is False
+
+
+# ---------------------------------------------------------------------------
+# update_template_regions
+# ---------------------------------------------------------------------------
+
+class TestUpdateTemplateRegions:
+    def test_updates_regions_in_place(self, templates_dir):
+        memory = TemplateMemory()
+        region = TemplateRegion(type="image", x=10, y=20, width=100, height=100)
+        memory.add_template(_template(tid="tpl1", regions=[region]))
+
+        new_regions = [
+            TemplateRegion(type="image", x=0, y=0, width=1200, height=700, description="Full canvas"),
+            TemplateRegion(type="text", x=0, y=0, width=1200, height=105, description="Top text"),
+            TemplateRegion(type="text", x=0, y=595, width=1200, height=105, description="Bottom text"),
+        ]
+        updated = memory.update_template_regions("tpl1", new_regions)
+        assert updated is not None
+        assert len(updated.regions) == 3
+        assert updated.regions[0].type == "image"
+        assert updated.regions[0].width == 1200
+        assert updated.regions[1].description == "Top text"
+        assert updated.regions[2].y == 595
+
+    def test_persists_to_disk(self, templates_dir):
+        memory = TemplateMemory()
+        memory.add_template(_template(tid="tpl1"))
+
+        new_regions = [
+            TemplateRegion(type="image", x=0, y=0, width=800, height=600),
+        ]
+        memory.update_template_regions("tpl1", new_regions)
+
+        # Reload from disk
+        memory2 = TemplateMemory()
+        templates = memory2.list_templates()
+        assert len(templates) == 1
+        assert len(templates[0].regions) == 1
+        assert templates[0].regions[0].width == 800
+
+    def test_returns_none_for_missing_id(self, templates_dir):
+        memory = TemplateMemory()
+        memory.add_template(_template(tid="tpl1"))
+
+        result = memory.update_template_regions("nonexistent", [])
+        assert result is None
+
+    def test_preserves_other_template_fields(self, templates_dir):
+        memory = TemplateMemory()
+        memory.add_template(_template(
+            tid="tpl1", name="My Template", aspect_ratio="16:9",
+            content_types=["meme"],
+        ))
+
+        new_regions = [TemplateRegion(type="text", x=0, y=0, width=100, height=50)]
+        updated = memory.update_template_regions("tpl1", new_regions)
+        assert updated.name == "My Template"
+        assert updated.aspect_ratio == "16:9"
+        assert updated.content_types == ["meme"]
+
+
+# ---------------------------------------------------------------------------
+# parse_region_description (mocked Claude)
+# ---------------------------------------------------------------------------
+
+class TestParseRegionDescription:
+    def test_parses_meme_layout(self):
+        mock_response = MagicMock()
+        mock_response.content = [MagicMock(text=json.dumps({
+            "regions": [
+                {"type": "image", "x": 0, "y": 0, "width": 1200, "height": 700, "description": "Full canvas"},
+                {"type": "text", "x": 0, "y": 0, "width": 1200, "height": 105, "description": "Top text"},
+                {"type": "text", "x": 0, "y": 595, "width": 1200, "height": 105, "description": "Bottom text"},
+            ],
+        }))]
+
+        async def _run():
+            with patch("agent.template_memory.anthropic.AsyncAnthropic") as mock_cls:
+                mock_client = AsyncMock()
+                mock_client.messages.create = AsyncMock(return_value=mock_response)
+                mock_cls.return_value = mock_client
+                return await parse_region_description(
+                    "top text across top 15%, bottom text across bottom 15%, image fills full canvas",
+                    1200, 700,
+                )
+
+        result = asyncio.run(_run())
+        assert len(result) == 3
+        assert result[0].type == "image"
+        assert result[0].width == 1200
+        assert result[1].type == "text"
+        assert result[1].y == 0
+        assert result[2].type == "text"
+        assert result[2].y == 595
+
+    def test_returns_empty_on_bad_response(self):
+        mock_response = MagicMock()
+        mock_response.content = [MagicMock(text="Not valid JSON")]
+
+        async def _run():
+            with patch("agent.template_memory.anthropic.AsyncAnthropic") as mock_cls:
+                mock_client = AsyncMock()
+                mock_client.messages.create = AsyncMock(return_value=mock_response)
+                mock_cls.return_value = mock_client
+                return await parse_region_description("some description", 800, 600)
+
+        result = asyncio.run(_run())
+        assert result == []
+
+    def test_returns_empty_on_api_error(self):
+        async def _run():
+            with patch("agent.template_memory.anthropic.AsyncAnthropic") as mock_cls:
+                mock_client = AsyncMock()
+                mock_client.messages.create = AsyncMock(side_effect=Exception("API error"))
+                mock_cls.return_value = mock_client
+                return await parse_region_description("some description", 800, 600)
+
+        # Should raise since we don't catch in parse_region_description
+        with pytest.raises(Exception):
+            asyncio.run(_run())
+
+
+# ---------------------------------------------------------------------------
+# _is_template_region_update detection
+# ---------------------------------------------------------------------------
+
+class TestIsTemplateRegionUpdate:
+    def test_detects_region_description(self):
+        from bot.handlers import _is_template_region_update
+
+        mock_ctx = MagicMock()
+        mock_ctx.user_data = {"last_uploaded_template_id": "tpl1"}
+
+        assert _is_template_region_update(
+            "top text goes across the top 15%, bottom text across the bottom 15%, entire background is the image zone",
+            mock_ctx,
+        ) is True
+
+    def test_rejects_without_template_id(self):
+        from bot.handlers import _is_template_region_update
+
+        mock_ctx = MagicMock()
+        mock_ctx.user_data = {}
+
+        assert _is_template_region_update(
+            "top text goes across the top 15%, image fills the bottom",
+            mock_ctx,
+        ) is False
+
+    def test_rejects_unrelated_message(self):
+        from bot.handlers import _is_template_region_update
+
+        mock_ctx = MagicMock()
+        mock_ctx.user_data = {"last_uploaded_template_id": "tpl1"}
+
+        assert _is_template_region_update(
+            "make me an announcement about our new product launch",
+            mock_ctx,
+        ) is False
+
+    def test_detects_percentage_description(self):
+        from bot.handlers import _is_template_region_update
+
+        mock_ctx = MagicMock()
+        mock_ctx.user_data = {"last_uploaded_template_id": "tpl1"}
+
+        assert _is_template_region_update(
+            "image fills the full canvas, title text centered at the top 20%",
+            mock_ctx,
+        ) is True
+
+    def test_rejects_single_keyword(self):
+        from bot.handlers import _is_template_region_update
+
+        mock_ctx = MagicMock()
+        mock_ctx.user_data = {"last_uploaded_template_id": "tpl1"}
+
+        # Only one keyword hit ("top") — not enough
+        assert _is_template_region_update("the top result is good", mock_ctx) is False

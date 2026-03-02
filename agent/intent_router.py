@@ -270,9 +270,13 @@ async def classify_intent(
                 raw_message=message,
                 routed_via="table",
             )
+        params = {}
+        if intent == "reject" and len(normalized.split()) <= 2:
+            params["needs_feedback_prompt"] = True
         return RoutingResult(
             intent=intent,
             confidence=0.95,
+            parameters=params,
             raw_message=message,
             routed_via="table",
         )

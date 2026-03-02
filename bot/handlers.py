@@ -63,6 +63,50 @@ def _is_template_from_ref_intent(caption: str) -> bool:
     return any(p in lower for p in _TEMPLATE_FROM_REF_PATTERNS)
 
 
+# Patterns indicating the user wants to use their uploaded photo directly (no AI generation)
+_DIRECT_PHOTO_PATTERNS = [
+    "use this", "post this", "announce this", "use this photo",
+    "use this image", "publish this", "tweet this", "share this",
+    "put this in", "use my photo", "use my image",
+]
+
+
+# Keywords that suggest the user is describing template region positions
+_REGION_POSITION_KEYWORDS = [
+    "top", "bottom", "left", "right", "centered", "center",
+    "full canvas", "full width", "entire background", "background",
+    "text goes", "text across", "image zone", "image area",
+    "title", "subtitle", "headline",
+]
+
+
+def _is_template_region_update(message: str, context: ContextTypes.DEFAULT_TYPE) -> bool:
+    """Check if a message describes template region positions after a recent upload.
+
+    Returns True if:
+    - A template was uploaded within the last 2 messages (user_data has last_uploaded_template_id)
+    - The message contains position keywords + percentage or layout terms
+    """
+    user_data = context.user_data if context else {}
+    template_id = user_data.get("last_uploaded_template_id")
+    if not template_id:
+        return False
+
+    lower = message.lower()
+    keyword_hits = sum(1 for kw in _REGION_POSITION_KEYWORDS if kw in lower)
+    has_percentage = "%" in lower
+    has_region_type = any(w in lower for w in ("text", "image", "logo"))
+
+    # Need at least 2 keyword hits AND (a percentage or a region type word)
+    return keyword_hits >= 2 and (has_percentage or has_region_type)
+
+
+def _is_direct_photo_intent(caption: str) -> bool:
+    """Check if a photo caption means 'use this photo directly, don't regenerate it'."""
+    lower = caption.lower().strip()
+    return any(p in lower for p in _DIRECT_PHOTO_PATTERNS)
+
+
 def _rate_limited(user_id: int) -> bool:
     """Check if user is sending requests too fast. Returns True if blocked."""
     now = time.time()
@@ -1443,6 +1487,45 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         await _handle_template_from_reference(update, context, tmp_path)
         return
 
+    # --- Direct photo mode: user wants to use their photo as-is in a template ---
+    if caption and _is_direct_photo_intent(caption):
+        from agent import template_memory as _tm
+        cfg = _cc.get_config()
+        memory = _tm.TemplateMemory()
+        template = memory.get_template_for_content_type("announcement")
+        if template and cfg.compositor_enabled:
+            state.clear_reference_image()
+            if context:
+                context.user_data["direct_photo_path"] = tmp_path
+            await update.message.reply_text("got it, composing with your photo directly...")
+
+            if _rate_limited(update.effective_user.id):
+                await update.message.reply_text(
+                    f"Please wait {_RATE_LIMIT_SECONDS}s between requests."
+                )
+                return
+
+            if state.has_pending():
+                await update.message.reply_text(
+                    "You have a pending draft. /approve, /reject, or /cancel it first.",
+                    parse_mode="HTML",
+                )
+                return
+
+            # Strip the direct-photo keywords from caption to get a content hint
+            content_hint = caption
+            for p in _DIRECT_PHOTO_PATTERNS:
+                content_hint = content_hint.lower().replace(p, "").strip()
+            if not content_hint:
+                content_hint = "create an announcement"
+            request = f"{content_hint}\n\n[DIRECT PHOTO: {tmp_path}]\n[generate text only, do NOT call generate_image]"
+
+            if settings.AGENT_MODE == "agent":
+                await _handle_agent_mode(update, request)
+            else:
+                await _handle_pipeline_mode(update, request)
+            return
+
     # Check if caption matches a style profile name (e.g. "3d_card" or "style 3d_card")
     if caption:
         style_name = caption
@@ -1513,6 +1596,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     tplref = (context.user_data or {}).get("tplref_pending") if context else None
     if isinstance(tplref, dict) and "design" in tplref:
         await _handle_tplref_adjustment(update, context, request)
+        return
+
+    # Template region update intercept — user describing region positions after upload
+    if _is_template_region_update(request, context):
+        await _handle_template_region_update(update, context, request)
         return
 
     # Onboarding intercept — handle messages during onboarding flow (highest priority)
@@ -1598,7 +1686,11 @@ async def _route_intent(update: Update, context: ContextTypes.DEFAULT_TYPE, mess
         return True
 
     if intent == "reject" and confidence >= 0.8:
-        fb = result.parameters.get("feedback", message)
+        if result.parameters.get("needs_feedback_prompt"):
+            # Bare reject word (e.g. "no") — prompt for specific feedback
+            fb = ""
+        else:
+            fb = result.parameters.get("feedback", message)
         await _do_reject(update, context, feedback_text=fb, source="router")
         return True
 
@@ -1694,6 +1786,13 @@ async def _handle_agent_mode(update: Update, request: str) -> None:
     """Run the agent tool-use loop for a content request."""
     await update.message.chat.send_action("typing")
 
+    # Extract direct photo path if embedded in the request
+    direct_photo_path = None
+    import re as _re_mod
+    _dp_match = _re_mod.search(r"\[DIRECT PHOTO: (.+?)\]", request)
+    if _dp_match:
+        direct_photo_path = _dp_match.group(1)
+
     # If a reference image is stored, inject it into the request for the agent
     ref_path = state.get_reference_image()
     if ref_path and Path(ref_path).exists():
@@ -1733,6 +1832,11 @@ async def _handle_agent_mode(update: Update, request: str) -> None:
 
         image_url = result.image_url
         image_urls = result.image_urls
+
+        # Direct photo mode: use the user's photo for template composition
+        if direct_photo_path and Path(direct_photo_path).exists():
+            image_url = direct_photo_path
+            logger.info("Direct photo mode: using %s as image source", direct_photo_path)
 
         # Save pending state
         state.save_pending(
@@ -2055,6 +2159,62 @@ async def template_upload_command(update: Update, context: ContextTypes.DEFAULT_
     )
 
 
+async def template_test_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /template_test [content_type] — render a test composition with placeholder content."""
+    if not _authorized(update.effective_user.id):
+        return
+
+    from agent import template_memory as _tm
+
+    content_type = " ".join(context.args).strip() if context.args else "announcement"
+    memory = _tm.TemplateMemory()
+    template = memory.get_template_for_content_type(content_type)
+    if not template:
+        await update.message.reply_text(
+            "No templates registered. Use /template_upload to add one.",
+        )
+        return
+
+    await update.message.chat.send_action("upload_photo")
+
+    # Create placeholder image using brand primary color
+    cfg = _cc.get_config()
+    primary = cfg.colors.get("primary")
+    if primary:
+        primary_rgb = primary.rgb
+    else:
+        primary_rgb = (107, 159, 212)
+    placeholder = _PILImage.new("RGBA", (template.width, template.height), primary_rgb + (255,))
+    placeholder_path = str(Path(tempfile.gettempdir()) / f"test_placeholder_{int(time.time())}.png")
+    placeholder.save(placeholder_path, "PNG")
+
+    test_draft = {"title": "HEADLINE HERE", "subtitle": "Subtitle text goes here"}
+
+    try:
+        result = await _tm.apply_template(template, placeholder_path, test_draft)
+        if result:
+            regions_str = ", ".join(f"{r.type}({r.width}x{r.height})" for r in template.regions)
+            await update.message.reply_photo(
+                photo=result,
+                caption=(
+                    f"Template test: <b>{_esc(template.name)}</b> (<code>{_esc(template.id)}</code>)\n"
+                    f"Aspect: {_esc(template.aspect_ratio)} | Regions: {_esc(regions_str)}\n"
+                    f"Content type: {_esc(content_type)}"
+                ),
+                parse_mode="HTML",
+            )
+        else:
+            await update.message.reply_text("Template composition failed — check that the template has an image region.")
+    except Exception as e:
+        logger.error("Template test failed: %s", e)
+        await update.message.reply_text(f"Template test failed: {_esc(str(e))}", parse_mode="HTML")
+    finally:
+        try:
+            Path(placeholder_path).unlink(missing_ok=True)
+        except Exception:
+            pass
+
+
 async def template_from_reference_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle /template_from_reference [name] — generate a branded template from a reference image."""
     if not _authorized(update.effective_user.id):
@@ -2263,6 +2423,103 @@ async def tplref_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         )
 
 
+async def _handle_template_region_update(
+    update: Update, context: ContextTypes.DEFAULT_TYPE, description: str,
+) -> None:
+    """Convert a natural language region description into pixel coordinates and update the template."""
+    from agent import template_memory as _tm
+
+    template_id = context.user_data.get("last_uploaded_template_id", "")
+    if not template_id:
+        await update.message.reply_text("No recently uploaded template to update.")
+        return
+
+    memory = _tm.TemplateMemory()
+    templates = memory.list_templates()
+    template = next((t for t in templates if t.id == template_id), None)
+    if not template:
+        await update.message.reply_text(
+            f"Template <code>{_esc(template_id)}</code> not found in manifest.",
+            parse_mode="HTML",
+        )
+        return
+
+    await update.message.chat.send_action("typing")
+    await update.message.reply_text("Parsing region positions...")
+
+    try:
+        new_regions = await _tm.parse_region_description(
+            description, template.width, template.height,
+        )
+    except Exception as e:
+        logger.error("Region parsing failed: %s", e)
+        await update.message.reply_text(f"Region parsing failed: {_esc(str(e))}", parse_mode="HTML")
+        return
+
+    if not new_regions:
+        await update.message.reply_text("Couldn't parse any regions from that description. Try being more specific.")
+        return
+
+    # Update the template
+    updated = memory.update_template_regions(template_id, new_regions)
+    if not updated:
+        await update.message.reply_text("Failed to update template regions.")
+        return
+
+    # Clear the tracking flag so follow-up messages go to normal routing
+    context.user_data.pop("last_uploaded_template_id", None)
+
+    # Confirm with region coordinates
+    region_lines = []
+    for r in new_regions:
+        region_lines.append(
+            f"  {r.type}: ({r.x}, {r.y}, {r.width}, {r.height}) — {r.description}"
+        )
+    regions_display = "\n".join(region_lines)
+    await update.message.reply_text(
+        f"<b>Template updated</b> — <code>{_esc(template_id)}</code>\n\n"
+        f"<pre>{_esc(regions_display)}</pre>",
+        parse_mode="HTML",
+    )
+
+    # Auto-run template_test to show what it looks like
+    await update.message.chat.send_action("upload_photo")
+
+    # Find a content type for the template
+    content_type = updated.content_types[0] if updated.content_types else "announcement"
+
+    cfg = _cc.get_config()
+    primary = cfg.colors.get("primary")
+    primary_rgb = primary.rgb if primary else (107, 159, 212)
+    placeholder = _PILImage.new("RGBA", (updated.width, updated.height), primary_rgb + (255,))
+    placeholder_path = str(Path(tempfile.gettempdir()) / f"test_placeholder_{int(time.time())}.png")
+    placeholder.save(placeholder_path, "PNG")
+
+    test_draft = {"title": "HEADLINE HERE", "subtitle": "Subtitle text goes here"}
+
+    try:
+        result = await _tm.apply_template(updated, placeholder_path, test_draft)
+        if result:
+            regions_str = ", ".join(f"{r.type}({r.width}x{r.height})" for r in updated.regions)
+            await update.message.reply_photo(
+                photo=result,
+                caption=(
+                    f"Template test: <b>{_esc(updated.name)}</b>\n"
+                    f"Regions: {_esc(regions_str)}"
+                ),
+                parse_mode="HTML",
+            )
+        else:
+            await update.message.reply_text("Template test composition failed — check that the template has an image region.")
+    except Exception as e:
+        logger.warning("Auto template test failed: %s", e)
+    finally:
+        try:
+            Path(placeholder_path).unlink(missing_ok=True)
+        except Exception:
+            pass
+
+
 async def _handle_template_upload(update: Update, context: ContextTypes.DEFAULT_TYPE, tmp_path: str) -> None:
     """Process a template image upload — analyze and register."""
     from agent import template_memory as _tm
@@ -2288,6 +2545,9 @@ async def _handle_template_upload(update: Update, context: ContextTypes.DEFAULT_
             name=user_name or f"Template {int(time.time()) % 10000}",
         )
 
+        # Track the uploaded template so follow-up messages can update its regions
+        context.user_data["last_uploaded_template_id"] = template.id
+
         regions_str = ", ".join(f"{r.type} ({r.width}x{r.height})" for r in template.regions)
         await update.message.reply_text(
             f"<b>Template Registered</b>\n\n"
@@ -2295,7 +2555,8 @@ async def _handle_template_upload(update: Update, context: ContextTypes.DEFAULT_
             f"Size: {template.width}x{template.height} ({template.aspect_ratio})\n"
             f"Regions: {_esc(regions_str) or 'none detected'}\n"
             f"Notes: {_esc(template.analysis_notes or 'none')}\n\n"
-            f"This template will be used for future posts.",
+            f"This template will be used for future posts.\n"
+            f"You can describe region positions to adjust (e.g. \"top text across the top 15%, image fills the full canvas\").",
             parse_mode="HTML",
         )
     except Exception as e:

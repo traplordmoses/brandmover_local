@@ -460,7 +460,11 @@ async def _handle_generate_image(
     model_id, reason = image_gen.select_model(content_type, prompt)
     tracker.log_api(f"replicate:{model_id.split('/')[-1]}")
 
-    url = await image_gen.generate_image(prompt, content_type=content_type)
+    # Query template image region for optimal aspect ratio
+    from agent import template_memory as _tm
+    region_aspect = _tm.get_image_region_aspect_ratio(content_type)
+
+    url = await image_gen.generate_image(prompt, content_type=content_type, aspect_ratio=region_aspect)
 
     if url:
         try:
