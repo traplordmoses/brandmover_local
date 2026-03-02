@@ -292,6 +292,7 @@
     <button class="tab" onclick="showTab('security', event)" style="color:var(--red);">Security &amp; Perf <span class="tab-new" style="background:var(--red-dim);color:var(--red);border-color:var(--red);">NEW</span></button>
     <button class="tab" onclick="showTab('eval', event)">Eval <span class="tab-new">647</span></button>
     <button class="tab" onclick="showTab('setup', event)">Setup</button>
+    <button class="tab" onclick="showTab('upgrade', event)">Upgrade Guide</button>
     <button class="tab" onclick="showTab('video', event)" style="color:var(--yellow);">Video <span class="tab-new" style="background:var(--yellow-dim);color:var(--yellow);border-color:var(--yellow);">FUTURE</span></button>
   </div>
 
@@ -1260,6 +1261,244 @@
         </div>
       </div>
     </div>
+  </div>
+
+  <!-- ═══════════════════════════════════════════════════
+       UPGRADE GUIDE TAB
+  ════════════════════════════════════════════════════ -->
+  <div id="panel-upgrade" class="panel">
+    <div class="section-head">
+      <h3>UPGRADE GUIDE — UPDATING FROM A PREVIOUS VERSION</h3>
+      <div class="section-line"></div>
+      <div class="section-badge tag-orange">v6 → v7 → v8</div>
+    </div>
+
+    <!-- Quick upgrade -->
+    <div class="hero-block" style="border-color:var(--green);">
+      <div style="position:relative;z-index:1;">
+        <div style="font-family:'Space Mono',monospace;font-size:10px;color:var(--green);letter-spacing:0.15em;margin-bottom:12px;">QUICKSTART — PULL &amp; UPDATE</div>
+        <div style="font-size:18px;font-weight:800;margin-bottom:16px;">3 Commands to Upgrade</div>
+        <div style="background:#0a0a0a;border:1px solid var(--border);border-radius:8px;padding:20px;font-family:'Space Mono',monospace;font-size:12px;line-height:2.2;color:var(--muted);">
+          <div style="color:var(--green);">$ git pull origin main</div>
+          <div style="color:var(--green);">$ pip install -r requirements.txt</div>
+          <div style="color:var(--green);">$ python main.py</div>
+          <div style="color:#444;margin-top:8px;"># That's it. State files auto-migrate. Brand files untouched.</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Version history -->
+    <div class="section-head">
+      <h3>VERSION HISTORY — WHAT CHANGED</h3>
+      <div class="section-line"></div>
+    </div>
+
+    <!-- v8 -->
+    <div style="background:var(--card);border:2px solid var(--orange);border-radius:8px;padding:24px;margin-bottom:16px;position:relative;">
+      <div style="position:absolute;top:-1px;right:20px;background:var(--bg);padding:0 8px;font-family:'Space Mono',monospace;font-size:9px;color:var(--orange);">CURRENT</div>
+      <div style="display:flex;align-items:center;gap:16px;margin-bottom:16px;">
+        <div style="font-size:28px;font-weight:800;color:var(--orange);font-family:'Space Mono',monospace;">v8</div>
+        <div>
+          <div style="font-size:14px;font-weight:700;">Deterministic Templates + Security Hardening + Performance</div>
+          <div style="font-size:11px;color:var(--muted);">Mar 2026 — 647 tests, 44 commands, 35 modules</div>
+        </div>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
+        <div>
+          <div style="font-family:'Space Mono',monospace;font-size:10px;color:var(--teal);margin-bottom:8px;">NEW MODULES</div>
+          <div style="font-size:11px;color:var(--muted);line-height:1.8;font-family:'Space Mono',monospace;">
+            agent/_client.py <span style="color:var(--teal);">← singleton API clients</span><br>
+            agent/template_spec.py <span style="color:var(--teal);">← TemplateSpec dataclass</span><br>
+            agent/template_renderer.py <span style="color:var(--teal);">← PIL deterministic renderer</span><br>
+            agent/font_manager.py <span style="color:var(--teal);">← Google Fonts download + cache</span>
+          </div>
+        </div>
+        <div>
+          <div style="font-family:'Space Mono',monospace;font-size:10px;color:var(--red);margin-bottom:8px;">BREAKING CHANGES</div>
+          <div style="font-size:11px;color:var(--muted);line-height:1.8;">
+            <strong style="color:var(--white);">Test mocks</strong> — All <code style="color:var(--teal);">agent.X.anthropic.AsyncAnthropic</code> mocks must target <code style="color:var(--teal);">agent._client.anthropic.AsyncAnthropic</code> instead<br>
+            <strong style="color:var(--white);">numpy required</strong> — Added to requirements.txt for vectorized gradient rendering<br>
+            <strong style="color:var(--white);">httpx singletons</strong> — No more <code style="color:var(--teal);">async with httpx.AsyncClient()</code> — use <code style="color:var(--teal);">get_httpx()</code> from _client.py
+          </div>
+        </div>
+      </div>
+      <div style="margin-top:16px;">
+        <div style="font-family:'Space Mono',monospace;font-size:10px;color:var(--green);margin-bottom:8px;">NEW COMMANDS</div>
+        <div style="display:flex;gap:6px;flex-wrap:wrap;">
+          <span style="background:var(--teal-dim);color:var(--teal);border:1px solid var(--teal);font-family:'Space Mono',monospace;font-size:9px;padding:2px 8px;border-radius:3px;">/template_from_reference</span>
+          <span style="background:var(--teal-dim);color:var(--teal);border:1px solid var(--teal);font-family:'Space Mono',monospace;font-size:9px;padding:2px 8px;border-radius:3px;">/template_import</span>
+          <span style="background:var(--teal-dim);color:var(--teal);border:1px solid var(--teal);font-family:'Space Mono',monospace;font-size:9px;padding:2px 8px;border-radius:3px;">/font_upload</span>
+          <span style="background:var(--teal-dim);color:var(--teal);border:1px solid var(--teal);font-family:'Space Mono',monospace;font-size:9px;padding:2px 8px;border-radius:3px;">/template_test</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- v7 -->
+    <div style="background:var(--card);border:1px solid var(--border);border-radius:8px;padding:24px;margin-bottom:16px;">
+      <div style="display:flex;align-items:center;gap:16px;margin-bottom:16px;">
+        <div style="font-size:28px;font-weight:800;color:var(--muted);font-family:'Space Mono',monospace;">v7</div>
+        <div>
+          <div style="font-size:14px;font-weight:700;">Brand-Agnostic Platform + LoRA Versioning</div>
+          <div style="font-size:11px;color:var(--muted);">Feb 2026 — 253 tests, 31 commands, 23 modules</div>
+        </div>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
+        <div>
+          <div style="font-family:'Space Mono',monospace;font-size:10px;color:var(--orange);margin-bottom:8px;">KEY CHANGES</div>
+          <div style="font-size:11px;color:var(--muted);line-height:1.8;">
+            BrandConfig refactor — all hardcoded brand refs removed<br>
+            LoRA manifest-based version management<br>
+            10 new modules (compositor_config, content_types, brand_check, asset_gen, ingest, lora_pipeline, generation_history, auto_state, resource_log, onchain)<br>
+            seedream-4.5 replaces ideogram-v3
+          </div>
+        </div>
+        <div>
+          <div style="font-family:'Space Mono',monospace;font-size:10px;color:var(--red);margin-bottom:8px;">MIGRATION FROM v6</div>
+          <div style="font-size:11px;color:var(--muted);line-height:1.8;">
+            <strong style="color:var(--white);">guidelines.md format changed</strong> — 14 sections now (was ~8). Run <code style="color:var(--teal);">/setup</code> or <code style="color:var(--teal);">/ingest</code> to regenerate from your brand PDF<br>
+            <strong style="color:var(--white);">State files moved</strong> — From root to <code style="color:var(--teal);">state/</code> directory. Auto-migrates on first run.<br>
+            <strong style="color:var(--white);">AGENT_MODE env var</strong> — Set to <code style="color:var(--teal);">agent</code> (recommended) or <code style="color:var(--teal);">pipeline</code>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- v6 and earlier -->
+    <div style="background:var(--card);border:1px solid var(--border);border-radius:8px;padding:24px;margin-bottom:32px;opacity:0.7;">
+      <div style="display:flex;align-items:center;gap:16px;margin-bottom:16px;">
+        <div style="font-size:28px;font-weight:800;color:var(--muted);font-family:'Space Mono',monospace;">v6</div>
+        <div>
+          <div style="font-size:14px;font-weight:700;color:var(--muted);">Initial Agent Mode + img2img + Style Profiles</div>
+          <div style="font-size:11px;color:var(--muted);">Feb 2026 — Flux-kontext-pro, mascot consistency, feedback loop</div>
+        </div>
+      </div>
+      <div style="font-size:11px;color:var(--muted);line-height:1.8;">
+        First version with agent mode (8 tools), img2img via flux-kontext-pro, style profiles, /edit command, parallel x3 generation, and the self-improving feedback loop. If upgrading from v6, pull latest and run <code style="color:var(--teal);">pip install -r requirements.txt</code> — all state files auto-migrate.
+      </div>
+    </div>
+
+    <!-- Detailed upgrade steps -->
+    <div class="section-head">
+      <h3>STEP-BY-STEP UPGRADE</h3>
+      <div class="section-line"></div>
+    </div>
+
+    <div style="display:grid;grid-template-columns:1fr;gap:12px;margin-bottom:32px;max-width:900px;">
+
+      <div style="background:var(--card);border:1px solid var(--border);border-radius:8px;padding:20px;display:flex;gap:16px;align-items:flex-start;">
+        <div style="background:var(--orange);color:#000;font-family:'Space Mono',monospace;font-size:14px;font-weight:700;padding:4px 10px;border-radius:4px;white-space:nowrap;">1</div>
+        <div>
+          <div style="font-size:13px;font-weight:700;color:var(--white);margin-bottom:6px;">Back up your brand folder</div>
+          <div style="font-size:11px;color:var(--muted);line-height:1.7;">Your <code style="color:var(--teal);">brand/</code> folder contains your guidelines, references, style profiles, and LoRA data. Copy it somewhere safe before pulling.</div>
+          <div style="background:#0a0a0a;border-radius:4px;padding:10px;margin-top:8px;font-family:'Space Mono',monospace;font-size:11px;color:var(--muted);">$ cp -r brand/ ~/brandmover_backup/brand/</div>
+        </div>
+      </div>
+
+      <div style="background:var(--card);border:1px solid var(--border);border-radius:8px;padding:20px;display:flex;gap:16px;align-items:flex-start;">
+        <div style="background:var(--orange);color:#000;font-family:'Space Mono',monospace;font-size:14px;font-weight:700;padding:4px 10px;border-radius:4px;white-space:nowrap;">2</div>
+        <div>
+          <div style="font-size:13px;font-weight:700;color:var(--white);margin-bottom:6px;">Pull latest code</div>
+          <div style="font-size:11px;color:var(--muted);line-height:1.7;">This updates all agent/, bot/, config/ modules. Your brand/ folder is gitignored (references, assets) so it won't be overwritten.</div>
+          <div style="background:#0a0a0a;border-radius:4px;padding:10px;margin-top:8px;font-family:'Space Mono',monospace;font-size:11px;color:var(--muted);">$ git pull origin main</div>
+        </div>
+      </div>
+
+      <div style="background:var(--card);border:1px solid var(--border);border-radius:8px;padding:20px;display:flex;gap:16px;align-items:flex-start;">
+        <div style="background:var(--orange);color:#000;font-family:'Space Mono',monospace;font-size:14px;font-weight:700;padding:4px 10px;border-radius:4px;white-space:nowrap;">3</div>
+        <div>
+          <div style="font-size:13px;font-weight:700;color:var(--white);margin-bottom:6px;">Install new dependencies</div>
+          <div style="font-size:11px;color:var(--muted);line-height:1.7;">v8 added <code style="color:var(--teal);">numpy</code> for vectorized gradient rendering in templates. Other deps may have version bumps.</div>
+          <div style="background:#0a0a0a;border-radius:4px;padding:10px;margin-top:8px;font-family:'Space Mono',monospace;font-size:11px;color:var(--muted);">$ pip install -r requirements.txt</div>
+        </div>
+      </div>
+
+      <div style="background:var(--card);border:1px solid var(--border);border-radius:8px;padding:20px;display:flex;gap:16px;align-items:flex-start;">
+        <div style="background:var(--orange);color:#000;font-family:'Space Mono',monospace;font-size:14px;font-weight:700;padding:4px 10px;border-radius:4px;white-space:nowrap;">4</div>
+        <div>
+          <div style="font-size:13px;font-weight:700;color:var(--white);margin-bottom:6px;">Check your .env</div>
+          <div style="font-size:11px;color:var(--muted);line-height:1.7;">Verify these are set. New optional keys for v8 template features:</div>
+          <div style="background:#0a0a0a;border-radius:4px;padding:10px;margin-top:8px;font-family:'Space Mono',monospace;font-size:11px;line-height:2;color:var(--muted);">
+            <div><span style="color:var(--orange);">TELEGRAM_BOT_TOKEN</span>=... <span style="color:#444;"># required</span></div>
+            <div><span style="color:var(--orange);">TELEGRAM_ALLOWED_USER_ID</span>=... <span style="color:#444;"># required</span></div>
+            <div><span style="color:var(--orange);">ANTHROPIC_API_KEY</span>=... <span style="color:#444;"># required</span></div>
+            <div><span style="color:var(--orange);">REPLICATE_API_TOKEN</span>=... <span style="color:#444;"># required for image gen</span></div>
+            <div><span style="color:var(--orange);">AGENT_MODE</span>=agent <span style="color:#444;"># recommended</span></div>
+            <div><span style="color:var(--teal);">FIGMA_ACCESS_TOKEN</span>=... <span style="color:#444;"># optional — for /template_import</span></div>
+            <div><span style="color:var(--teal);">X_API_KEY</span>=... <span style="color:#444;"># optional — for X/Twitter posting</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div style="background:var(--card);border:1px solid var(--border);border-radius:8px;padding:20px;display:flex;gap:16px;align-items:flex-start;">
+        <div style="background:var(--orange);color:#000;font-family:'Space Mono',monospace;font-size:14px;font-weight:700;padding:4px 10px;border-radius:4px;white-space:nowrap;">5</div>
+        <div>
+          <div style="font-size:13px;font-weight:700;color:var(--white);margin-bottom:6px;">Run tests (optional but recommended)</div>
+          <div style="font-size:11px;color:var(--muted);line-height:1.7;">Verify everything works in your environment. All 647 tests should pass.</div>
+          <div style="background:#0a0a0a;border-radius:4px;padding:10px;margin-top:8px;font-family:'Space Mono',monospace;font-size:11px;color:var(--muted);">$ python -m pytest tests/ -v</div>
+        </div>
+      </div>
+
+      <div style="background:var(--card);border:1px solid var(--green);border-radius:8px;padding:20px;display:flex;gap:16px;align-items:flex-start;">
+        <div style="background:var(--green);color:#000;font-family:'Space Mono',monospace;font-size:14px;font-weight:700;padding:4px 10px;border-radius:4px;white-space:nowrap;">6</div>
+        <div>
+          <div style="font-size:13px;font-weight:700;color:var(--green);margin-bottom:6px;">Start the bot</div>
+          <div style="font-size:11px;color:var(--muted);line-height:1.7;">State files auto-migrate from old locations. Brand files are preserved. New features are available immediately.</div>
+          <div style="background:#0a0a0a;border-radius:4px;padding:10px;margin-top:8px;font-family:'Space Mono',monospace;font-size:11px;color:var(--green);">$ python main.py</div>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- What auto-migrates -->
+    <div class="section-head">
+      <h3>AUTOMATIC MIGRATIONS</h3>
+      <div class="section-line"></div>
+    </div>
+
+    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;margin-bottom:32px;">
+      <div style="background:var(--card);border:1px solid var(--green);border-radius:8px;padding:16px;">
+        <div style="font-family:'Space Mono',monospace;font-size:10px;color:var(--green);margin-bottom:8px;">STATE FILES</div>
+        <div style="font-size:11px;color:var(--muted);line-height:1.7;">state.json, feedback.json, auto_post_state.json auto-move from root to <code style="color:var(--teal);">state/</code> directory on first run. No data loss.</div>
+      </div>
+      <div style="background:var(--card);border:1px solid var(--green);border-radius:8px;padding:16px;">
+        <div style="font-family:'Space Mono',monospace;font-size:10px;color:var(--green);margin-bottom:8px;">TEMPLATE MANIFEST</div>
+        <div style="font-size:11px;color:var(--muted);line-height:1.7;">Existing templates in manifest.json get <code style="color:var(--teal);">spec_json: null</code> and <code style="color:var(--teal);">source: "upload"</code> defaults via .get(). No migration needed.</div>
+      </div>
+      <div style="background:var(--card);border:1px solid var(--green);border-radius:8px;padding:16px;">
+        <div style="font-family:'Space Mono',monospace;font-size:10px;color:var(--green);margin-bottom:8px;">BRAND CONFIG</div>
+        <div style="font-size:11px;color:var(--muted);line-height:1.7;">BrandConfig parser handles missing sections gracefully. Old guidelines.md files still work — new sections are optional. Run <code style="color:var(--teal);">/ingest</code> to regenerate with all 14 sections.</div>
+      </div>
+    </div>
+
+    <!-- Common issues -->
+    <div class="section-head">
+      <h3>TROUBLESHOOTING</h3>
+      <div class="section-line"></div>
+    </div>
+
+    <div style="display:grid;grid-template-columns:1fr;gap:8px;margin-bottom:24px;max-width:900px;">
+      <div style="background:var(--card);border-left:3px solid var(--red);border-radius:0 8px 8px 0;padding:16px;">
+        <div style="font-size:12px;font-weight:700;color:var(--red);margin-bottom:4px;">ModuleNotFoundError: No module named 'numpy'</div>
+        <div style="font-size:11px;color:var(--muted);">Run <code style="color:var(--teal);">pip install -r requirements.txt</code> — numpy was added in v8 for template rendering.</div>
+      </div>
+      <div style="background:var(--card);border-left:3px solid var(--red);border-radius:0 8px 8px 0;padding:16px;">
+        <div style="font-size:12px;font-weight:700;color:var(--red);margin-bottom:4px;">Tests failing with "module has no attribute AsyncAnthropic"</div>
+        <div style="font-size:11px;color:var(--muted);">v8 uses singleton clients. Update test mocks from <code style="color:var(--teal);">agent.X.anthropic.AsyncAnthropic</code> to <code style="color:var(--teal);">agent._client.anthropic.AsyncAnthropic</code>.</div>
+      </div>
+      <div style="background:var(--card);border-left:3px solid var(--red);border-radius:0 8px 8px 0;padding:16px;">
+        <div style="font-size:12px;font-weight:700;color:var(--red);margin-bottom:4px;">State tests failing (stale cache)</div>
+        <div style="font-size:11px;color:var(--muted);">Add <code style="color:var(--teal);">from agent.state import invalidate_state_cache</code> and call it in your conftest.py autouse fixture before each test.</div>
+      </div>
+      <div style="background:var(--card);border-left:3px solid var(--red);border-radius:0 8px 8px 0;padding:16px;">
+        <div style="font-size:12px;font-weight:700;color:var(--red);margin-bottom:4px;">Compositor background looks wrong after upgrade</div>
+        <div style="font-size:11px;color:var(--muted);">Background cache keys changed in v8. Run the bot once — new cache keys will regenerate. Or call <code style="color:var(--teal);">clear_font_cache()</code> to force refresh.</div>
+      </div>
+      <div style="background:var(--card);border-left:3px solid var(--orange);border-radius:0 8px 8px 0;padding:16px;">
+        <div style="font-size:12px;font-weight:700;color:var(--orange);margin-bottom:4px;">Brand guidelines missing new sections</div>
+        <div style="font-size:11px;color:var(--muted);">Your old guidelines.md will still work, but you won't have VISUAL EFFECTS, LAYOUT PROFILES, or LAYOUT MAPPINGS sections. Run <code style="color:var(--teal);">/ingest</code> with your brand PDF to regenerate with all 14 sections, or add them manually.</div>
+      </div>
+    </div>
+
   </div>
 
   <!-- ═══════════════════════════════════════════════════
