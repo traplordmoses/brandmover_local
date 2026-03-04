@@ -1,0 +1,86 @@
+YOUR BRAND — MASTER 3D GENERATION PROMPT
+
+This is a controlled 3D asset generation task for your brand.
+Customize the visual universe, color palette, materials, and lighting
+below to match your brand identity.
+
+====================================================================
+
+VISUAL UNIVERSE
+
+Describe the visual world your 3D assets live in:
+- Environment type (e.g., deep-space, underwater, studio, nature)
+- Overall mood (e.g., optimistic futurism, dark elegance, playful)
+- Key visual elements (e.g., glass morphism, neon, organic shapes)
+
+Core visual DNA:
+- Material style 1 (e.g., frosted glass, metallic, matte)
+- Material style 2
+- Lighting mood (e.g., neon rim light, soft studio, dramatic)
+- Texture preferences (e.g., noise overlay, clean, textured)
+
+====================================================================
+
+COLOR PALETTE
+
+PRIMARY ACCENTS:
+- Color 1 #hex — description and usage
+- Color 2 #hex — description and usage
+- Color 3 #hex — description and usage
+
+BACKGROUND:
+- Primary background #hex
+- Secondary depth layer #hex
+- NEVER use: list prohibited background colors
+
+COLOR RULES:
+- Which color dominates?
+- How do colors interact with materials?
+- Shadow color preferences
+
+====================================================================
+
+MATERIAL LIBRARY
+
+List your brand's approved materials:
+
+MATERIAL 1 (e.g., FROSTED GLASS)
+- Translucency, clarity, edge behavior
+- Light interaction
+- Usage: when to use this material
+
+MATERIAL 2 (e.g., METALLIC)
+- Surface finish, reflectivity
+- Color interaction
+- Usage: when to use this material
+
+====================================================================
+
+LIGHTING SYSTEM
+
+Primary light:
+- Color and position
+- Intensity and purpose
+
+Secondary light:
+- Color and position
+- Intensity and purpose
+
+Ambient:
+- Color and intensity
+
+LIGHTING RULES:
+- Mandatory lighting features
+- Prohibited lighting styles
+
+====================================================================
+
+FRAMING & CAMERA
+
+- Camera angle preferences
+- Subject framing (% of frame)
+- Focal length equivalent
+
+====================================================================
+
+GENERATION REQUEST

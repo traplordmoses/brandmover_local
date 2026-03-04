@@ -1,0 +1,142 @@
+# Your Brand Name — Brand Guidelines
+# For use by BrandMover Agent
+
+---
+
+## BRAND IDENTITY
+
+**Brand Name:** Your Brand
+**Tagline:** your tagline here
+**Website:** yourbrand.com
+**Category:** Your category
+**X Handle:** @YourHandle
+**Product:** Brief product description.
+
+**Brand Positioning:**
+Describe your brand's position in the market. What makes it unique? What values does it represent?
+
+**Key Brand Themes:** Theme 1, Theme 2, Theme 3
+
+**Posting cadence:** 2-4 posts per day
+
+---
+
+## VOICE & TONE
+
+**Core personality traits:**
+- Trait 1
+- Trait 2
+- Trait 3
+
+**Writing style:**
+- Describe preferred capitalization, punctuation, sentence length
+- Target character count for posts
+- Words or phrases to avoid
+
+**Tone by content type:**
+- Announcements: e.g., confident, understated
+- Community posts: e.g., warm, inclusive
+- Humorous: e.g., self-aware, playful
+
+**Emoji usage:**
+- How many emojis per post (0-1 recommended)
+- Preferred emojis if any
+
+**Never use:**
+- List banned words, phrases, or styles
+
+---
+
+## COLORS
+
+| Role | Name | Hex | RGB | Notes |
+|------|------|-----|-----|-------|
+| Primary | Your Primary | `#000000` | (0, 0, 0) | Main brand color |
+| Secondary | Your Secondary | `#000000` | (0, 0, 0) | Supporting color |
+| Accent | Your Accent | `#000000` | (0, 0, 0) | Highlights, CTAs |
+| Background | Your Background | `#000000` | (0, 0, 0) | Canvas color |
+| Text | Your Text Color | `#000000` | (0, 0, 0) | Primary text |
+
+**Color rules:**
+- Describe how colors should be used together
+
+---
+
+## TYPOGRAPHY
+
+| Use | Font | Weight | Style |
+|-----|------|--------|-------|
+| Display / Headlines | Your Display Font | Bold | Uppercase |
+| Body Text | Your Body Font | Regular | Sentence case |
+
+---
+
+## LOGO USAGE
+
+**The Logo:** Describe your logo briefly.
+
+<!-- Place your logo file as brand/assets/logo.png -->
+
+---
+
+## ILLUSTRATION STYLE
+
+**Visual aesthetic:**
+- Describe your visual style and art direction
+- Reference specific aesthetics or design movements
+- List materials, textures, and effects to use
+
+**Image generation prompt guidance:**
+- Key phrases to include in image generation prompts
+- Materials and lighting preferences
+- What to avoid visually
+
+**Technical specs:** Target 1200x675px for X posts.
+
+---
+
+## HASHTAGS
+
+**Brand hashtags:**
+- #YourBrand
+- **Max hashtags per post:** 0-2
+
+---
+
+## CONTENT CATEGORIES
+
+### 1. Announcements
+- Tone: Confident, understated
+- Length: 1-3 sentences
+
+### 2. Community
+- Tone: Warm, inclusive
+- Length: Short prompts or questions
+
+### 3. Educational
+- Tone: Clear, helpful
+- Length: 1-2 sentences
+
+### 4. Humorous
+- Tone: Self-aware, playful
+- Length: Ultra-short
+
+---
+
+## TARGET AUDIENCE
+
+- **Primary:** Describe your main audience
+- **Secondary:** Describe your secondary audience
+- **Tone match:** How to speak to them
+
+---
+
+## NEVER DO
+
+- List things your brand should never do visually or verbally
+
+## COMPOSITOR
+
+| Setting        | Value          |
+|----------------|----------------|
+| Enabled        | true           |
