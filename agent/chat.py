@@ -86,12 +86,13 @@ Only include fields that changed. Keep the tone and style consistent.
 async def handle_modify_last(
     feedback: str,
     context: ConversationContext,
+    user_id: int | None = None,
 ) -> dict | None:
     """Load the pending draft, apply feedback via Sonnet, return modified draft.
 
     Returns the modified draft dict, or None if no pending draft exists.
     """
-    pending = state.get_pending()
+    pending = state.get_pending(user_id=user_id)
     if not pending:
         return None
 

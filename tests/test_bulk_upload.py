@@ -105,7 +105,7 @@ class TestBulkUploadBatching:
     def test_no_caption_batches_instead_of_prompting(self):
         """Photos without captions should batch, not immediately prompt."""
         async def _run():
-            with patch("bot.handlers._authorized", return_value=True), \
+            with patch("bot.handlers._can_operate", return_value=True), \
                  patch("bot.handlers.onboarding") as mock_onboard, \
                  patch("bot.handlers.state"), \
                  patch("bot.handlers._PILImage") as mock_pil, \
@@ -130,7 +130,7 @@ class TestBulkUploadBatching:
     def test_multiple_photos_accumulate_in_batch(self):
         """Multiple rapid uploads should accumulate in the batch list."""
         async def _run():
-            with patch("bot.handlers._authorized", return_value=True), \
+            with patch("bot.handlers._can_operate", return_value=True), \
                  patch("bot.handlers.onboarding") as mock_onboard, \
                  patch("bot.handlers.state"), \
                  patch("bot.handlers._PILImage") as mock_pil, \
@@ -151,7 +151,7 @@ class TestBulkUploadBatching:
     def test_caption_bypasses_batching(self):
         """Photos with captions should NOT go through batching."""
         async def _run():
-            with patch("bot.handlers._authorized", return_value=True), \
+            with patch("bot.handlers._can_operate", return_value=True), \
                  patch("bot.handlers.onboarding") as mock_onboard, \
                  patch("bot.handlers.state") as mock_state, \
                  patch("bot.handlers._PILImage") as mock_pil, \

@@ -1,6 +1,6 @@
 """
 Simple JSON-file state management for pending approvals.
-One pending draft at a time. Stored in state.json at project root.
+One pending draft per user. Admin uses state/state.json, operators use state/draft_{uid}.json.
 """
 
 import asyncio
@@ -25,54 +25,74 @@ if _OLD_STATE_FILE.exists() and not _STATE_FILE.exists():
     shutil.move(str(_OLD_STATE_FILE), str(_STATE_FILE))
 
 
-# In-memory cache to reduce repeated file I/O within the same request flow
-_state_cache: dict | None = None
+def _user_state_file(user_id: int | None = None) -> Path:
+    """Return the state file path for a given user.
+
+    Admin uses the existing state/state.json (backward compatible).
+    Operators get their own state/draft_{uid}.json.
+    """
+    uid = user_id or settings.TELEGRAM_ALLOWED_USER_ID
+    if uid == settings.TELEGRAM_ALLOWED_USER_ID:
+        return _STATE_FILE
+    _STATE_DIR.mkdir(parents=True, exist_ok=True)
+    return _STATE_DIR / f"draft_{uid}.json"
+
+
+# Per-user in-memory cache to reduce repeated file I/O
+_state_caches: dict[int, dict] = {}
 # asyncio.Lock for safe concurrent access from handlers + auto-poster
 _state_lock = asyncio.Lock()
 
 
 def invalidate_state_cache() -> None:
-    """Clear the in-memory state cache. Called by tests and after file changes."""
-    global _state_cache
-    _state_cache = None
+    """Clear all in-memory state caches. Called by tests and after file changes."""
+    _state_caches.clear()
 
 
-def _read_state() -> dict:
-    """Read state.json, return empty dict if missing or corrupt.
+def _resolve_uid(user_id: int | None) -> int:
+    """Resolve None to admin user ID."""
+    return user_id or settings.TELEGRAM_ALLOWED_USER_ID
 
-    Uses an in-memory cache so multiple reads within the same request
+
+def _read_state(user_id: int | None = None) -> dict:
+    """Read state file for a user, return empty dict if missing or corrupt.
+
+    Uses a per-user in-memory cache so multiple reads within the same request
     (has_pending → get_pending → clear_pending) don't re-parse the file.
     """
-    global _state_cache
-    if _state_cache is not None:
-        return _state_cache
-    if not _STATE_FILE.exists():
+    uid = _resolve_uid(user_id)
+    if uid in _state_caches:
+        return _state_caches[uid]
+    state_file = _user_state_file(user_id)
+    if not state_file.exists():
         return {}
     try:
-        data = json.loads(_STATE_FILE.read_text(encoding="utf-8"))
-        _state_cache = data
+        data = json.loads(state_file.read_text(encoding="utf-8"))
+        _state_caches[uid] = data
         return data
     except (json.JSONDecodeError, OSError) as e:
-        logger.warning("Failed to read state.json: %s", e)
+        logger.warning("Failed to read %s: %s", state_file.name, e)
         return {}
 
 
-def _write_state(data: dict) -> None:
-    """Write state dict to state.json and update in-memory cache."""
-    global _state_cache
-    _state_cache = data
-    _STATE_FILE.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+def _write_state(data: dict, user_id: int | None = None) -> None:
+    """Write state dict to user's state file and update in-memory cache."""
+    uid = _resolve_uid(user_id)
+    _state_caches[uid] = data
+    state_file = _user_state_file(user_id)
+    state_file.parent.mkdir(parents=True, exist_ok=True)
+    state_file.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
 
 
-def has_pending() -> bool:
+def has_pending(user_id: int | None = None) -> bool:
     """Check if there is a draft pending approval."""
-    return "pending" in _read_state()
+    return "pending" in _read_state(user_id)
 
 
-def get_pending() -> dict | None:
+def get_pending(user_id: int | None = None) -> dict | None:
     """Return the pending draft dict, or None if nothing is pending."""
-    state = _read_state()
-    return state.get("pending")
+    s = _read_state(user_id)
+    return s.get("pending")
 
 
 def save_pending(
@@ -86,6 +106,7 @@ def save_pending(
     auto_slot: str | None = None,
     auto_event_ids: list[str] | None = None,
     content_type: str | None = None,
+    user_id: int | None = None,
 ) -> None:
     """
     Save a draft as pending approval.
@@ -101,6 +122,7 @@ def save_pending(
         auto_slot: If set, this draft came from the auto-post scheduler (slot name).
         auto_event_ids: On-chain event IDs referenced by this auto-post draft.
         content_type: Content type for LoRA training filtering.
+        user_id: Telegram user ID. None defaults to admin.
     """
     pending = {
         "caption": caption,
@@ -119,7 +141,7 @@ def save_pending(
         pending["auto_event_ids"] = auto_event_ids
     if content_type:
         pending["content_type"] = content_type
-    s = _read_state()
+    s = _read_state(user_id)
 
     # Archive the current pending draft (if any) before overwriting
     old_pending = s.get("pending")
@@ -131,38 +153,42 @@ def save_pending(
         s["draft_history"] = history[-20:]
 
     s["pending"] = pending
-    _write_state(s)
+    _write_state(s, user_id)
     revision = len(s.get("draft_history", [])) + 1
     logger.info("Saved pending draft (rev %d) for: %s", revision, original_request[:80])
 
 
-def clear_pending() -> None:
+def clear_pending(user_id: int | None = None) -> None:
     """Clear any pending draft (preserves other state like last_generated)."""
-    s = _read_state()
+    s = _read_state(user_id)
     s.pop("pending", None)
-    _write_state(s)
+    _write_state(s, user_id)
     logger.info("Cleared pending state")
 
 
-def get_draft_history() -> list[dict]:
+def get_draft_history(user_id: int | None = None) -> list[dict]:
     """Return the list of previous draft revisions (most recent last)."""
-    return _read_state().get("draft_history", [])
+    return _read_state(user_id).get("draft_history", [])
 
 
-def get_draft_revision_count() -> int:
+def get_draft_revision_count(user_id: int | None = None) -> int:
     """Return the current revision number (1 = first draft, 2+ = revised)."""
-    s = _read_state()
+    s = _read_state(user_id)
     if not s.get("pending"):
         return 0
     return len(s.get("draft_history", [])) + 1
 
 
-def clear_draft_history() -> None:
+def clear_draft_history(user_id: int | None = None) -> None:
     """Clear all draft history (e.g., after approval or at end of session)."""
-    s = _read_state()
+    s = _read_state(user_id)
     s.pop("draft_history", None)
-    _write_state(s)
+    _write_state(s, user_id)
 
+
+# ---------------------------------------------------------------------------
+# Reference image — global (brand-level), not per-user
+# ---------------------------------------------------------------------------
 
 def set_reference_image(path: str) -> None:
     """Store a reference image path for use in the next img2img generation."""
@@ -185,39 +211,43 @@ def clear_reference_image() -> None:
     logger.info("Reference image cleared")
 
 
-def set_last_composed(path: str, content_type: str) -> None:
+# ---------------------------------------------------------------------------
+# Last composed / last generated — per-user
+# ---------------------------------------------------------------------------
+
+def set_last_composed(path: str, content_type: str, user_id: int | None = None) -> None:
     """Store the path to the last composed image and its content type."""
-    s = _read_state()
+    s = _read_state(user_id)
     s["last_composed_path"] = path
     s["last_composed_content_type"] = content_type
-    _write_state(s)
+    _write_state(s, user_id)
 
 
-def get_last_composed() -> tuple[str | None, str]:
+def get_last_composed(user_id: int | None = None) -> tuple[str | None, str]:
     """Return (composed_image_path, content_type) or (None, 'default')."""
-    s = _read_state()
+    s = _read_state(user_id)
     return s.get("last_composed_path"), s.get("last_composed_content_type", "default")
 
 
-def clear_last_composed() -> None:
+def clear_last_composed(user_id: int | None = None) -> None:
     """Remove the last composed image metadata."""
-    s = _read_state()
+    s = _read_state(user_id)
     s.pop("last_composed_path", None)
     s.pop("last_composed_content_type", None)
-    _write_state(s)
+    _write_state(s, user_id)
 
 
-def save_last_generated(image_url: str, content_type: str) -> None:
+def save_last_generated(image_url: str, content_type: str, user_id: int | None = None) -> None:
     """Store the URL of the last generated image for /edit reuse."""
-    s = _read_state()
+    s = _read_state(user_id)
     s["last_generated"] = {"image_url": image_url, "content_type": content_type}
-    _write_state(s)
+    _write_state(s, user_id)
     logger.info("Saved last generated image: %s (%s)", image_url[:80], content_type)
 
 
-def get_last_generated() -> tuple[str | None, str]:
+def get_last_generated(user_id: int | None = None) -> tuple[str | None, str]:
     """Return (image_url, content_type) of the last generated image, or (None, 'brand_3d')."""
-    s = _read_state()
+    s = _read_state(user_id)
     lg = s.get("last_generated")
     if not lg:
         return None, "brand_3d"
@@ -247,7 +277,7 @@ def get_3d_master_prompt() -> str | None:
 
 
 # ---------------------------------------------------------------------------
-# Style profiles — managed via brand/styles.json
+# Style profiles — managed via brand/styles.json (global, not per-user)
 # ---------------------------------------------------------------------------
 
 _STYLES_FILE = Path(settings.BRAND_FOLDER) / "styles.json"
@@ -383,10 +413,10 @@ async def async_save_pending(*args, **kwargs) -> None:
     async with _state_lock:
         await asyncio.to_thread(save_pending, *args, **kwargs)
 
-async def async_clear_pending() -> None:
+async def async_clear_pending(user_id: int | None = None) -> None:
     async with _state_lock:
-        await asyncio.to_thread(clear_pending)
+        await asyncio.to_thread(clear_pending, user_id=user_id)
 
-async def async_get_pending() -> dict | None:
+async def async_get_pending(user_id: int | None = None) -> dict | None:
     async with _state_lock:
-        return await asyncio.to_thread(get_pending)
+        return await asyncio.to_thread(get_pending, user_id=user_id)

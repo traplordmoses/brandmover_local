@@ -28,6 +28,11 @@ IMAGE_MODEL: str = os.getenv("IMAGE_MODEL", "auto")  # "auto" or specific model 
 # --- Telegram ---
 TELEGRAM_BOT_TOKEN: str = os.getenv("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_ALLOWED_USER_ID: int = int(os.getenv("TELEGRAM_ALLOWED_USER_ID", "0"))
+_raw_operator_ids = os.getenv("TELEGRAM_OPERATOR_IDS", "")
+TELEGRAM_OPERATOR_IDS: list[int] = [
+    int(uid.strip()) for uid in _raw_operator_ids.split(",")
+    if uid.strip().isdigit()
+]
 
 # --- X / Twitter ---
 X_API_KEY: str = os.getenv("X_API_KEY", "")

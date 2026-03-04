@@ -31,8 +31,18 @@ _bulk_upload_tasks: dict[int, _aio.Task] = {}
 
 
 def _authorized(user_id: int) -> bool:
-    """Check if a Telegram user is the authorized operator."""
+    """Check if a Telegram user is the admin."""
     return user_id == settings.TELEGRAM_ALLOWED_USER_ID
+
+
+def _can_operate(user_id: int) -> bool:
+    """Check if a Telegram user can generate/approve/reject content.
+
+    Returns True for admin and any user in TELEGRAM_OPERATOR_IDS.
+    """
+    if user_id == settings.TELEGRAM_ALLOWED_USER_ID:
+        return True
+    return user_id in settings.TELEGRAM_OPERATOR_IDS
 
 
 # Patterns that indicate the user wants to generate a template from their reference image
@@ -123,7 +133,8 @@ def _rate_limited(user_id: int) -> bool:
 
 async def _do_approve(update: Update, context: ContextTypes.DEFAULT_TYPE, option_num: int = 1, source: str = "command") -> None:
     """Core approve logic shared by /approve, NL router, and inline buttons."""
-    pending = state.get_pending()
+    user_id = update.effective_user.id if update.effective_user else None
+    pending = state.get_pending(user_id=user_id)
     if not pending:
         await update.message.reply_text("Nothing to approve. Send me a content request first.")
         return
@@ -158,7 +169,7 @@ async def _do_approve(update: Update, context: ContextTypes.DEFAULT_TYPE, option
         logger.debug("Generation history update failed: %s", e)
 
     # Save approved composed image to brand/references/ for style consistency
-    composed_path, composed_ct = state.get_last_composed()
+    composed_path, composed_ct = state.get_last_composed(user_id=user_id)
     if composed_path and Path(composed_path).exists():
         try:
             refs_dir = Path(settings.BRAND_FOLDER) / "references"
@@ -257,11 +268,11 @@ async def _do_approve(update: Update, context: ContextTypes.DEFAULT_TYPE, option
             f"Feedback logged ({count} total entries).",
             parse_mode="HTML",
         )
-        state.clear_pending()
-        state.clear_draft_history()
+        state.clear_pending(user_id=user_id)
+        state.clear_draft_history(user_id=user_id)
         if composed_path and Path(composed_path).exists():
             Path(composed_path).unlink(missing_ok=True)
-            state.clear_last_composed()
+            state.clear_last_composed(user_id=user_id)
         return
 
     # Post to Discord (fire-and-forget)
@@ -293,8 +304,8 @@ async def _do_approve(update: Update, context: ContextTypes.DEFAULT_TYPE, option
         )
         logger.info("Auto-post slot '%s' recorded via approve (%s)", auto_slot, source)
 
-    state.clear_pending()
-    state.clear_draft_history()
+    state.clear_pending(user_id=user_id)
+    state.clear_draft_history(user_id=user_id)
     slot_note = f"  (auto-slot: {_esc(auto_slot)})" if auto_slot else ""
     discord_note = f"\nDiscord: {_esc(discord_url)}" if discord_url else ""
     await update.message.reply_text(
@@ -307,7 +318,6 @@ async def _do_approve(update: Update, context: ContextTypes.DEFAULT_TYPE, option
 
     # Track context — draft approved, nothing pending
     try:
-        user_id = update.effective_user.id if update.effective_user else 0
         if user_id:
             conversation_context.update_context(
                 user_id,
@@ -324,7 +334,7 @@ async def _do_approve(update: Update, context: ContextTypes.DEFAULT_TYPE, option
             Path(composed_path).unlink(missing_ok=True)
         except Exception as e:
             logger.debug("Composed cleanup failed for %s: %s", composed_path, e)
-        state.clear_last_composed()
+        state.clear_last_composed(user_id=user_id)
 
     # Auto-summarize preferences at threshold
     if count % settings.FEEDBACK_SUMMARIZE_EVERY == 0:
@@ -340,7 +350,8 @@ async def _do_approve(update: Update, context: ContextTypes.DEFAULT_TYPE, option
 
 async def _do_reject(update: Update, context: ContextTypes.DEFAULT_TYPE, feedback_text: str = "", source: str = "command") -> None:
     """Core reject logic shared by /reject, NL router, and inline buttons."""
-    pending = state.get_pending()
+    user_id = update.effective_user.id if update.effective_user else None
+    pending = state.get_pending(user_id=user_id)
     if not pending:
         await update.message.reply_text("Nothing to reject. Send me a content request first.")
         return
@@ -381,11 +392,10 @@ async def _do_reject(update: Update, context: ContextTypes.DEFAULT_TYPE, feedbac
             logger.error("Auto-summarize failed: %s", e)
 
     # Clear the old pending before running revision
-    state.clear_pending()
+    state.clear_pending(user_id=user_id)
 
     # Track context — draft rejected, revision incoming
     try:
-        user_id = update.effective_user.id if update.effective_user else 0
         if user_id:
             conversation_context.update_context(
                 user_id,
@@ -398,9 +408,9 @@ async def _do_reject(update: Update, context: ContextTypes.DEFAULT_TYPE, feedbac
 
     # Branch: agent mode re-runs with revision context, pipeline mode uses revise_draft
     if settings.AGENT_MODE == "agent":
-        await _handle_agent_revision(update, pending, feedback_text)
+        await _handle_agent_revision(update, pending, feedback_text, user_id=user_id)
     else:
-        await _handle_pipeline_revision(update, pending, feedback_text)
+        await _handle_pipeline_revision(update, pending, feedback_text, user_id=user_id)
 
 
 def _esc(text: str) -> str:
@@ -470,62 +480,81 @@ async def discord_setup_command(update: Update, context: ContextTypes.DEFAULT_TY
 
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Handle /help — show available commands."""
-    if not _authorized(update.effective_user.id):
+    """Handle /help — show available commands (filtered by role)."""
+    uid = update.effective_user.id
+    if not _can_operate(uid):
         return
 
     mode = settings.AGENT_MODE
-    msg = (
-        f"<b>BrandMover Local</b> (mode: {_esc(mode)})\n\n"
-        "Send any message to generate a branded post draft.\n"
-        "I'll think through it in multiple steps and show you my reasoning.\n\n"
-        "<b>Commands:</b>\n"
-        "/approve [N] — Approve the pending draft (option N if multiple)\n"
-        "/reject <i>reason</i> — Revise the draft with feedback\n"
-        "/edit <i>feedback</i> — Surgical edit on the last generated image\n"
-        "/status — Show pending draft details\n"
-        "/refs — Show loaded reference materials\n"
-        "/feedback — Show approval/rejection stats\n"
-        "/learn — Trigger preference learning from feedback history\n"
-        "/style — Manage visual style profiles\n"
-        "/brand — Show active brand config\n"
-        "/setup — Bootstrap guidelines from a PDF upload\n"
-        "/cancel — Clear pending draft\n"
-        "/schedule <i>time prompt</i> — Schedule a post for a specific time\n"
-        "/scheduled — List upcoming scheduled posts\n"
-        "/unschedule <i>id</i> — Cancel a scheduled post\n"
-        "/autostatus — Auto-posting scheduler status\n"
-        "/autopause — Pause/resume auto-posting\n"
-        "/autoforce <i>slot</i> — Force a specific auto-post slot\n"
-        "/generate <i>type description</i> — Generate a standalone asset\n"
-        "/logo — View/set brand logo\n"
-        "/ingest — Extract brand info from an image\n"
-        "/brand_check — Check an image against brand guidelines\n"
-        "/train_lora — Trigger LoRA training from approved images\n"
-        "/lora_status — Show LoRA training status and versions\n"
-        "/lora_versions — List all trained LoRA versions\n"
-        "/lora_switch <i>N</i> — Switch active LoRA to version N\n"
-        "/lora_rollback — Roll back to previous LoRA version\n"
-        "/history — Show generation history and stats\n"
-        "/analytics — Show approval rates by content type and model\n"
-        "/apply — Apply extracted brand info to guidelines\n"
-        "/template — Toggle image composition on/off\n"
-        "/template_upload — Upload a custom visual template\n"
-        "/template_from_reference — Generate a template from a reference image\n"
-        "/template_import — Import a template from Figma\n"
-        "/font_upload — Upload a custom TTF/OTF font\n"
-        "/onboard — Start conversational brand onboarding\n"
-        "/onboard_cancel — Cancel onboarding\n"
-        "/library — List or search the asset library\n"
-        "/strategy — View current brand strategy and config\n"
-        "/preview [topic] — Generate a sample post (no rate limit)\n"
-        "/regen_guidelines — Regenerate guidelines from asset inventory\n"
-        "/reset_brand — Wipe brand config and start fresh\n"
-        "/upload — Add images to your brand asset library\n"
-        "/done — Finish asset upload session\n"
-        "/discord_setup — Create Discord server channels and roles\n"
-        "/help — Show this message"
-    )
+
+    if _authorized(uid):
+        # Full admin help
+        msg = (
+            f"<b>BrandMover Local</b> (mode: {_esc(mode)})\n\n"
+            "Send any message to generate a branded post draft.\n"
+            "I'll think through it in multiple steps and show you my reasoning.\n\n"
+            "<b>Commands:</b>\n"
+            "/approve [N] — Approve the pending draft (option N if multiple)\n"
+            "/reject <i>reason</i> — Revise the draft with feedback\n"
+            "/edit <i>feedback</i> — Surgical edit on the last generated image\n"
+            "/status — Show pending draft details\n"
+            "/refs — Show loaded reference materials\n"
+            "/feedback — Show approval/rejection stats\n"
+            "/learn — Trigger preference learning from feedback history\n"
+            "/style — Manage visual style profiles\n"
+            "/brand — Show active brand config\n"
+            "/setup — Bootstrap guidelines from a PDF upload\n"
+            "/cancel — Clear pending draft\n"
+            "/schedule <i>time prompt</i> — Schedule a post for a specific time\n"
+            "/scheduled — List upcoming scheduled posts\n"
+            "/unschedule <i>id</i> — Cancel a scheduled post\n"
+            "/autostatus — Auto-posting scheduler status\n"
+            "/autopause — Pause/resume auto-posting\n"
+            "/autoforce <i>slot</i> — Force a specific auto-post slot\n"
+            "/generate <i>type description</i> — Generate a standalone asset\n"
+            "/logo — View/set brand logo\n"
+            "/ingest — Extract brand info from an image\n"
+            "/brand_check — Check an image against brand guidelines\n"
+            "/train_lora — Trigger LoRA training from approved images\n"
+            "/lora_status — Show LoRA training status and versions\n"
+            "/lora_versions — List all trained LoRA versions\n"
+            "/lora_switch <i>N</i> — Switch active LoRA to version N\n"
+            "/lora_rollback — Roll back to previous LoRA version\n"
+            "/history — Show generation history and stats\n"
+            "/analytics — Show approval rates by content type and model\n"
+            "/apply — Apply extracted brand info to guidelines\n"
+            "/template — Toggle image composition on/off\n"
+            "/template_upload — Upload a custom visual template\n"
+            "/template_from_reference — Generate a template from a reference image\n"
+            "/template_import — Import a template from Figma\n"
+            "/font_upload — Upload a custom TTF/OTF font\n"
+            "/onboard — Start conversational brand onboarding\n"
+            "/onboard_cancel — Cancel onboarding\n"
+            "/library — List or search the asset library\n"
+            "/strategy — View current brand strategy and config\n"
+            "/preview [topic] — Generate a sample post (no rate limit)\n"
+            "/regen_guidelines — Regenerate guidelines from asset inventory\n"
+            "/reset_brand — Wipe brand config and start fresh\n"
+            "/upload — Add images to your brand asset library\n"
+            "/done — Finish asset upload session\n"
+            "/discord_setup — Create Discord server channels and roles\n"
+            "/help — Show this message"
+        )
+    else:
+        # Operator help — limited commands
+        msg = (
+            f"<b>BrandMover Local</b> (operator mode)\n\n"
+            "Send any message to generate a branded post draft.\n"
+            "You can also send a photo with a caption to generate content.\n\n"
+            "<b>Commands:</b>\n"
+            "/approve [N] — Approve the pending draft (option N if multiple)\n"
+            "/reject <i>reason</i> — Revise the draft with feedback\n"
+            "/edit <i>feedback</i> — Surgical edit on the last generated image\n"
+            "/status — Show pending draft details\n"
+            "/cancel — Clear pending draft\n"
+            "/help — Show this message"
+        )
+
     await update.message.reply_text(msg, parse_mode="HTML")
 
 
@@ -580,17 +609,18 @@ async def brand_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
 async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle /status — show pending draft info."""
-    if not _authorized(update.effective_user.id):
+    user_id = update.effective_user.id
+    if not _can_operate(user_id):
         return
 
-    pending = state.get_pending()
+    pending = state.get_pending(user_id=user_id)
     if not pending:
         await update.message.reply_text("No pending draft. Send me a content request to get started.")
         return
 
     age = int(time.time() - pending.get("timestamp", 0))
     minutes = age // 60
-    revision = state.get_draft_revision_count()
+    revision = state.get_draft_revision_count(user_id=user_id)
     rev_tag = f" (revision {revision})" if revision > 1 else ""
     msg = (
         f"<b>Pending Draft{_esc(rev_tag)}</b>\n\n"
@@ -605,21 +635,22 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
 async def cancel_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle /cancel — clear pending draft."""
-    if not _authorized(update.effective_user.id):
+    user_id = update.effective_user.id
+    if not _can_operate(user_id):
         return
 
-    if not state.has_pending():
+    if not state.has_pending(user_id=user_id):
         await update.message.reply_text("Nothing to cancel — no pending draft.")
         return
 
-    state.clear_pending()
-    state.clear_draft_history()
+    state.clear_pending(user_id=user_id)
+    state.clear_draft_history(user_id=user_id)
     await update.message.reply_text("Draft cancelled. Send a new request whenever you're ready.")
 
 
 async def approve_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle /approve [N] — approve the pending draft and log feedback."""
-    if not _authorized(update.effective_user.id):
+    if not _can_operate(update.effective_user.id):
         return
 
     # Parse optional option number from "/approve N"
@@ -637,7 +668,8 @@ async def approve_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
 async def edit_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle /edit <feedback> — surgical img2img edit on the last generated image."""
-    if not _authorized(update.effective_user.id):
+    user_id = update.effective_user.id
+    if not _can_operate(user_id):
         return
 
     text = (update.message.text or "").strip()
@@ -650,7 +682,7 @@ async def edit_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         )
         return
 
-    last_url, content_type = state.get_last_generated()
+    last_url, content_type = state.get_last_generated(user_id=user_id)
     if not last_url:
         await update.message.reply_text("No image to edit — generate one first with a brand_3d request.")
         return
@@ -688,10 +720,10 @@ async def edit_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             return
 
         # Save as new last generated
-        state.save_last_generated(url, content_type or "brand_3d")
+        state.save_last_generated(url, content_type or "brand_3d", user_id=user_id)
 
         # Get existing pending draft for compositing context
-        pending = state.get_pending()
+        pending = state.get_pending(user_id=user_id)
         ct = content_type or "brand_3d"
 
         # Build a draft dict the compositor can use (needs title + subtitle)
@@ -720,7 +752,7 @@ async def edit_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
                     f.write(composed.getvalue())
                 composed.seek(0)
                 photo = composed  # reset after reading for save
-                state.set_last_composed(tmp_composed, ct)
+                state.set_last_composed(tmp_composed, ct, user_id=user_id)
             except Exception as e:
                 logger.debug("Failed to save edit composed image: %s", e)
 
@@ -733,6 +765,7 @@ async def edit_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
                 alt_text=pending.get("alt_text", ""),
                 image_prompt=pending.get("image_prompt", ""),
                 original_request=pending.get("original_request", ""),
+                user_id=user_id,
             )
 
         try:
@@ -763,7 +796,7 @@ async def edit_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
 async def reject_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle /reject [reason] — revise draft with feedback."""
-    if not _authorized(update.effective_user.id):
+    if not _can_operate(update.effective_user.id):
         return
 
     # Extract feedback after "/reject"
@@ -773,7 +806,7 @@ async def reject_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     await _do_reject(update, context, feedback_text=feedback_text, source="command")
 
 
-async def _handle_pipeline_revision(update: Update, pending: dict, feedback_text: str) -> None:
+async def _handle_pipeline_revision(update: Update, pending: dict, feedback_text: str, user_id: int | None = None) -> None:
     """Revise a draft using the pipeline mode."""
     try:
         brand_context = guidelines.get_brand_context()
@@ -802,9 +835,10 @@ async def _handle_pipeline_revision(update: Update, pending: dict, feedback_text
             original_request=pending["original_request"],
             auto_slot=pending.get("auto_slot"),
             auto_event_ids=pending.get("auto_event_ids"),
+            user_id=user_id,
         )
 
-        await _send_draft(update, draft, image_url)
+        await _send_draft(update, draft, image_url, user_id=user_id)
 
     except Exception as e:
         logger.error("Revision failed: %s", e)
@@ -818,6 +852,7 @@ async def _handle_pipeline_revision(update: Update, pending: dict, feedback_text
             original_request=pending.get("original_request", ""),
             auto_slot=pending.get("auto_slot"),
             auto_event_ids=pending.get("auto_event_ids"),
+            user_id=user_id,
         )
         await update.message.reply_text(
             f"Revision failed: {_esc(str(e))}\n\nOriginal draft still pending. Try again or /cancel.",
@@ -825,7 +860,7 @@ async def _handle_pipeline_revision(update: Update, pending: dict, feedback_text
         )
 
 
-async def _handle_agent_revision(update: Update, pending: dict, feedback_text: str) -> None:
+async def _handle_agent_revision(update: Update, pending: dict, feedback_text: str, user_id: int | None = None) -> None:
     """Revise a draft using agent mode — re-runs the agent with revision context."""
     revision_context = (
         f"PREVIOUS DRAFT (REJECTED):\n"
@@ -869,9 +904,10 @@ async def _handle_agent_revision(update: Update, pending: dict, feedback_text: s
             original_request=pending["original_request"],
             auto_slot=pending.get("auto_slot"),
             auto_event_ids=pending.get("auto_event_ids"),
+            user_id=user_id,
         )
 
-        await _send_draft(update, result.draft, image_url, resources=result.resources)
+        await _send_draft(update, result.draft, image_url, resources=result.resources, user_id=user_id)
         return
 
     except Exception as e:
@@ -1403,7 +1439,8 @@ async def _process_bulk_upload(
 
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle photo uploads and image documents as reference images."""
-    if not _authorized(update.effective_user.id):
+    user_id = update.effective_user.id
+    if not _can_operate(user_id):
         return
     if not update.message:
         return
@@ -1438,8 +1475,8 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     except Exception as e:
         logger.warning("Image conversion failed (using as-is): %s", e)
 
-    # --- Onboarding upload intercept ---
-    ob_session = onboarding.get_session(update.effective_user.id)
+    # --- Onboarding upload intercept (admin only) ---
+    ob_session = onboarding.get_session(user_id) if _authorized(user_id) else None
     if ob_session and ob_session.state == onboarding.OnboardingState.UPLOADS.value:
         # Check if this looks like a template
         from agent import template_memory as _tm
@@ -1476,20 +1513,20 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         )
         return
 
-    # --- Template upload intercept ---
+    # --- Template upload intercept (admin only) ---
     user_data = context.user_data if context else {}
-    if user_data.get("awaiting_template"):
+    if _authorized(user_id) and user_data.get("awaiting_template"):
         await _handle_template_upload(update, context, tmp_path)
         return
 
-    # --- Template from reference intercept ---
-    if user_data.get("awaiting_template_from_ref"):
+    # --- Template from reference intercept (admin only) ---
+    if _authorized(user_id) and user_data.get("awaiting_template_from_ref"):
         state.clear_reference_image()
         await _handle_template_from_reference(update, context, tmp_path)
         return
 
-    # --- /upload asset library intercept ---
-    if user_data.get("awaiting_asset_upload"):
+    # --- /upload asset library intercept (admin only) ---
+    if _authorized(user_id) and user_data.get("awaiting_asset_upload"):
         try:
             from agent import asset_audit
             import asyncio
@@ -1508,8 +1545,8 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             await update.message.reply_text(f"Failed to add asset: {_esc(str(e))}", parse_mode="HTML")
         return
 
-    # --- Priority flag checks (logo > ingest > brand_check) ---
-    if user_data.get("awaiting_logo_upload"):
+    # --- Priority flag checks (admin only: logo > ingest > brand_check) ---
+    if _authorized(user_id) and user_data.get("awaiting_logo_upload"):
         user_data["awaiting_logo_upload"] = False
         logo_dir = Path(settings.BRAND_FOLDER) / "assets"
         logo_dir.mkdir(parents=True, exist_ok=True)
@@ -1526,7 +1563,7 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             await update.message.reply_text(f"Failed to save logo: {_esc(str(e))}", parse_mode="HTML")
         return
 
-    if user_data.get("awaiting_ingest_image"):
+    if _authorized(user_id) and user_data.get("awaiting_ingest_image"):
         user_data["awaiting_ingest_image"] = False
         await update.message.chat.send_action("typing")
         await update.message.reply_text("Analyzing image for brand elements...")
@@ -1557,7 +1594,7 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             await update.message.reply_text(f"Ingestion failed: {_esc(str(e))}", parse_mode="HTML")
         return
 
-    if user_data.get("awaiting_brand_check"):
+    if _authorized(user_id) and user_data.get("awaiting_brand_check"):
         user_data["awaiting_brand_check"] = False
         await update.message.chat.send_action("typing")
         await update.message.reply_text("Checking image against brand guidelines...")
@@ -1577,8 +1614,8 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
     caption = (update.message.caption or "").strip()
 
-    # Caption-based /template_upload — image sent with "/template_upload [name]" as caption
-    if caption.lower().startswith("/template_upload"):
+    # Caption-based /template_upload — admin only
+    if _authorized(user_id) and caption.lower().startswith("/template_upload"):
         template_name = caption[len("/template_upload"):].strip()
         if context:
             context.user_data["template_name"] = template_name
@@ -1586,8 +1623,8 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         await _handle_template_upload(update, context, tmp_path)
         return
 
-    # Caption-based /template_from_reference — image sent with "/template_from_reference [name]"
-    if caption.lower().startswith("/template_from_reference"):
+    # Caption-based /template_from_reference — admin only
+    if _authorized(user_id) and caption.lower().startswith("/template_from_reference"):
         template_name = caption[len("/template_from_reference"):].strip()
         if context:
             context.user_data["template_from_ref_name"] = template_name
@@ -1595,8 +1632,8 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         await _handle_template_from_reference(update, context, tmp_path)
         return
 
-    # Caption-based /brand_check — image sent with "/brand_check" as caption
-    if caption.lower().startswith("/brand_check"):
+    # Caption-based /brand_check — admin only
+    if _authorized(user_id) and caption.lower().startswith("/brand_check"):
         await update.message.chat.send_action("typing")
         await update.message.reply_text("Checking image against brand guidelines...")
         try:
@@ -1609,8 +1646,8 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             await update.message.reply_text(f"Brand check failed: {_esc(str(e))}", parse_mode="HTML")
         return
 
-    # Natural language template-from-reference intent detection
-    if caption and _is_template_from_ref_intent(caption):
+    # Natural language template-from-reference intent detection — admin only
+    if _authorized(user_id) and caption and _is_template_from_ref_intent(caption):
         state.clear_reference_image()
         if context:
             context.user_data["template_from_ref_name"] = ""
@@ -1635,7 +1672,7 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
                 )
                 return
 
-            if state.has_pending():
+            if state.has_pending(user_id=user_id):
                 await update.message.reply_text(
                     "You have a pending draft. /approve, /reject, or /cancel it first.",
                     parse_mode="HTML",
@@ -1651,13 +1688,13 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             request = f"{content_hint}\n\n[DIRECT PHOTO: {tmp_path}]\n[generate text only, do NOT call generate_image]"
 
             if settings.AGENT_MODE == "agent":
-                await _handle_agent_mode(update, request)
+                await _handle_agent_mode(update, request, user_id=user_id)
             else:
-                await _handle_pipeline_mode(update, request)
+                await _handle_pipeline_mode(update, request, user_id=user_id)
             return
 
-    # Check if caption matches a style profile name (e.g. "3d_card" or "style 3d_card")
-    if caption:
+    # Check if caption matches a style profile name (admin only)
+    if _authorized(user_id) and caption:
         style_name = caption
         if caption.lower().startswith("style "):
             style_name = caption[6:].strip()
@@ -1674,13 +1711,13 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     if caption:
         await update.message.reply_text("got it, generating with your image as reference...")
 
-        if _rate_limited(update.effective_user.id):
+        if _rate_limited(user_id):
             await update.message.reply_text(
                 f"Please wait {_RATE_LIMIT_SECONDS}s between requests."
             )
             return
 
-        if state.has_pending():
+        if state.has_pending(user_id=user_id):
             await update.message.reply_text(
                 "You have a pending draft. /approve, /reject, or /cancel it first.",
                 parse_mode="HTML",
@@ -1688,9 +1725,9 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             return
 
         if settings.AGENT_MODE == "agent":
-            await _handle_agent_mode(update, caption)
+            await _handle_agent_mode(update, caption, user_id=user_id)
         else:
-            await _handle_pipeline_mode(update, caption)
+            await _handle_pipeline_mode(update, caption, user_id=user_id)
     else:
         # Batch uploads: collect images for 3 seconds, then auto-ingest if bulk
         import asyncio as _aio
@@ -1712,7 +1749,8 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle any plain text message — routes through intent router before generation."""
-    if not _authorized(update.effective_user.id):
+    user_id = update.effective_user.id
+    if not _can_operate(user_id):
         return
 
     if not update.message or not update.message.text:
@@ -1722,19 +1760,20 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     if not request:
         return
 
-    # Template-from-reference adjustment intercept
-    tplref = (context.user_data or {}).get("tplref_pending") if context else None
-    if isinstance(tplref, dict) and "design" in tplref:
-        await _handle_tplref_adjustment(update, context, request)
-        return
+    # Template-from-reference adjustment intercept (admin only)
+    if _authorized(user_id):
+        tplref = (context.user_data or {}).get("tplref_pending") if context else None
+        if isinstance(tplref, dict) and "design" in tplref:
+            await _handle_tplref_adjustment(update, context, request)
+            return
 
-    # Template region update intercept — user describing region positions after upload
-    if _is_template_region_update(request, context):
-        await _handle_template_region_update(update, context, request)
-        return
+        # Template region update intercept — user describing region positions after upload
+        if _is_template_region_update(request, context):
+            await _handle_template_region_update(update, context, request)
+            return
 
-    # Onboarding intercept — handle messages during onboarding flow (highest priority)
-    session = onboarding.get_session(update.effective_user.id)
+    # Onboarding intercept — handle messages during onboarding flow (admin only)
+    session = onboarding.get_session(user_id) if _authorized(user_id) else None
     if session and session.state not in (
         onboarding.OnboardingState.IDLE.value,
         onboarding.OnboardingState.COMPLETE.value,
@@ -1768,13 +1807,13 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             logger.warning("Intent router error, falling through to generation: %s", e)
 
     # Fallback: generation path (rate limited, pending draft blocked)
-    if _rate_limited(update.effective_user.id):
+    if _rate_limited(user_id):
         await update.message.reply_text(
             f"Please wait {_RATE_LIMIT_SECONDS}s between requests."
         )
         return
 
-    if state.has_pending():
+    if state.has_pending(user_id=user_id):
         await update.message.reply_text(
             "You have a pending draft. /approve, /reject, or /cancel it first.",
             parse_mode="HTML",
@@ -1782,9 +1821,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         return
 
     if settings.AGENT_MODE == "agent":
-        await _handle_agent_mode(update, request)
+        await _handle_agent_mode(update, request, user_id=user_id)
     else:
-        await _handle_pipeline_mode(update, request)
+        await _handle_pipeline_mode(update, request, user_id=user_id)
 
 
 async def _route_intent(update: Update, context: ContextTypes.DEFAULT_TYPE, message: str) -> bool:
@@ -1792,7 +1831,7 @@ async def _route_intent(update: Update, context: ContextTypes.DEFAULT_TYPE, mess
     user_id = update.effective_user.id
     ctx = conversation_context.get_context(user_id)
     # Sync pending draft state from actual state file
-    ctx.pending_draft_exists = state.has_pending()
+    ctx.pending_draft_exists = state.has_pending(user_id=user_id)
 
     result = await intent_router.classify_intent(message, ctx)
     intent = result.intent
@@ -1826,30 +1865,30 @@ async def _route_intent(update: Update, context: ContextTypes.DEFAULT_TYPE, mess
 
     if intent == "edit_request" and confidence >= 0.5:
         fb = result.parameters.get("feedback", message)
-        if state.has_pending():
+        if state.has_pending(user_id=user_id):
             await _do_reject(update, context, feedback_text=fb, source="router")
         else:
             return False  # Fall through to generation
         return True
 
     if intent == "reroll" and confidence >= 0.8:
-        pending = state.get_pending()
+        pending = state.get_pending(user_id=user_id)
         if pending:
             original = pending.get("original_request", "")
-            state.clear_pending()
-            state.clear_draft_history()
+            state.clear_pending(user_id=user_id)
+            state.clear_draft_history(user_id=user_id)
             await update.message.reply_text("Regenerating...")
             if original:
                 if settings.AGENT_MODE == "agent":
-                    await _handle_agent_mode(update, original)
+                    await _handle_agent_mode(update, original, user_id=user_id)
                 else:
-                    await _handle_pipeline_mode(update, original)
+                    await _handle_pipeline_mode(update, original, user_id=user_id)
             return True
         return False
 
     if intent == "modify_last" and confidence >= 0.5:
         fb = result.parameters.get("feedback", message)
-        modified = await chat.handle_modify_last(fb, ctx)
+        modified = await chat.handle_modify_last(fb, ctx, user_id=user_id)
         if modified:
             # Save modified draft and re-send
             state.save_pending(
@@ -1859,8 +1898,9 @@ async def _route_intent(update: Update, context: ContextTypes.DEFAULT_TYPE, mess
                 alt_text=modified.get("alt_text", ""),
                 image_prompt=modified.get("image_prompt", ""),
                 original_request=modified.get("original_request", ""),
+                user_id=user_id,
             )
-            await _send_draft(update, modified, modified.get("image_url"))
+            await _send_draft(update, modified, modified.get("image_url"), user_id=user_id)
             return True
         return False
 
@@ -1949,7 +1989,7 @@ async def _route_intent(update: Update, context: ContextTypes.DEFAULT_TYPE, mess
     return False
 
 
-async def _handle_agent_mode(update: Update, request: str) -> None:
+async def _handle_agent_mode(update: Update, request: str, user_id: int | None = None) -> None:
     """Run the agent tool-use loop for a content request."""
     await update.message.chat.send_action("typing")
 
@@ -2015,6 +2055,7 @@ async def _handle_agent_mode(update: Update, request: str) -> None:
             original_request=request,
             image_urls=image_urls if len(image_urls) > 1 else None,
             content_type=result.draft.get("content_type"),
+            user_id=user_id,
         )
 
         # Clean up reference image temp file if one was used
@@ -2026,7 +2067,7 @@ async def _handle_agent_mode(update: Update, request: str) -> None:
                 logger.debug("Ref cleanup failed for %s: %s", ref_cleanup, e)
             state.clear_reference_image()
 
-        await _send_draft(update, result.draft, image_url, resources=result.resources, image_urls=image_urls)
+        await _send_draft(update, result.draft, image_url, resources=result.resources, image_urls=image_urls, user_id=user_id)
 
     except Exception as e:
         logger.error("Agent error: %s", e)
@@ -2746,7 +2787,7 @@ async def _handle_template_upload(update: Update, context: ContextTypes.DEFAULT_
         await update.message.reply_text(f"Template analysis failed: {_esc(str(e))}", parse_mode="HTML")
 
 
-async def _handle_pipeline_mode(update: Update, request: str) -> None:
+async def _handle_pipeline_mode(update: Update, request: str, user_id: int | None = None) -> None:
     """Run the existing multi-step pipeline for a content request."""
     await update.message.chat.send_action("typing")
 
@@ -2802,9 +2843,10 @@ async def _handle_pipeline_mode(update: Update, request: str) -> None:
             alt_text=draft["alt_text"],
             image_prompt=draft["image_prompt"],
             original_request=request,
+            user_id=user_id,
         )
 
-        await _send_draft(update, draft, image_url)
+        await _send_draft(update, draft, image_url, user_id=user_id)
 
     except Exception as e:
         logger.error("Pipeline error: %s", e)
@@ -2820,6 +2862,7 @@ async def _send_draft(
     image_url: str | None,
     resources=None,
     image_urls: list[str] | None = None,
+    user_id: int | None = None,
 ) -> None:
     """Send the generated draft to the user for review.
 
@@ -2872,7 +2915,7 @@ async def _send_draft(
                     composed.seek(0)
                     # Store last composed for the first option by default
                     if idx == 1:
-                        state.set_last_composed(tmp_composed, content_type)
+                        state.set_last_composed(tmp_composed, content_type, user_id=user_id)
                 except Exception as e:
                     logger.warning("Failed to save composed option %d: %s", idx, e)
 
@@ -2939,7 +2982,7 @@ async def _send_draft(
                 with open(tmp_composed, "wb") as f:
                     f.write(composed.getvalue())
                 composed.seek(0)  # reset for Telegram send
-                state.set_last_composed(tmp_composed, content_type)
+                state.set_last_composed(tmp_composed, content_type, user_id=user_id)
             except Exception as e:
                 logger.warning("Failed to save composed image for archiving: %s", e)
 
@@ -2992,7 +3035,8 @@ async def draft_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     query = update.callback_query
     await query.answer()
 
-    if not _authorized(query.from_user.id):
+    cb_user_id = query.from_user.id
+    if not _can_operate(cb_user_id):
         return
 
     action = query.data.split("_", 1)[1]  # approve|reject|edit|reroll
@@ -3015,17 +3059,17 @@ async def draft_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             parse_mode="HTML",
         )
     elif action == "reroll":
-        pending = state.get_pending()
+        pending = state.get_pending(user_id=cb_user_id)
         if pending:
             original = pending.get("original_request", "")
-            state.clear_pending()
-            state.clear_draft_history()
+            state.clear_pending(user_id=cb_user_id)
+            state.clear_draft_history(user_id=cb_user_id)
             await query.message.reply_text("Regenerating...")
             if original:
                 if settings.AGENT_MODE == "agent":
-                    await _handle_agent_mode(proxy, original)
+                    await _handle_agent_mode(proxy, original, user_id=cb_user_id)
                 else:
-                    await _handle_pipeline_mode(proxy, original)
+                    await _handle_pipeline_mode(proxy, original, user_id=cb_user_id)
 
 
 # ---------------------------------------------------------------------------

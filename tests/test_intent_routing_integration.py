@@ -270,9 +270,9 @@ class TestRerollIntent:
                 result = await _route_intent(update, _mock_context(), "try again")
 
                 assert result is True
-                mock_state.clear_pending.assert_called_once()
-                mock_state.clear_draft_history.assert_called_once()
-                mock_pipeline.assert_called_once_with(update, "weekly update post")
+                mock_state.clear_pending.assert_called_once_with(user_id=123)
+                mock_state.clear_draft_history.assert_called_once_with(user_id=123)
+                mock_pipeline.assert_called_once_with(update, "weekly update post", user_id=123)
 
         asyncio.run(_run())
 
