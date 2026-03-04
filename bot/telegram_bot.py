@@ -76,6 +76,7 @@ def create_bot() -> Application:
     app.add_handler(CommandHandler("preview", handlers.preview_command))
     app.add_handler(CommandHandler("template_import", handlers.template_import_command))
     app.add_handler(CommandHandler("font_upload", handlers.font_upload_command))
+    app.add_handler(CommandHandler("discord_setup", handlers.discord_setup_command))
 
     # Inline button callbacks (e.g. /generate approve/reject buttons)
     app.add_handler(CallbackQueryHandler(handlers.generate_callback, pattern=r"^gen_"))
@@ -114,7 +115,7 @@ def create_bot() -> Application:
 
 
 async def _start_scheduler(app: Application) -> None:
-    """Post-init hook: launch the auto-post scheduler as a background task."""
+    """Post-init hook: launch the auto-post scheduler and Discord client as background tasks."""
     from scripts.auto_post import run_scheduler_loop
 
     bot = app.bot
@@ -122,6 +123,13 @@ async def _start_scheduler(app: Application) -> None:
     # Store reference so it doesn't get GC'd
     app.bot_data["_scheduler_task"] = task
     logger.info("Auto-post scheduler background task launched")
+
+    # Start Discord client if configured
+    if settings.DISCORD_BOT_TOKEN:
+        from agent import discord_bot
+        discord_task = asyncio.create_task(discord_bot.start_client())
+        app.bot_data["_discord_task"] = discord_task
+        logger.info("Discord client background task launched")
 
 
 def run() -> None:

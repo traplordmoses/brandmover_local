@@ -264,6 +264,24 @@ async def _do_approve(update: Update, context: ContextTypes.DEFAULT_TYPE, option
             state.clear_last_composed()
         return
 
+    # Post to Discord (fire-and-forget)
+    discord_url = None
+    try:
+        from agent import discord_bot, discord_publisher
+        if discord_bot.is_ready():
+            publish_image = pending.get("image_url")
+            if composed_path and Path(composed_path).exists():
+                publish_image = composed_path
+            discord_url = await discord_publisher.post_to_discord(
+                caption=pending.get("caption", ""),
+                hashtags=pending.get("hashtags", []),
+                image_url=publish_image,
+                auto_slot=pending.get("auto_slot"),
+                content_type=pending.get("content_type"),
+            )
+    except Exception as e:
+        logger.warning("Discord posting failed (non-fatal): %s", e)
+
     # If this draft came from the auto-post scheduler, record it
     auto_slot = pending.get("auto_slot")
     if auto_slot:
@@ -278,9 +296,10 @@ async def _do_approve(update: Update, context: ContextTypes.DEFAULT_TYPE, option
     state.clear_pending()
     state.clear_draft_history()
     slot_note = f"  (auto-slot: {_esc(auto_slot)})" if auto_slot else ""
+    discord_note = f"\nDiscord: {_esc(discord_url)}" if discord_url else ""
     await update.message.reply_text(
         f"Posted to X!{slot_note}\n"
-        f"{_esc(tweet_url)}\n\n"
+        f"{_esc(tweet_url)}{discord_note}\n\n"
         f"Feedback logged ({count} total entries).",
         parse_mode="HTML",
     )
@@ -409,6 +428,47 @@ _TOOL_ICONS = {
 }
 
 
+async def discord_setup_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /discord_setup — create Discord server structure."""
+    if not _authorized(update.effective_user.id):
+        return
+
+    from agent import discord_bot
+
+    if not settings.DISCORD_BOT_TOKEN:
+        await update.message.reply_text(
+            "DISCORD_BOT_TOKEN not set. Add it to .env and restart."
+        )
+        return
+
+    if not discord_bot.is_ready():
+        await update.message.reply_text(
+            "Discord client is not connected. Check your bot token and restart."
+        )
+        return
+
+    status_msg = await update.message.reply_text("Setting up Discord server...")
+
+    async def _progress(msg: str):
+        try:
+            await status_msg.edit_text(f"Setting up Discord server...\n{msg}")
+        except Exception:
+            pass
+
+    result = await discord_bot.setup_server(progress_callback=_progress)
+
+    if result.get("error"):
+        await status_msg.edit_text(f"Discord setup failed: {_esc(result['error'])}")
+        return
+
+    await status_msg.edit_text(
+        f"Discord server setup complete!\n"
+        f"Channels created: {result.get('created_channels', 0)}\n"
+        f"Roles created: {result.get('created_roles', 0)}\n"
+        f"Total channels mapped: {result.get('total_channels', 0)}"
+    )
+
+
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle /help — show available commands."""
     if not _authorized(update.effective_user.id):
@@ -463,6 +523,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         "/reset_brand — Wipe brand config and start fresh\n"
         "/upload — Add images to your brand asset library\n"
         "/done — Finish asset upload session\n"
+        "/discord_setup — Create Discord server channels and roles\n"
         "/help — Show this message"
     )
     await update.message.reply_text(msg, parse_mode="HTML")

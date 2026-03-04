@@ -51,6 +51,10 @@ AGENT_MAX_TURNS: int = int(os.getenv("AGENT_MAX_TURNS", "15"))
 AGENT_MODEL: str = os.getenv("AGENT_MODEL", "claude-opus-4-6")
 FEEDBACK_SUMMARIZE_EVERY: int = int(os.getenv("FEEDBACK_SUMMARIZE_EVERY", "10"))
 
+# --- Discord ---
+DISCORD_BOT_TOKEN: str = os.getenv("DISCORD_BOT_TOKEN", "")
+DISCORD_GUILD_ID: int = int(os.getenv("DISCORD_GUILD_ID", "0"))
+
 # --- Figma ---
 FIGMA_ACCESS_TOKEN: str = os.getenv("FIGMA_ACCESS_TOKEN", "")
 FIGMA_FILE_KEY: str = os.getenv("FIGMA_FILE_KEY", "")
@@ -106,6 +110,8 @@ def validate(exit_on_error: bool = True) -> list[str]:
         warnings.append("X/Twitter credentials incomplete — posting to X will fail")
 
     # --- Informational ---
+    if not DISCORD_BOT_TOKEN:
+        warnings.append("DISCORD_BOT_TOKEN not set — Discord posting disabled")
     if not FIGMA_ACCESS_TOKEN:
         warnings.append("FIGMA_ACCESS_TOKEN not set — Figma design checks disabled")
 
