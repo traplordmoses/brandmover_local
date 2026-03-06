@@ -28,6 +28,10 @@ brand/styles.json
 brand/prompts/*.txt
 brand/examples/articles/*.txt
 brand/training_data/
+brand/loras/
+
+# Per-instance schedule config
+config/schedule.json
 
 # Brand assets (may contain proprietary material)
 brand/references/
