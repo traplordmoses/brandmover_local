@@ -108,7 +108,7 @@ async def process_slot(
         return False
 
     # Don't queue if there's already a pending draft awaiting review
-    if state.has_pending() and not dry_run:
+    if await state.async_has_pending() and not dry_run:
         logger.info("Skipping %s: a draft is already pending approval", slot_name)
         return False
 
@@ -187,7 +187,7 @@ async def process_slot(
         return True
 
     # --- Save as pending draft (same state the manual flow uses) ---
-    state.save_pending(
+    await state.async_save_pending(
         caption=caption,
         hashtags=result.draft.get("hashtags", []),
         image_url=image_url,
@@ -265,7 +265,7 @@ async def process_scheduled_item(
         return False
 
     # Don't queue if there's already a pending draft awaiting review
-    if state.has_pending() and not dry_run:
+    if await state.async_has_pending() and not dry_run:
         logger.info("Skipping scheduled %s: a draft is already pending approval", item_id)
         items = schedule_queue._read_queue()
         for i in items:
@@ -323,7 +323,7 @@ async def process_scheduled_item(
         return True
 
     # Save as pending draft
-    state.save_pending(
+    await state.async_save_pending(
         caption=caption,
         hashtags=result.draft.get("hashtags", []),
         image_url=image_url,
@@ -382,7 +382,7 @@ async def run_cron(
     if due_items and not force_slot:
         if not auto_state.is_paused():
             for item in due_items:
-                if state.has_pending() and not dry_run:
+                if await state.async_has_pending() and not dry_run:
                     logger.info("User queue: pending draft exists, deferring")
                     break
                 success = await process_scheduled_item(

@@ -139,7 +139,7 @@ async def recommend_strategy(
     )
 
     response = await client.messages.create(
-        model="claude-sonnet-4-20250514",
+        model=settings.SONNET_MODEL,
         max_tokens=1000,
         messages=[{"role": "user", "content": prompt}],
     )
@@ -349,7 +349,7 @@ async def generate_content_calendar(
         prompt += "\n".join(creative_lines)
 
     response = await client.messages.create(
-        model="claude-sonnet-4-20250514",
+        model=settings.SONNET_MODEL,
         max_tokens=1500,
         messages=[{"role": "user", "content": prompt}],
     )

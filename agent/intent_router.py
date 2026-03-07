@@ -42,7 +42,6 @@ KNOWN_INTENTS = (
     "unknown",
 )
 
-_HAIKU_MODEL = "claude-haiku-4-5-20251001"
 _HAIKU_TIMEOUT_SECONDS = 5
 _RATE_LIMIT_PER_HOUR = 30
 _CACHE_MAX_SIZE = 50
@@ -342,7 +341,7 @@ async def _call_haiku(message: str, context: ConversationContext) -> RoutingResu
     user_msg = _build_classify_user_message(message, context)
 
     response = await client.messages.create(
-        model=_HAIKU_MODEL,
+        model=settings.HAIKU_MODEL,
         max_tokens=256,
         system=_CLASSIFY_SYSTEM_PROMPT,
         messages=[{"role": "user", "content": user_msg}],

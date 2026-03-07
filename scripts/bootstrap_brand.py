@@ -340,7 +340,7 @@ def analyze_with_llm(x_data: dict, web_data: dict, ref_text: str) -> str:
     logger.info("Sending scraped data to Claude for analysis...")
 
     message = client.messages.create(
-        model="claude-sonnet-4-6",
+        model=settings.SONNET_MODEL,
         max_tokens=8000,
         messages=[{"role": "user", "content": prompt}],
     )

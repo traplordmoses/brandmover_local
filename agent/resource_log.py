@@ -14,6 +14,8 @@ class ResourceTracker:
     figma_nodes_checked: list[str] = field(default_factory=list)
     scripts_executed: list[str] = field(default_factory=list)
     apis_called: list[str] = field(default_factory=list)
+    input_tokens: int = 0
+    output_tokens: int = 0
 
     def log_file(self, name: str) -> None:
         if name not in self.files_loaded:
@@ -30,6 +32,11 @@ class ResourceTracker:
     def log_api(self, name: str) -> None:
         if name not in self.apis_called:
             self.apis_called.append(name)
+
+    def add_tokens(self, input_tokens: int, output_tokens: int) -> None:
+        """Accumulate token usage from an LLM call."""
+        self.input_tokens += input_tokens
+        self.output_tokens += output_tokens
 
     def to_list(self) -> list[str]:
         """Flat list of all resources for feedback logging."""
@@ -55,4 +62,6 @@ class ResourceTracker:
             parts.append(f"Scripts: {', '.join(self.scripts_executed)}")
         if self.apis_called:
             parts.append(f"APIs: {', '.join(self.apis_called)}")
+        if self.input_tokens or self.output_tokens:
+            parts.append(f"Tokens: {self.input_tokens}in/{self.output_tokens}out")
         return " | ".join(parts) if parts else "No external resources used"

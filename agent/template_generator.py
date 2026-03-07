@@ -188,7 +188,7 @@ async def analyze_reference(image_path: str) -> TemplateDesign:
     from agent._client import get_anthropic
     client = get_anthropic()
     response = await client.messages.create(
-        model="claude-sonnet-4-20250514",
+        model=settings.SONNET_MODEL,
         max_tokens=4000,
         messages=[{
             "role": "user",
@@ -465,7 +465,7 @@ async def adjust_spec(design: TemplateDesign, feedback: str) -> TemplateDesign:
     from agent._client import get_anthropic
     client = get_anthropic()
     response = await client.messages.create(
-        model="claude-sonnet-4-20250514",
+        model=settings.SONNET_MODEL,
         max_tokens=4000,
         messages=[{"role": "user", "content": prompt}],
     )
@@ -513,7 +513,7 @@ async def adjust_design(design: TemplateDesign, feedback: str) -> TemplateDesign
     from agent._client import get_anthropic
     client = get_anthropic()
     response = await client.messages.create(
-        model="claude-sonnet-4-20250514",
+        model=settings.SONNET_MODEL,
         max_tokens=2000,
         messages=[{"role": "user", "content": prompt}],
     )
@@ -769,7 +769,7 @@ async def _classify_figma_layers(
     from agent._client import get_anthropic
     client = get_anthropic()
     response = await client.messages.create(
-        model="claude-sonnet-4-20250514",
+        model=settings.SONNET_MODEL,
         max_tokens=2000,
         messages=[{"role": "user", "content": prompt}],
     )

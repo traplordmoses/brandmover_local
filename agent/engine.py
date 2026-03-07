@@ -205,7 +205,11 @@ async def run_agent(
             response = await client.messages.create(
                 model=settings.AGENT_MODEL,
                 max_tokens=4096,
-                system=system_prompt,
+                system=[{
+                "type": "text",
+                "text": system_prompt,
+                "cache_control": {"type": "ephemeral"},
+            }],
                 tools=TOOL_DEFINITIONS,
                 tool_choice=tool_choice,
                 messages=messages,
@@ -214,6 +218,10 @@ async def run_agent(
             logger.error("Anthropic API error on turn %d: %s", turn + 1, e)
             result.final_text = f"API error: {e}"
             break
+
+        # Track token usage
+        if hasattr(response, "usage") and response.usage:
+            tracker.add_tokens(response.usage.input_tokens, response.usage.output_tokens)
 
         # Process the response content blocks
         assistant_content = response.content

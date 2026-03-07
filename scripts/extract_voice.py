@@ -267,7 +267,7 @@ def analyze_voice(data: dict) -> str:
 
     client = anthropic.Anthropic(api_key=api_key)
     message = client.messages.create(
-        model="claude-sonnet-4-6",
+        model=settings.SONNET_MODEL,
         max_tokens=6000,
         messages=[{"role": "user", "content": prompt}],
     )

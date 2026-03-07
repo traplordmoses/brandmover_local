@@ -10,3 +10,4 @@ numpy
 cairosvg
 pymupdf>=1.25.0
 discord.py>=2.3
+deepeval

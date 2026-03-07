@@ -143,7 +143,7 @@ async def audit_single_asset(image_path: str) -> AssetAuditEntry:
     client = get_anthropic()
 
     response = await client.messages.create(
-        model="claude-sonnet-4-20250514",
+        model=settings.SONNET_MODEL,
         max_tokens=1000,
         messages=[
             {
@@ -243,7 +243,7 @@ async def _analyze_collection(entries: list[AssetAuditEntry]) -> tuple[dict, dic
     from agent._client import get_anthropic
     client = get_anthropic()
     response = await client.messages.create(
-        model="claude-sonnet-4-20250514",
+        model=settings.SONNET_MODEL,
         max_tokens=1000,
         messages=[{"role": "user", "content": prompt}],
     )

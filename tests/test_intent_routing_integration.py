@@ -253,7 +253,8 @@ class TestRerollIntent:
                  patch("bot.handlers.intent_router") as mock_ir, \
                  patch("bot.handlers.state") as mock_state, \
                  patch("bot.handlers._handle_pipeline_mode") as mock_pipeline, \
-                 patch("bot.handlers.settings") as mock_settings:
+                 patch("bot.handlers.settings") as mock_settings, \
+                 patch("bot.handlers._rate_limited", return_value=False):
                 mock_cc.get_context.return_value = ConversationContext(user_id=123, updated_at=time.time())
                 mock_state.has_pending.return_value = True
                 mock_state.get_pending.return_value = {

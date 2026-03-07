@@ -2,6 +2,7 @@
 Publish posts to X (Twitter) using Tweepy v4+.
 """
 
+import asyncio
 import io
 import logging
 from pathlib import Path
@@ -78,7 +79,8 @@ async def post_to_x(
             logger.info("Downloading image for X upload: %s", image_url[:100])
             image_bytes = await _download_image(image_url)
             api_v1 = _get_api_v1()
-            media = api_v1.media_upload(
+            media = await asyncio.to_thread(
+                api_v1.media_upload,
                 filename="brandmover_post.webp",
                 file=io.BytesIO(image_bytes),
             )
@@ -92,12 +94,24 @@ async def post_to_x(
     if media_id:
         kwargs["media_ids"] = [media_id]
 
-    response = client_v2.create_tweet(**kwargs)
+    response = await asyncio.to_thread(client_v2.create_tweet, **kwargs)
     tweet_id = response.data["id"]
-    # Resolve username for URL
-    me = client_v2.get_me()
-    username = me.data.username
+    # Resolve username — cached to avoid repeated API calls
+    username = await _get_cached_username(client_v2)
     tweet_url = f"https://x.com/{username}/status/{tweet_id}"
 
     logger.info("Tweet posted: %s", tweet_url)
     return tweet_url
+
+
+# Cached username — doesn't change mid-session
+_cached_username: str | None = None
+
+
+async def _get_cached_username(client_v2: tweepy.Client) -> str:
+    """Get the authenticated user's username, cached after first call."""
+    global _cached_username
+    if _cached_username is None:
+        me = await asyncio.to_thread(client_v2.get_me)
+        _cached_username = me.data.username
+    return _cached_username

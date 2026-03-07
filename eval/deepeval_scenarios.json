@@ -1,0 +1,51 @@
+[
+  {
+    "id": "good_announcement",
+    "caption": "New swap router cuts gas fees by 40%. Live on mainnet now.",
+    "content_type": "announcement",
+    "expect_pass": true,
+    "description": "Clean announcement — no hashtags, no emoji, right length"
+  },
+  {
+    "id": "good_community",
+    "caption": "Community call tonight at 8pm UTC. Bring your questions, we're covering the v3 roadmap and taking feedback live.",
+    "content_type": "community",
+    "expect_pass": true,
+    "description": "Community post — natural voice, good length, no forbidden phrases"
+  },
+  {
+    "id": "good_meme",
+    "caption": "When the gas fees hit different at 3am but you still ape in anyway.",
+    "content_type": "meme",
+    "expect_pass": true,
+    "description": "Meme caption — casual, no hashtags, right length"
+  },
+  {
+    "id": "bad_hashtags",
+    "caption": "Excited to announce our partnership with #DeFi protocol #Web3 #Crypto #Innovation #Blockchain",
+    "content_type": "announcement",
+    "expect_pass": false,
+    "description": "Fails HashtagFree — loaded with hashtags"
+  },
+  {
+    "id": "bad_too_short",
+    "caption": "New update live.",
+    "content_type": "announcement",
+    "expect_pass": false,
+    "description": "Fails CaptionLength — too short (under 50 chars)"
+  },
+  {
+    "id": "bad_exclamation",
+    "caption": "We just launched the most incredible feature ever! You won't believe how fast it is! Try it now!",
+    "content_type": "announcement",
+    "expect_pass": false,
+    "description": "Fails NoExclamation — three exclamation marks"
+  },
+  {
+    "id": "bad_ai_words",
+    "caption": "Revolutionizing the DeFi landscape by leveraging cutting-edge technology to seamlessly unlock new possibilities for our community.",
+    "content_type": "announcement",
+    "expect_pass": false,
+    "description": "Fails ForbiddenPhrases — loaded with AI-sounding words"
+  }
+]

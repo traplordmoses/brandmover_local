@@ -7,6 +7,7 @@ brand-specific terms, and negative prompts for higher-quality output.
 """
 
 import base64
+import hashlib
 import logging
 import asyncio
 import re
@@ -20,6 +21,9 @@ from config import settings
 logger = logging.getLogger(__name__)
 
 _REPLICATE_BASE_URL = "https://api.replicate.com/v1/models"
+
+# Local image cache directory (Replicate CDN URLs expire in ~1 hour)
+_IMAGE_CACHE_DIR = Path(__file__).resolve().parent.parent / "state" / "images"
 
 # Model routing table
 _MODELS = {
@@ -172,6 +176,42 @@ def _strip_contradictions(text: str, locked: list[str]) -> str:
     text = re.sub(r",\s*,", ",", text)
     text = text.strip(", ")
     return text
+
+
+async def cache_image(url: str) -> str:
+    """Download a Replicate image to local cache and return the local path.
+
+    Replicate CDN URLs expire in ~1 hour. Caching locally ensures drafts
+    remain viewable even if the user takes time to review.
+
+    Args:
+        url: The Replicate CDN image URL.
+
+    Returns:
+        Local file path to the cached image.
+    """
+    _IMAGE_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    url_hash = hashlib.sha256(url.encode()).hexdigest()[:16]
+    # Determine extension from URL
+    ext = ".png"
+    if ".jpg" in url or ".jpeg" in url:
+        ext = ".jpg"
+    elif ".webp" in url:
+        ext = ".webp"
+    local_path = _IMAGE_CACHE_DIR / f"{url_hash}{ext}"
+    if local_path.exists():
+        return str(local_path)
+    try:
+        from agent._client import get_httpx
+        client = get_httpx()
+        resp = await client.get(url)
+        resp.raise_for_status()
+        local_path.write_bytes(resp.content)
+        logger.info("Cached image: %s → %s", url[:80], local_path.name)
+    except Exception as e:
+        logger.warning("Failed to cache image %s: %s", url[:80], e)
+        return url  # Fall back to original URL
+    return str(local_path)
 
 
 def enhance_prompt(raw_prompt: str, content_type: str) -> tuple[str, str]:
@@ -419,6 +459,7 @@ async def generate_image(
             image_url = _extract_url(data["output"])
             if image_url:
                 logger.info("Image generated: %s", image_url[:120])
+                image_url = await cache_image(image_url)
                 return image_url
 
         # Otherwise poll for completion with exponential backoff
@@ -444,6 +485,7 @@ async def generate_image(
                 image_url = _extract_url(poll_data.get("output"))
                 if image_url:
                     logger.info("Image generated: %s", image_url[:120])
+                    image_url = await cache_image(image_url)
                     return image_url
             elif status in ("failed", "canceled"):
                 logger.error("Image generation %s: %s", status, poll_data.get("error"))
@@ -533,6 +575,7 @@ async def generate_img2img(
             image_url = _extract_url(data["output"])
             if image_url:
                 logger.info("img2img generated: %s", image_url[:120])
+                image_url = await cache_image(image_url)
                 return image_url
 
         poll_url = data.get("urls", {}).get("get")
@@ -557,6 +600,7 @@ async def generate_img2img(
                 image_url = _extract_url(poll_data.get("output"))
                 if image_url:
                     logger.info("img2img generated: %s", image_url[:120])
+                    image_url = await cache_image(image_url)
                     return image_url
             elif status in ("failed", "canceled"):
                 logger.error("img2img %s: %s", status, poll_data.get("error"))

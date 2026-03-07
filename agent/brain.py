@@ -353,17 +353,25 @@ def _parse_json_response(text: str) -> dict:
     return json.loads(cleaned)
 
 
-async def _call_anthropic(system_prompt: str, user_message: str) -> str:
-    """Call Anthropic Claude API."""
+async def _call_anthropic(system_prompt: str, user_message: str, max_tokens: int = 2048) -> tuple[str, dict]:
+    """Call Anthropic Claude API.
+
+    Returns:
+        (text, usage_dict) where usage_dict has input_tokens and output_tokens.
+    """
     from agent._client import get_anthropic
     client = get_anthropic()
     response = await client.messages.create(
-        model="claude-sonnet-4-6",
-        max_tokens=2048,
+        model=settings.SONNET_MODEL,
+        max_tokens=max_tokens,
         system=system_prompt,
         messages=[{"role": "user", "content": user_message}],
     )
-    return response.content[0].text
+    usage = {
+        "input_tokens": response.usage.input_tokens,
+        "output_tokens": response.usage.output_tokens,
+    }
+    return response.content[0].text, usage
 
 
 async def _call_openai(system_prompt: str, user_message: str) -> str:
@@ -397,13 +405,14 @@ async def _call_gemini(system_prompt: str, user_message: str) -> str:
     return data["candidates"][0]["content"]["parts"][0]["text"]
 
 
-async def _call_llm(system_prompt: str, user_message: str) -> str:
+async def _call_llm(system_prompt: str, user_message: str, max_tokens: int = 2048) -> str:
     """Dispatch to the configured LLM provider."""
     provider = settings.LLM_PROVIDER.lower()
     logger.info("Calling LLM provider: %s", provider)
 
     if provider == "anthropic":
-        return await _call_anthropic(system_prompt, user_message)
+        text, _usage = await _call_anthropic(system_prompt, user_message, max_tokens=max_tokens)
+        return text
     elif provider == "openai":
         return await _call_openai(system_prompt, user_message)
     elif provider == "gemini":
@@ -479,7 +488,7 @@ async def pipeline_generate(
             context_summary=context_summary,
             request=request,
         )
-        raw_analysis = await _call_llm(analyze_system, analyze_user)
+        raw_analysis = await _call_llm(analyze_system, analyze_user, max_tokens=600)
         result.analysis = _parse_json_response(raw_analysis)
         result.step_timings["analyze"] = round(time.time() - t0, 1)
         logger.info("Pipeline step 1 (Analyze) done in %.1fs", result.step_timings["analyze"])
@@ -498,7 +507,7 @@ async def pipeline_generate(
                 guidelines=guidelines_text,
                 request=request,
             )
-            raw_pv = await _call_llm(pv_system, pv_user)
+            raw_pv = await _call_llm(pv_system, pv_user, max_tokens=800)
             result.plan = _parse_json_response(raw_pv)
             result.verification = result.plan  # merged
             result.step_timings["plan_verify"] = round(time.time() - t0, 1)
@@ -518,7 +527,7 @@ async def pipeline_generate(
                 context_summary=context_summary,
                 request=request,
             )
-            raw_plan = await _call_llm(plan_system, plan_user)
+            raw_plan = await _call_llm(plan_system, plan_user, max_tokens=800)
             result.plan = _parse_json_response(raw_plan)
             result.step_timings["plan"] = round(time.time() - t0, 1)
             logger.info("Pipeline step 2 (Plan) done in %.1fs", result.step_timings["plan"])
@@ -534,7 +543,7 @@ async def pipeline_generate(
                 plan=json.dumps(result.plan, indent=2),
                 guidelines=guidelines_text,
             )
-            raw_verify = await _call_llm(verify_system, verify_user)
+            raw_verify = await _call_llm(verify_system, verify_user, max_tokens=500)
             result.verification = _parse_json_response(raw_verify)
             result.step_timings["verify"] = round(time.time() - t0, 1)
             logger.info("Pipeline step 3 (Verify) done in %.1fs", result.step_timings["verify"])
@@ -563,7 +572,7 @@ async def pipeline_generate(
             platform_json_field=_get_platform_json_field(),
             image_mode_instruction=_get_image_mode_instruction(),
         )
-        raw_draft = await _call_llm(gen_system, gen_user)
+        raw_draft = await _call_llm(gen_system, gen_user, max_tokens=1500)
         result.draft = _parse_llm_response(raw_draft)
         result.step_timings["generate"] = round(time.time() - t0, 1)
         logger.info("Pipeline step %d (Generate) done in %.1fs", total_steps, result.step_timings["generate"])
@@ -572,7 +581,7 @@ async def pipeline_generate(
         logger.info("Pipeline complete: %.1fs total (%s)", total, result.step_timings)
         return result
 
-    except (json.JSONDecodeError, KeyError, ValueError) as e:
+    except (json.JSONDecodeError, KeyError, ValueError, anthropic.APIError) as e:
         logger.warning("Pipeline step failed (%s), falling back to single-shot", e)
         result.fell_back = True
         if on_step:

@@ -53,8 +53,11 @@ REFERENCES_FOLDER: str = os.getenv("REFERENCES_FOLDER", str(Path(BRAND_FOLDER) /
 # --- Agent Mode ---
 AGENT_MODE: str = os.getenv("AGENT_MODE", "pipeline")  # "pipeline" (existing) or "agent" (tool-use loop)
 AGENT_MAX_TURNS: int = int(os.getenv("AGENT_MAX_TURNS", "15"))
-AGENT_MODEL: str = os.getenv("AGENT_MODEL", "claude-opus-4-6")
+AGENT_MODEL: str = os.getenv("AGENT_MODEL", "claude-sonnet-4-6")
+SONNET_MODEL: str = os.getenv("SONNET_MODEL", "claude-sonnet-4-6")
+HAIKU_MODEL: str = os.getenv("HAIKU_MODEL", "claude-haiku-4-5-20251001")
 FEEDBACK_SUMMARIZE_EVERY: int = int(os.getenv("FEEDBACK_SUMMARIZE_EVERY", "10"))
+CHAT_MAX_TOKENS: int = int(os.getenv("CHAT_MAX_TOKENS", "600"))
 
 # --- Discord ---
 DISCORD_BOT_TOKEN: str = os.getenv("DISCORD_BOT_TOKEN", "")

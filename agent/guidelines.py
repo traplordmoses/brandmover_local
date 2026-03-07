@@ -202,7 +202,7 @@ async def extract_brand_from_pdf(pdf_path: str | Path) -> str:
     )
 
     response = await client.messages.create(
-        model="claude-sonnet-4-6",
+        model=settings.SONNET_MODEL,
         max_tokens=4096,
         system=system,
         messages=[{

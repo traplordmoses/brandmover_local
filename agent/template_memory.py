@@ -288,7 +288,7 @@ async def analyze_template(image_path: str) -> dict:
     from agent._client import get_anthropic
     client = get_anthropic()
     response = await client.messages.create(
-        model="claude-sonnet-4-20250514",
+        model=settings.SONNET_MODEL,
         max_tokens=1000,
         messages=[{
             "role": "user",
@@ -433,7 +433,7 @@ async def parse_region_description(
     from agent._client import get_anthropic
     client = get_anthropic()
     response = await client.messages.create(
-        model="claude-haiku-4-5-20251001",
+        model=settings.HAIKU_MODEL,
         max_tokens=500,
         messages=[{"role": "user", "content": prompt}],
     )
@@ -866,7 +866,7 @@ async def detect_if_template(image_path: str) -> bool:
         from agent._client import get_anthropic
         client = get_anthropic()
         response = await client.messages.create(
-            model="claude-sonnet-4-20250514",
+            model=settings.SONNET_MODEL,
             max_tokens=200,
             messages=[{
                 "role": "user",

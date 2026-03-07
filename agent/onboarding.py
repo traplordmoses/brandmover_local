@@ -203,7 +203,7 @@ async def _call_discovery(session: OnboardingSession, user_message: str) -> dict
     from agent._client import get_anthropic
     client = get_anthropic()
     response = await client.messages.create(
-        model="claude-sonnet-4-20250514",
+        model=settings.SONNET_MODEL,
         max_tokens=500,
         system=system,
         messages=messages,
@@ -744,7 +744,7 @@ async def generate_guidelines_from_audit(
     from agent._client import get_anthropic
     client = get_anthropic()
     response = await client.messages.create(
-        model="claude-sonnet-4-20250514",
+        model=settings.SONNET_MODEL,
         max_tokens=max_tokens,
         messages=[{"role": "user", "content": prompt}],
     )

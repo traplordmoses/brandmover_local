@@ -20,7 +20,6 @@ from config import settings
 
 logger = logging.getLogger(__name__)
 
-_SONNET_MODEL = "claude-sonnet-4-6"
 
 _project_root = Path(__file__).resolve().parent.parent
 _PERSONALITY_DIR = _project_root / "brand" / "personality"
@@ -174,12 +173,17 @@ async def handle_casual_chat(message: str, context: ConversationContext) -> str:
         messages.append({"role": "user", "content": message})
 
         response = await client.messages.create(
-            model=_SONNET_MODEL,
-            max_tokens=300,
+            model=settings.SONNET_MODEL,
+            max_tokens=settings.CHAT_MAX_TOKENS,
             system=system_prompt,
             messages=messages,
         )
         reply = response.content[0].text.strip()
+        logger.info(
+            "Chat tokens: %din/%dout",
+            response.usage.input_tokens,
+            response.usage.output_tokens,
+        )
 
         # Update conversation history on the context (caller persists it)
         context.conversation_history.append({"role": "user", "content": message})
@@ -231,12 +235,17 @@ async def handle_modify_last(
         from agent._client import get_anthropic
         client = get_anthropic()
         response = await client.messages.create(
-            model=_SONNET_MODEL,
+            model=settings.SONNET_MODEL,
             max_tokens=1024,
             system=_MODIFY_SYSTEM_PROMPT,
             messages=[{"role": "user", "content": user_msg}],
         )
         raw = response.content[0].text.strip()
+        logger.info(
+            "Modify tokens: %din/%dout",
+            response.usage.input_tokens,
+            response.usage.output_tokens,
+        )
 
         # Strip markdown code fences if present
         if raw.startswith("```"):

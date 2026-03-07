@@ -153,7 +153,7 @@ async def summarize_preferences() -> str:
     from agent._client import get_anthropic
     client = get_anthropic()
     response = await client.messages.create(
-        model="claude-sonnet-4-6",
+        model=settings.SONNET_MODEL,
         max_tokens=1500,
         system="You analyze content feedback logs and extract patterns about brand preferences.",
         messages=[{

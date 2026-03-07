@@ -417,6 +417,10 @@ async def async_clear_pending(user_id: int | None = None) -> None:
     async with _state_lock:
         await asyncio.to_thread(clear_pending, user_id=user_id)
 
+async def async_has_pending(user_id: int | None = None) -> bool:
+    async with _state_lock:
+        return await asyncio.to_thread(has_pending, user_id=user_id)
+
 async def async_get_pending(user_id: int | None = None) -> dict | None:
     async with _state_lock:
         return await asyncio.to_thread(get_pending, user_id=user_id)

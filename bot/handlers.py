@@ -682,6 +682,12 @@ async def edit_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         )
         return
 
+    if _rate_limited(user_id):
+        await update.message.reply_text(
+            f"Please wait {_RATE_LIMIT_SECONDS}s between requests."
+        )
+        return
+
     last_url, content_type = state.get_last_generated(user_id=user_id)
     if not last_url:
         await update.message.reply_text("No image to edit — generate one first with a brand_3d request.")
@@ -1874,6 +1880,11 @@ async def _route_intent(update: Update, context: ContextTypes.DEFAULT_TYPE, mess
     if intent == "reroll" and confidence >= 0.8:
         pending = state.get_pending(user_id=user_id)
         if pending:
+            if _rate_limited(user_id):
+                await update.message.reply_text(
+                    f"Please wait {_RATE_LIMIT_SECONDS}s between requests."
+                )
+                return True
             original = pending.get("original_request", "")
             state.clear_pending(user_id=user_id)
             state.clear_draft_history(user_id=user_id)
@@ -2068,6 +2079,19 @@ async def _handle_agent_mode(update: Update, request: str, user_id: int | None =
             content_type=result.draft.get("content_type"),
             user_id=user_id,
         )
+
+        # Log to generation history (agent mode was previously missing this)
+        try:
+            await generation_history.async_log_generation(
+                asset_type="social_post",
+                content_type=result.draft.get("content_type", "unknown"),
+                prompt=result.draft.get("image_prompt", ""),
+                model_id=settings.AGENT_MODEL,
+                image_urls=image_urls or ([image_url] if image_url else []),
+                original_request=request,
+            )
+        except Exception as e:
+            logger.debug("Agent generation history log failed: %s", e)
 
         # Clean up reference image temp file if one was used
         ref_cleanup = state.get_reference_image()
@@ -3070,6 +3094,11 @@ async def draft_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             parse_mode="HTML",
         )
     elif action == "reroll":
+        if _rate_limited(cb_user_id):
+            await query.message.reply_text(
+                f"Please wait {_RATE_LIMIT_SECONDS}s between requests."
+            )
+            return
         pending = state.get_pending(user_id=cb_user_id)
         if pending:
             original = pending.get("original_request", "")

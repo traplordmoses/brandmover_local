@@ -59,6 +59,10 @@ def _estimate_cost(model_id: str, image_count: int = 1) -> float:
     return round(per_image * image_count, 4)
 
 
+_MAX_HISTORY_ENTRIES = 500
+_history_lock = asyncio.Lock()
+
+
 def log_generation(
     asset_type: str,
     content_type: str,
@@ -82,6 +86,9 @@ def log_generation(
         "estimated_cost_usd": cost,
         "timestamp": time.time(),
     })
+    # Cap history size to prevent unbounded growth
+    if len(entries) > _MAX_HISTORY_ENTRIES:
+        entries = entries[-_MAX_HISTORY_ENTRIES:]
     _write_history(entries)
     count = len(entries)
     logger.info("Logged generation #%d (%s/%s, status=%s)", count, asset_type, content_type, status)
@@ -175,7 +182,9 @@ def get_approval_analytics() -> dict:
 # ---------------------------------------------------------------------------
 
 async def async_log_generation(*args, **kwargs) -> int:
-    return await asyncio.to_thread(log_generation, *args, **kwargs)
+    async with _history_lock:
+        return await asyncio.to_thread(log_generation, *args, **kwargs)
 
 async def async_update_generation_status(timestamp: float, new_status: str) -> bool:
-    return await asyncio.to_thread(update_generation_status, timestamp, new_status)
+    async with _history_lock:
+        return await asyncio.to_thread(update_generation_status, timestamp, new_status)

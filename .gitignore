@@ -16,6 +16,7 @@ venv/
 # Runtime / generated
 bot.log
 state/
+state/images/
 *.bak
 
 # Eval runtime output

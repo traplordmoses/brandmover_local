@@ -47,7 +47,7 @@ async def extract_brand_from_image(image_path: str) -> dict:
     client = get_anthropic()
 
     response = await client.messages.create(
-        model="claude-sonnet-4-20250514",
+        model=settings.SONNET_MODEL,
         max_tokens=2000,
         messages=[
             {
@@ -116,7 +116,7 @@ async def diff_against_guidelines(extracted: dict) -> str:
     client = get_anthropic()
 
     response = await client.messages.create(
-        model="claude-sonnet-4-20250514",
+        model=settings.SONNET_MODEL,
         max_tokens=1500,
         messages=[
             {
@@ -155,7 +155,7 @@ async def apply_extracted_to_guidelines(extracted: dict) -> str:
     client = get_anthropic()
 
     response = await client.messages.create(
-        model="claude-sonnet-4-20250514",
+        model=settings.SONNET_MODEL,
         max_tokens=4000,
         messages=[
             {
