@@ -18,6 +18,7 @@ _CONTEXT_FILE = _STATE_DIR / "conversation.json"
 
 _PRUNE_AGE_SECONDS = 24 * 60 * 60  # 24 hours
 _MAX_RECENT_INTENTS = 5
+_MAX_CONVERSATION_HISTORY = 20
 
 
 @dataclass
@@ -29,6 +30,8 @@ class ConversationContext:
     last_content_type: str = ""
     last_command: str = ""
     recent_intents: list[str] = field(default_factory=list)
+    conversation_history: list[dict] = field(default_factory=list)
+    user_name: str = ""
     updated_at: float = 0.0
 
 
@@ -75,6 +78,8 @@ def get_context(user_id: int) -> ConversationContext:
             last_content_type=data.get("last_content_type", ""),
             last_command=data.get("last_command", ""),
             recent_intents=data.get("recent_intents", []),
+            conversation_history=data.get("conversation_history", []),
+            user_name=data.get("user_name", ""),
             updated_at=data.get("updated_at", 0.0),
         )
     return ConversationContext(user_id=user_id, updated_at=time.time())
@@ -89,6 +94,9 @@ def update_context(user_id: int, **fields) -> ConversationContext:
     # Trim recent_intents to max size
     if len(ctx.recent_intents) > _MAX_RECENT_INTENTS:
         ctx.recent_intents = ctx.recent_intents[-_MAX_RECENT_INTENTS:]
+    # Trim conversation history
+    if len(ctx.conversation_history) > _MAX_CONVERSATION_HISTORY:
+        ctx.conversation_history = ctx.conversation_history[-_MAX_CONVERSATION_HISTORY:]
     ctx.updated_at = time.time()
 
     all_ctx = _load_all()

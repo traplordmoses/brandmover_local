@@ -1974,15 +1974,26 @@ async def _route_intent(update: Update, context: ContextTypes.DEFAULT_TYPE, mess
     if intent == "greeting":
         user = update.effective_user
         name = user.first_name if user else ""
-        reply = await chat.handle_greeting(name)
+        if name and not ctx.user_name:
+            ctx.user_name = name
+        reply = await chat.handle_greeting(name, context=ctx)
         await update.message.reply_text(reply)
-        conversation_context.update_context(user_id, last_bot_action="sent_content")
+        conversation_context.update_context(
+            user_id,
+            last_bot_action="sent_content",
+            user_name=ctx.user_name,
+            conversation_history=ctx.conversation_history,
+        )
         return True
 
     if intent == "casual_chat" and confidence >= 0.5:
         reply = await chat.handle_casual_chat(message, ctx)
         await update.message.reply_text(reply)
-        conversation_context.update_context(user_id, last_bot_action="sent_content")
+        conversation_context.update_context(
+            user_id,
+            last_bot_action="sent_content",
+            conversation_history=ctx.conversation_history,
+        )
         return True
 
     # generate_content or unknown / low confidence → fall through to generation

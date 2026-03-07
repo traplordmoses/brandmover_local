@@ -1,0 +1,28 @@
+# Bot Memory
+
+This file is read on every conversation. Write things here that the bot should
+always remember about the user, the brand, and past interactions.
+
+The bot can also update this file during conversations (via the /learn command
+or automatic preference summarization).
+
+## User Preferences
+
+- (e.g., "Prefers dark backgrounds for images")
+- (e.g., "Likes short punchy captions under 100 chars")
+- (e.g., "Hates hashtags — never use them")
+
+## Brand Context
+
+- (e.g., "We just launched our SDK beta on March 3")
+- (e.g., "Main competitors are Hyperliquid and dYdX")
+- (e.g., "Our Discord launched last week")
+
+## Conversation Notes
+
+- (e.g., "User mentioned they want more meme content this week")
+- (e.g., "User prefers to review drafts in the morning")
+
+## Learned Patterns
+
+- (Auto-populated from feedback over time)

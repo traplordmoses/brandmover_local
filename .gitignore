@@ -29,6 +29,8 @@ brand/prompts/*.txt
 brand/examples/articles/*.txt
 brand/training_data/
 brand/loras/
+brand/personality/system_prompt.md
+brand/personality/memory.md
 
 # Per-instance schedule config
 config/schedule.json
