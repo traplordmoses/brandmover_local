@@ -195,10 +195,13 @@ def build_unified_system_prompt(
     # 8. Capabilities + tool guidance
     parts.append(_build_capabilities_section())
 
-    # 9. Common workflows (multi-tool patterns)
+    # 9. Creative coding context (execute_code power-ups)
+    parts.append(_build_creative_coding_section())
+
+    # 10. Common workflows (multi-tool patterns)
     parts.append(_build_workflows_section())
 
-    # 10. Generation rules (present but not forced)
+    # 11. Generation rules (present but not forced)
     parts.append(f"--- GENERATION RULES (when you generate content) ---\n{_get_generation_rules()}")
 
     return "\n\n".join(parts)
@@ -250,6 +253,68 @@ def _build_capabilities_section() -> str:
     )
 
 
+def _build_creative_coding_section() -> str:
+    """Build creative coding context for execute_code — fonts, assets, patterns."""
+    brand_folder = Path(settings.BRAND_FOLDER)
+    fonts_dir = brand_folder / "assets" / "fonts"
+    logo_path = brand_folder / "assets" / "logo.png"
+
+    # List available fonts
+    font_list = ""
+    if fonts_dir.exists():
+        fonts = sorted(f.name for f in fonts_dir.iterdir() if f.suffix in (".ttf", ".otf"))
+        if fonts:
+            font_list = ", ".join(fonts[:10])
+            if len(fonts) > 10:
+                font_list += f" (+{len(fonts) - 10} more)"
+
+    # Check for logo
+    logo_info = f"Logo: `{logo_path}` (RGBA PNG)" if logo_path.exists() else "No logo file found"
+
+    return (
+        "--- CREATIVE CODING (execute_code power) ---\n"
+        "execute_code runs Python with Pillow, httpx, numpy, and all installed packages. "
+        "60-second timeout. Write files to `state/outputs/`. Always call `register_draft` after.\n\n"
+
+        "## AVAILABLE ASSETS\n"
+        f"Fonts directory: `{fonts_dir}/`\n"
+        f"Fonts: {font_list}\n"
+        f"{logo_info}\n"
+        f"Mascot/assets: check `{brand_folder}/assets/` for .png files\n\n"
+
+        "## IMAGE DOWNLOADING\n"
+        "You can download images from the web inside execute_code:\n"
+        "```python\n"
+        "import httpx\n"
+        "from PIL import Image\n"
+        "from io import BytesIO\n"
+        "resp = httpx.get('https://example.com/logo.png', timeout=15)\n"
+        "img = Image.open(BytesIO(resp.content))\n"
+        "```\n"
+        "Use this to fetch logos from CoinGecko, project websites, social media, etc.\n\n"
+
+        "## TEMPLATE CREATION PATTERN\n"
+        "For listing banners, announcement graphics, memes with custom layouts:\n"
+        "```python\n"
+        "from PIL import Image, ImageDraw, ImageFont\n"
+        "canvas = Image.new('RGBA', (1280, 720), (91, 143, 196))  # brand bg\n"
+        "draw = ImageDraw.Draw(canvas)\n"
+        "font = ImageFont.truetype('brand/assets/fonts/aeonikextendedpro-bold.otf', 48)\n"
+        "draw.text((x, y), 'HEADLINE', font=font, fill=(255, 255, 255))\n"
+        "# Paste logo, add shapes, gradient overlays, etc.\n"
+        "canvas.save('state/outputs/my_graphic.png')\n"
+        "```\n\n"
+
+        "## WHEN TO USE execute_code vs generate_image\n"
+        "- **generate_image**: AI-generated artwork, photos, illustrations\n"
+        "- **execute_code**: Precise layouts, text-heavy graphics, data from APIs, "
+        "logo placement, memes with exact text, listing banners, infographics\n\n"
+
+        "When the user asks for a graphic that needs exact text placement, logos from "
+        "the web, or data-driven content → use execute_code + register_draft."
+    )
+
+
 def _build_workflows_section() -> str:
     """Build common multi-tool workflow patterns."""
     return (
@@ -272,9 +337,14 @@ def _build_workflows_section() -> str:
         "generate item #1 → approve → next item → ... → all done. "
         "Or: start_autonomous_plan to batch generate, then show_queued_draft to review each.\n\n"
 
-        "**Code-generated content** (memes, graphics): execute_code creates image in state/outputs/ → "
-        "register_draft with the file path and caption → now it's a normal draft the user can "
-        "approve → post/schedule. ALWAYS call register_draft after execute_code produces visual content.\n\n"
+        "**Code-generated content** (memes, banners, templates): execute_code creates image → "
+        "register_draft with file path AND caption → approve → post/schedule. "
+        "ALWAYS include a caption in register_draft. ALWAYS call register_draft after execute_code.\n\n"
+
+        "**Dynamic brand graphics** (listing banners, partnership announcements): "
+        "web_fetch to get info → execute_code to download logo + create branded template "
+        "with Pillow (use brand fonts, colors, logo) → register_draft → approve → post. "
+        "Example: fetch coin logo from CoinGecko API, create listing banner with brand template.\n\n"
 
         "**Report / analysis**: read_state_file (feedback.json, generation_history.json, etc.) → "
         "execute_code to process data or build HTML/charts → send_file to deliver\n\n"

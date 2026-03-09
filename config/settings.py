@@ -98,6 +98,11 @@ AUTO_POST_STATE_FILE: str = os.getenv(
 )
 AUTO_POST_DRY_RUN: bool = os.getenv("AUTO_POST_DRY_RUN", "false").lower() in ("true", "1", "yes")
 
+# --- Timezone ---
+# IANA timezone name for interpreting user-provided times (e.g. "America/Chicago").
+# If not set, uses the system's local timezone automatically.
+TIMEZONE: str = os.getenv("TIMEZONE", "")
+
 
 # ---------------------------------------------------------------------------
 # Startup validation

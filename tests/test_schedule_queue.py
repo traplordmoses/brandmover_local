@@ -40,7 +40,7 @@ class TestParseTime:
         assert ts is not None
         expected = self._now() + timedelta(hours=2)
         assert abs(ts - expected.timestamp()) < 1
-        assert "16:00" in display
+        assert "04:00 PM" in display
 
     def test_in_minutes(self):
         ts, display = schedule_queue.parse_time("in 30 min", now=self._now())

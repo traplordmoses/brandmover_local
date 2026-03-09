@@ -189,12 +189,11 @@ _update_plan_item_def = {
 _execute_code_def = {
     "name": "execute_code",
     "description": (
-        "Execute a Python script to process data, generate files, create HTML, "
-        "analyze stats, or do any computation. Use this when you need to build "
-        "something that doesn't fit your other tools — reports, data analysis, "
-        "file generation, etc. The script runs in a sandboxed subprocess with "
-        "access to the brand/ and state/ directories (read-only) and can write "
-        "output files to state/outputs/."
+        "Execute a Python script for data processing, image creation, web scraping, "
+        "or any computation. Full access to Pillow (PIL), httpx, numpy, and all "
+        "installed packages. Can download images from URLs, create graphics with "
+        "brand fonts, and generate sophisticated visual content. "
+        "Timeout: 60 seconds. Write outputs to state/outputs/."
     ),
     "input_schema": {
         "type": "object",
@@ -600,7 +599,7 @@ async def _handle_execute_code(
             [sys.executable, script_path],
             capture_output=True,
             text=True,
-            timeout=30,
+            timeout=60,
             cwd=str(_PROJECT_ROOT),
             env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"},
         )
@@ -608,7 +607,7 @@ async def _handle_execute_code(
         stderr = proc.stderr[:5000] if proc.stderr else ""
     except subprocess.TimeoutExpired:
         stdout = ""
-        stderr = "Script timed out after 30 seconds"
+        stderr = "Script timed out after 60 seconds"
     except Exception as e:
         stdout = ""
         stderr = f"Execution failed: {e}"
@@ -653,6 +652,10 @@ async def _handle_register_draft(
     title = input_dict.get("title", "")
     subtitle = input_dict.get("subtitle", "")
 
+    # Use alt_text as fallback caption if caption is empty
+    if not caption and alt_text:
+        caption = alt_text
+
     # Save as pending draft with local file path as image_url
     state.save_pending(
         caption=caption,
@@ -670,11 +673,16 @@ async def _handle_register_draft(
 
     logger.info("register_draft: %s registered as pending draft (content_type=%s)", path.name, content_type)
 
+    msg = f"Draft registered with {path.name}. Ready for approve → post/schedule."
+    if not caption:
+        msg += " WARNING: Caption is empty — add a caption before posting."
+
     return json.dumps({
         "status": "registered",
         "image_path": str(path),
         "content_type": content_type,
-        "message": f"Draft registered with {path.name}. Ready for approve → post/schedule.",
+        "caption": caption,
+        "message": msg,
     })
 
 

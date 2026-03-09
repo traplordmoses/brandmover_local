@@ -14,6 +14,7 @@ import time
 import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 from config import settings
 
@@ -87,10 +88,11 @@ def add_scheduled(
     items = _read_queue()
     items.append(item)
     _write_queue(items)
+    local_tz = _get_local_tz()
     logger.info(
         "Scheduled post %s for %s: %s",
         item["id"],
-        datetime.fromtimestamp(scheduled_utc, tz=timezone.utc).strftime("%Y-%m-%d %H:%M UTC"),
+        datetime.fromtimestamp(scheduled_utc, tz=local_tz).strftime("%Y-%m-%d %I:%M %p %Z"),
         prompt[:60],
     )
     return item
@@ -230,8 +232,23 @@ _WEEKDAYS = {
 }
 
 
+def _get_local_tz():
+    """Get the configured local timezone for interpreting user-provided times."""
+    tz_name = getattr(settings, "TIMEZONE", "")
+    if tz_name:
+        try:
+            return ZoneInfo(tz_name)
+        except (KeyError, Exception):
+            logger.warning("Invalid TIMEZONE '%s', falling back to system local", tz_name)
+    # Fall back to system local timezone
+    return datetime.now().astimezone().tzinfo
+
+
 def parse_time(text: str, now: datetime | None = None) -> tuple[float | None, str]:
     """Parse a natural language time expression into a UTC timestamp.
+
+    User-provided times are interpreted in the local timezone (configured via
+    TIMEZONE env var or system default). Stored timestamps are always UTC.
 
     Supports:
     - "in 2 hours", "in 30 minutes", "in 1 hour 30 min"
@@ -239,20 +256,25 @@ def parse_time(text: str, now: datetime | None = None) -> tuple[float | None, st
     - "tomorrow 3pm", "tomorrow at 15:00"
     - "monday 9am", "friday at 3:30pm"
     - "2026-03-05 14:00", "2026-03-05T14:00"
-    - "today 5pm"
+    - "today 5pm", "5pm today"
 
     Args:
         text: The time expression to parse.
-        now: Override current time for testing.
+        now: Override current time for testing (should be timezone-aware).
 
     Returns (utc_timestamp, human_readable_string) or (None, error_message).
     """
     if now is None:
-        now = datetime.now(timezone.utc)
+        now = datetime.now(_get_local_tz())
     elif now.tzinfo is None:
-        now = now.replace(tzinfo=timezone.utc)
+        now = now.replace(tzinfo=_get_local_tz())
+    # Interpret user-provided times in the same timezone as `now`
+    local_tz = now.tzinfo
 
     text = text.strip().lower()
+
+    # Display format uses local timezone abbreviation
+    _display_fmt = "%Y-%m-%d %I:%M %p %Z"
 
     # --- Pattern 1: "in X hours/minutes" ---
     m = re.match(
@@ -263,7 +285,7 @@ def parse_time(text: str, now: datetime | None = None) -> tuple[float | None, st
         hours = int(m.group(1) or 0)
         minutes = int(m.group(2) or 0)
         target = now + timedelta(hours=hours, minutes=minutes)
-        return target.timestamp(), target.strftime("%Y-%m-%d %H:%M UTC")
+        return target.timestamp(), target.strftime(_display_fmt)
 
     # --- Pattern 2: ISO datetime "2026-03-05 14:00" or "2026-03-05T14:00" ---
     m = re.match(r"(\d{4}-\d{2}-\d{2})[T\s](\d{1,2}:\d{2})", text)
@@ -271,10 +293,10 @@ def parse_time(text: str, now: datetime | None = None) -> tuple[float | None, st
         try:
             target = datetime.strptime(
                 f"{m.group(1)} {m.group(2)}", "%Y-%m-%d %H:%M"
-            ).replace(tzinfo=timezone.utc)
+            ).replace(tzinfo=local_tz)
             if target <= now:
                 return None, "That time is in the past"
-            return target.timestamp(), target.strftime("%Y-%m-%d %H:%M UTC")
+            return target.timestamp(), target.strftime(_display_fmt)
         except ValueError:
             return None, f"Could not parse date: {text}"
 
@@ -343,7 +365,7 @@ def parse_time(text: str, now: datetime | None = None) -> tuple[float | None, st
             "Try: \"today\", \"tomorrow\", or a weekday name."
         )
 
-    return target.timestamp(), target.strftime("%Y-%m-%d %H:%M UTC")
+    return target.timestamp(), target.strftime(_display_fmt)
 
 
 def parse_schedule_command(text: str) -> tuple[str | None, float | None, str | None, str]:
