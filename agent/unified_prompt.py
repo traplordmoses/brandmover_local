@@ -236,7 +236,7 @@ def _build_capabilities_section() -> str:
         "## TOOL REFERENCE\n"
         "Content creation: `read_brand_guidelines`, `read_references`, `read_feedback_history`, "
         "`check_figma_design`, `generate_image`, `img2img` (from reference photo), `log_resource_usage`\n"
-        "Draft management: `get_pending_draft`, `revise_draft`\n"
+        "Draft management: `get_pending_draft`, `revise_draft`, `approve_draft`\n"
         "Publishing: `post_approved`, `schedule_post`, `list_scheduled_posts`, `cancel_scheduled_post`\n"
         "Planning: `save_session_plan`, `get_session_plan`, `update_plan_item`, "
         "`start_autonomous_plan`, `show_queued_draft`\n"

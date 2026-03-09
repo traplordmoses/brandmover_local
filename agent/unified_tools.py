@@ -303,6 +303,21 @@ _show_queued_draft_def = {
 }
 
 
+_approve_draft_def = {
+    "name": "approve_draft",
+    "description": (
+        "Approve the current pending draft. Moves it from 'pending' to 'approved' state. "
+        "Use this when the user expresses approval of a draft (e.g. 'approve', 'i approve', "
+        "'looks good', 'love it', 'perfect'). After approving, ask if they want to post now "
+        "or schedule for later."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {},
+        "required": [],
+    },
+}
+
 _post_approved_def = {
     "name": "post_approved",
     "description": (
@@ -375,6 +390,7 @@ _cancel_scheduled_post_def = {
 UNIFIED_TOOL_DEFINITIONS = _BASE_TOOL_DEFINITIONS + [
     _get_pending_draft_def,
     _revise_draft_def,
+    _approve_draft_def,
     _check_auto_post_status_def,
     _web_fetch_def,
     _save_session_plan_def,
@@ -825,6 +841,35 @@ async def _handle_show_queued_draft(
     })
 
 
+async def _handle_approve_draft(
+    input_dict: dict, tracker: ResourceTracker, user_id: int | None = None,
+    tool_context: dict | None = None,
+) -> str:
+    pending = state.get_pending(user_id=user_id)
+    if not pending:
+        return json.dumps({"error": "No pending draft to approve."})
+
+    approved = state.approve_pending(user_id=user_id)
+    state.clear_draft_history(user_id=user_id)
+
+    # Update session plan if active
+    try:
+        plan = session_plan.get_plan()
+        if plan:
+            current_id = plan.get("current_item")
+            if current_id:
+                session_plan.update_item(current_id, status="approved")
+    except Exception:
+        pass
+
+    caption = approved.get("caption", "")[:100] if approved else ""
+    return json.dumps({
+        "status": "approved",
+        "caption_preview": caption,
+        "message": "Draft approved. Ask: post now or schedule for later?",
+    })
+
+
 async def _handle_post_approved(
     input_dict: dict, tracker: ResourceTracker, user_id: int | None = None,
     tool_context: dict | None = None,
@@ -997,6 +1042,7 @@ _UNIFIED_HANDLERS = {
     "run_self_review": _handle_run_self_review,
     "start_autonomous_plan": _handle_start_autonomous_plan,
     "show_queued_draft": _handle_show_queued_draft,
+    "approve_draft": _handle_approve_draft,
     "post_approved": _handle_post_approved,
     "schedule_post": _handle_schedule_post,
     "list_scheduled_posts": _handle_list_scheduled_posts,

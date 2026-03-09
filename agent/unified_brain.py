@@ -250,6 +250,7 @@ def _tool_description(tool_name: str, tool_input: dict) -> str:
         "run_self_review": "Analyzing performance and updating preferences...",
         "start_autonomous_plan": "Working through plan autonomously...",
         "show_queued_draft": f"Loading draft #{tool_input.get('item_id', '?')} for review...",
+        "approve_draft": "Approving draft...",
         "post_approved": "Posting approved draft to X...",
         "schedule_post": f"Scheduling post for {tool_input.get('time_description', '?')}...",
         "list_scheduled_posts": "Checking scheduled posts...",

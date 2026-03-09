@@ -1953,6 +1953,8 @@ _UNIFIED_FAST_PATH: dict[str, str] = {
     "yes": "approve", "yep": "approve", "yeah": "approve", "y": "approve",
     "ok": "approve", "okay": "approve", "sure": "approve", "looks good": "approve",
     "lgtm": "approve", "approve": "approve", "approved": "approve",
+    "i approve": "approve", "love it": "approve", "perfect": "approve",
+    "thats good": "approve", "that's good": "approve",
     # Post (publish to X — requires approved draft)
     "post it": "post", "send it": "post", "ship it": "post",
     "publish": "post", "go": "post", "do it": "post",
@@ -1962,6 +1964,11 @@ _UNIFIED_FAST_PATH: dict[str, str] = {
     "another one": "reroll", "reroll": "reroll", "redo": "reroll",
     "regenerate": "reroll", "new one": "reroll",
 }
+
+# Suffix keywords that indicate approve intent even if the full message doesn't match.
+# Catches "this is amazing i approve", "love it approve", etc.
+_APPROVE_SUFFIXES = ("approve", "approved", "i approve", "looks good", "lgtm")
+_POST_SUFFIXES = ("post it", "send it", "ship it", "publish it")
 
 # Fast path actions that require a pending draft
 _FAST_PATH_DRAFT_ACTIONS = {"approve", "reroll"}
@@ -1978,6 +1985,14 @@ async def _fast_path(update: Update, context: ContextTypes.DEFAULT_TYPE, message
     normalized = message.lower().strip()
 
     action = _UNIFIED_FAST_PATH.get(normalized)
+
+    # Fuzzy suffix match for longer messages like "this is amazing i approve"
+    if not action:
+        if any(normalized.endswith(s) for s in _APPROVE_SUFFIXES):
+            action = "approve"
+        elif any(normalized.endswith(s) for s in _POST_SUFFIXES):
+            action = "post"
+
     if not action:
         return False
 
