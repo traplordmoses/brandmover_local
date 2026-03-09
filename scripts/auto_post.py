@@ -38,7 +38,7 @@ from pathlib import Path
 _project_root = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_project_root))
 
-from agent import auto_state, engine, schedule_queue, scheduler, state
+from agent import auto_state, engine, publisher, schedule_queue, scheduler, state
 from config import settings
 
 logger = logging.getLogger(__name__)
@@ -246,6 +246,45 @@ async def process_scheduled_item(
     slot_name = f"scheduled:{item_id}"
 
     logger.info("Processing scheduled item: %s (%s)", item_id, label)
+
+    # --- Pre-approved draft: post directly, skip generation ---
+    pre_draft = item.get("draft")
+    if pre_draft:
+        logger.info("Scheduled item %s has pre-approved draft, posting directly", item_id)
+        schedule_queue.mark_generating(item_id)
+
+        caption = pre_draft.get("caption", "")
+        hashtags = pre_draft.get("hashtags", [])
+        publish_image = pre_draft.get("composed_path") or pre_draft.get("image_url")
+
+        if dry_run:
+            logger.info("DRY RUN — scheduled=%s (pre-approved) caption=%s", item_id, caption[:80])
+            schedule_queue.mark_done(item_id)
+            return True
+
+        try:
+            tweet_url = await publisher.post_to_x(caption, hashtags, publish_image)
+            schedule_queue.mark_done(item_id, tweet_url=tweet_url)
+            auto_state.record_post(
+                slot_name=slot_name, caption=caption, tweet_url=tweet_url,
+            )
+            await _notify_telegram(
+                f"<b>Scheduled post published</b>\n\n"
+                f"{caption[:200]}\n\n"
+                f"{tweet_url or '(no URL)'}"
+            )
+            logger.info("Pre-approved scheduled post published: %s → %s", item_id, tweet_url)
+            return True
+        except Exception as e:
+            logger.error("Pre-approved scheduled post failed: %s", e)
+            schedule_queue.mark_failed(item_id, str(e)[:200])
+            await _notify_telegram(
+                f"<b>Scheduled post failed</b>\n\n"
+                f"ID: <code>{item_id}</code>\n"
+                f"Error: {str(e)[:200]}"
+            )
+            return False
+
     schedule_queue.mark_generating(item_id)
 
     # Rate limit check

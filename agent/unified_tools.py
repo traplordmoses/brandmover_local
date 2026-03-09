@@ -20,7 +20,7 @@ import tempfile
 import time
 from pathlib import Path
 
-from agent import auto_state, session_plan, state, web_fetch
+from agent import auto_state, publisher, schedule_queue, session_plan, state, web_fetch
 from agent.resource_log import ResourceTracker
 from agent.tools import TOOL_DEFINITIONS as _BASE_TOOL_DEFINITIONS
 from agent.tools import execute_tool as _base_execute_tool
@@ -303,6 +303,75 @@ _show_queued_draft_def = {
 }
 
 
+_post_approved_def = {
+    "name": "post_approved",
+    "description": (
+        "Post the currently approved draft to X/Twitter immediately. "
+        "Only works if there is an approved draft (user said 'yes'/'approve' first). "
+        "Use this when the user says 'post it', 'send it', 'publish', etc. after approving."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {},
+        "required": [],
+    },
+}
+
+_schedule_post_def = {
+    "name": "schedule_post",
+    "description": (
+        "Schedule a post for a future time. If an approved draft exists, schedules that "
+        "draft for direct posting (no regeneration). Otherwise, takes a prompt to generate "
+        "content at the scheduled time. Supports natural language times: '3pm', 'tomorrow 9am', "
+        "'in 2 hours', 'friday 3:30pm'."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "time_description": {
+                "type": "string",
+                "description": "Natural language time expression, e.g. '3pm', 'tomorrow 9am', 'in 2 hours'.",
+            },
+            "prompt": {
+                "type": "string",
+                "description": "Content generation prompt (only needed if no approved draft exists).",
+            },
+        },
+        "required": ["time_description"],
+    },
+}
+
+_list_scheduled_posts_def = {
+    "name": "list_scheduled_posts",
+    "description": (
+        "List all pending scheduled posts with their IDs, times, and labels. "
+        "Use when the user asks what's scheduled or wants to check the queue."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {},
+        "required": [],
+    },
+}
+
+_cancel_scheduled_post_def = {
+    "name": "cancel_scheduled_post",
+    "description": (
+        "Cancel a scheduled post by its ID. Use when the user wants to remove "
+        "a scheduled post from the queue."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "item_id": {
+                "type": "string",
+                "description": "The scheduled post ID to cancel.",
+            },
+        },
+        "required": ["item_id"],
+    },
+}
+
 UNIFIED_TOOL_DEFINITIONS = _BASE_TOOL_DEFINITIONS + [
     _get_pending_draft_def,
     _revise_draft_def,
@@ -317,6 +386,10 @@ UNIFIED_TOOL_DEFINITIONS = _BASE_TOOL_DEFINITIONS + [
     _run_self_review_def,
     _start_autonomous_plan_def,
     _show_queued_draft_def,
+    _post_approved_def,
+    _schedule_post_def,
+    _list_scheduled_posts_def,
+    _cancel_scheduled_post_def,
 ]
 
 
@@ -752,6 +825,164 @@ async def _handle_show_queued_draft(
     })
 
 
+async def _handle_post_approved(
+    input_dict: dict, tracker: ResourceTracker, user_id: int | None = None,
+    tool_context: dict | None = None,
+) -> str:
+    approved = state.get_approved(user_id=user_id)
+    if not approved:
+        return json.dumps({"error": "No approved draft to post. The user must approve a draft first."})
+
+    caption = approved.get("caption", "")
+    hashtags = approved.get("hashtags", [])
+    image_url = approved.get("image_url")
+
+    # Prefer composed image if available
+    composed_path, _ = state.get_last_composed(user_id=user_id)
+    publish_image = image_url
+    if composed_path and Path(composed_path).exists():
+        publish_image = composed_path
+
+    tracker.log_api("post_to_x")
+    try:
+        tweet_url = await publisher.post_to_x(caption, hashtags, publish_image)
+    except Exception as e:
+        logger.error("post_approved failed: %s", e)
+        return json.dumps({"error": f"X posting failed: {e}"})
+
+    # Post to Discord (fire-and-forget)
+    discord_url = None
+    try:
+        from agent import discord_bot, discord_publisher
+        if discord_bot.is_ready():
+            discord_url = await discord_publisher.post_to_discord(
+                caption=caption, hashtags=hashtags, image_url=publish_image,
+                auto_slot=approved.get("auto_slot"),
+                content_type=approved.get("content_type"),
+            )
+    except Exception as e:
+        logger.warning("Discord posting failed (non-fatal): %s", e)
+
+    # Record auto_slot if applicable
+    auto_slot = approved.get("auto_slot")
+    if auto_slot:
+        from agent import auto_state as _as
+        _as.record_post(
+            slot_name=auto_slot, caption=caption,
+            tweet_url=tweet_url, event_ids=approved.get("auto_event_ids"),
+        )
+
+    state.clear_approved(user_id=user_id)
+
+    # Clean up composed file
+    if composed_path and Path(composed_path).exists():
+        try:
+            Path(composed_path).unlink(missing_ok=True)
+        except Exception:
+            pass
+        state.clear_last_composed(user_id=user_id)
+
+    result = {"status": "posted", "tweet_url": tweet_url}
+    if discord_url:
+        result["discord_url"] = discord_url
+    return json.dumps(result)
+
+
+async def _handle_schedule_post(
+    input_dict: dict, tracker: ResourceTracker, user_id: int | None = None,
+    tool_context: dict | None = None,
+) -> str:
+    time_desc = input_dict.get("time_description", "")
+    if not time_desc:
+        return json.dumps({"error": "time_description is required"})
+
+    ts, display = schedule_queue.parse_time(time_desc)
+    if ts is None:
+        return json.dumps({"error": display})
+
+    approved = state.get_approved(user_id=user_id)
+    prompt = input_dict.get("prompt", "")
+
+    if approved:
+        # Schedule the pre-approved draft for direct posting
+        draft_data = {
+            "caption": approved.get("caption", ""),
+            "hashtags": approved.get("hashtags", []),
+            "image_url": approved.get("image_url"),
+            "alt_text": approved.get("alt_text", ""),
+            "image_prompt": approved.get("image_prompt", ""),
+            "content_type": approved.get("content_type"),
+        }
+        # Include composed image path if available
+        composed_path, _ = state.get_last_composed(user_id=user_id)
+        if composed_path and Path(composed_path).exists():
+            draft_data["composed_path"] = composed_path
+
+        label = approved.get("caption", "")[:40]
+        item = schedule_queue.add_scheduled(
+            prompt=approved.get("original_request", label),
+            scheduled_utc=ts,
+            label=label,
+            draft=draft_data,
+        )
+        state.clear_approved(user_id=user_id)
+        return json.dumps({
+            "status": "scheduled",
+            "item_id": item["id"],
+            "scheduled_for": display,
+            "type": "pre_approved_draft",
+            "message": f"Approved draft scheduled for {display}. It will be posted directly.",
+        })
+    elif prompt:
+        # Schedule a generate-at-time item
+        item = schedule_queue.add_scheduled(prompt=prompt, scheduled_utc=ts, label=prompt[:40])
+        return json.dumps({
+            "status": "scheduled",
+            "item_id": item["id"],
+            "scheduled_for": display,
+            "type": "generate_at_time",
+            "message": f"Scheduled for {display}. Content will be generated and queued for review.",
+        })
+    else:
+        return json.dumps({"error": "No approved draft and no prompt provided. Approve a draft first or provide a prompt."})
+
+
+async def _handle_list_scheduled_posts(
+    input_dict: dict, tracker: ResourceTracker, user_id: int | None = None,
+    tool_context: dict | None = None,
+) -> str:
+    from datetime import datetime, timezone
+    items = schedule_queue.list_scheduled()
+    if not items:
+        return json.dumps({"status": "empty", "message": "No scheduled posts."})
+    result = []
+    for item in items:
+        scheduled_time = datetime.fromtimestamp(
+            item["scheduled_utc"], tz=timezone.utc
+        ).strftime("%Y-%m-%d %H:%M UTC")
+        result.append({
+            "id": item["id"],
+            "label": item.get("label", ""),
+            "scheduled_for": scheduled_time,
+            "status": item["status"],
+            "has_draft": bool(item.get("draft")),
+        })
+    return json.dumps({"scheduled_posts": result, "count": len(result)})
+
+
+async def _handle_cancel_scheduled_post(
+    input_dict: dict, tracker: ResourceTracker, user_id: int | None = None,
+    tool_context: dict | None = None,
+) -> str:
+    item_id = input_dict.get("item_id", "")
+    if not item_id:
+        return json.dumps({"error": "item_id is required"})
+    success = schedule_queue.cancel_scheduled(item_id)
+    if success:
+        return json.dumps({"status": "cancelled", "item_id": item_id})
+    return json.dumps({"error": f"Item {item_id} not found or already completed"})
+
+
 _UNIFIED_HANDLERS = {
     "get_pending_draft": _handle_get_pending_draft,
     "revise_draft": _handle_revise_draft,
@@ -766,6 +997,10 @@ _UNIFIED_HANDLERS = {
     "run_self_review": _handle_run_self_review,
     "start_autonomous_plan": _handle_start_autonomous_plan,
     "show_queued_draft": _handle_show_queued_draft,
+    "post_approved": _handle_post_approved,
+    "schedule_post": _handle_schedule_post,
+    "list_scheduled_posts": _handle_list_scheduled_posts,
+    "cancel_scheduled_post": _handle_cancel_scheduled_post,
 }
 
 

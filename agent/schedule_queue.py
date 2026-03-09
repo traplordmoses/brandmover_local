@@ -59,6 +59,7 @@ def add_scheduled(
     scheduled_utc: float,
     recurrence: str = "once",
     label: str | None = None,
+    draft: dict | None = None,
 ) -> dict:
     """Add a new scheduled post to the queue.
 
@@ -67,6 +68,8 @@ def add_scheduled(
         scheduled_utc: Unix timestamp (UTC) for when to generate.
         recurrence: "once", "daily", or "weekly".
         label: Optional short label for display.
+        draft: Optional pre-approved draft dict. If provided, the scheduler
+               will post this directly instead of regenerating content.
 
     Returns the created queue item dict.
     """
@@ -79,6 +82,8 @@ def add_scheduled(
         "recurrence": recurrence,
         "label": label or prompt[:40],
     }
+    if draft:
+        item["draft"] = draft
     items = _read_queue()
     items.append(item)
     _write_queue(items)

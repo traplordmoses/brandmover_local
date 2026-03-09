@@ -37,17 +37,35 @@ def _get_learned_preferences() -> str:
         return ""
 
 
-def _get_recent_feedback(n: int = 3) -> str:
-    """Return the last N feedback entries as a compact string."""
+def _get_recent_feedback() -> str:
+    """Return recent feedback entries (without learned preferences, which are loaded separately)."""
     ctx = feedback.get_feedback_context()
     if ctx == "No feedback history yet.":
+        return ""
+    # Strip out the LEARNED PREFERENCES section — it's already included
+    # separately via _get_learned_preferences(). Only keep RECENT FEEDBACK.
+    marker = "--- RECENT FEEDBACK"
+    idx = ctx.find(marker)
+    if idx != -1:
+        return ctx[idx:]
+    # If no RECENT FEEDBACK section found, the context is just preferences — skip it
+    if "LEARNED PREFERENCES" in ctx:
         return ""
     return ctx
 
 
 def _get_state_context(context: ConversationContext, user_id: int | None = None) -> str:
-    """Return current state info: pending draft, schedule status."""
+    """Return current state info: approved draft, pending draft, schedule status."""
     parts = []
+
+    # Approved draft (approved but not yet posted)
+    approved = state.get_approved(user_id=user_id)
+    if approved:
+        caption = approved.get("caption", "")[:100]
+        parts.append(
+            f"APPROVED DRAFT awaiting post/schedule: \"{caption}...\"\n"
+            f"Use post_approved to publish now, or schedule_post to schedule."
+        )
 
     # Pending draft
     pending = state.get_pending(user_id=user_id)
@@ -57,12 +75,16 @@ def _get_state_context(context: ConversationContext, user_id: int | None = None)
         revision = state.get_draft_revision_count(user_id=user_id)
         parts.append(
             f"PENDING DRAFT (rev {revision}): content_type={ct}, "
-            f"caption preview: \"{caption}...\"\n"
-            f"The user can approve, reject with feedback, or ask you something else. "
-            f"Do NOT block conversation just because a draft is pending."
+            f"caption preview: \"{caption}...\""
         )
-    else:
-        parts.append("No pending draft.")
+
+    if not approved and not pending:
+        parts.append("No pending or approved drafts.")
+
+    # Reference image
+    ref = state.get_reference_image()
+    if ref:
+        parts.append(f"Reference image loaded: {Path(ref).name}")
 
     # Session plan
     plan_summary = session_plan.get_plan_summary()
@@ -83,12 +105,12 @@ def _get_generation_rules() -> str:
 
     return f"""When you decide to generate content, follow these rules:
 
-## WORKFLOW
-1. Call `read_brand_guidelines` to load brand context (voice, tone, colors, visual style). ALWAYS do this first when generating.
+## GENERATION STEPS
+1. Call `read_brand_guidelines` to load brand context. ALWAYS do this first.
 2. Call `read_feedback_history` to check past approvals/rejections.
 3. Optionally call `check_figma_design` for design precision.
 4. Craft the draft: caption (<280 chars for X), alt text, detailed image prompt.
-5. Call `generate_image` with your prompt.
+5. Call `generate_image` (or `img2img` if a reference image is loaded).
 6. Call `log_resource_usage` to record what you consulted.
 7. Output final draft as a JSON block:
 
@@ -116,17 +138,8 @@ CONTENT TYPES (pick the best fit):
 5. Sound HUMAN. Be punchy and confident. No passive voice, no corporate jargon.
 
 ## IMAGE PROMPT (SPLICE framework)
-1. Subject — specific main subject
-2. Parameters — style, medium
-3. Lighting — how is it lit
-4. Image Type — photo, illustration, 3D render
-5. Composition — camera angle, framing
-6. Enhancers — quality terms (8K, ultra-detailed)
-
-Keep prompts 40-80 words. Front-load important elements.
-
-## REVISION MODE
-When revising a rejected draft, you'll receive the previous draft and feedback in the conversation. Focus on addressing the specific feedback."""
+Subject → Parameters → Lighting → Image Type → Composition → Enhancers.
+Keep prompts 40-80 words. Front-load important elements."""
 
 
 def build_unified_system_prompt(
@@ -136,7 +149,7 @@ def build_unified_system_prompt(
     """Build the unified system prompt combining personality + generation capabilities."""
     parts = []
 
-    # 1. Personality (dominates tone)
+    # 1. Personality (dominates tone — always first)
     personality = _load_personality()
     if personality:
         parts.append(personality)
@@ -156,7 +169,7 @@ def build_unified_system_prompt(
     if memory:
         parts.append(f"--- MEMORY ---\n{memory}")
 
-    # 4. Learned preferences
+    # 4. Learned preferences (from feedback summarization)
     prefs = _get_learned_preferences()
     if prefs:
         parts.append(f"--- LEARNED PREFERENCES ---\n{prefs}")
@@ -166,7 +179,7 @@ def build_unified_system_prompt(
     if review_summary:
         parts.append(review_summary)
 
-    # 5. Recent feedback
+    # 5. Recent feedback entries (preferences already loaded above — this is just entries)
     fb = _get_recent_feedback()
     if fb:
         parts.append(fb)
@@ -179,35 +192,91 @@ def build_unified_system_prompt(
     if context.user_name:
         parts.append(f"The user's name is {context.user_name}.")
 
-    # 8. Capabilities
-    parts.append(
-        "--- CAPABILITIES ---\n"
-        "You can do TWO things:\n"
-        "1. CHAT — Have natural conversations. Be brief (1-3 sentences unless asked for detail). "
-        "Sound like a person, not a bot. Never start with \"I'd be happy to help\".\n"
-        "2. GENERATE — Create social media post drafts with images using your tools. "
-        "When you decide the user wants content, use your tools and output a JSON draft block.\n\n"
-        "You decide which to do based on the message. You can also chat AND generate in the same turn — "
-        "e.g. comment on the request in your voice, then call tools and output a draft.\n\n"
-        "If a pending draft exists, you can still chat about other topics. "
-        "The user can approve/reject the draft separately.\n\n"
-        "REVISION FEEDBACK: When the user gives feedback on a pending draft "
-        "(e.g. 'change the image', 'make the text shorter', 'use a different background', "
-        "'I like the text but try a different visual'), treat it as a revision request. "
-        "Call revise_draft with their feedback to clear the old draft and get its details, "
-        "then generate a revised version. Don't ask them to formally reject first — just revise.\n\n"
-        "SESSION PLANS: When you have an active plan and the operator approves a draft, "
-        "acknowledge it and naturally propose moving to the next plan item. Don't auto-generate — "
-        "ask if they want you to proceed or adjust the angle first. "
-        "Plans are optional — most requests are standalone, not part of a plan.\n\n"
-        "AUTONOMOUS MODE: If the operator tells you to cook everything, work through the plan, "
-        "or says they'll review later, use start_autonomous_plan. This generates all remaining "
-        "plan items in sequence and queues drafts for review. When done, the operator can say "
-        "'show me #1' to review each draft at their own pace. Use show_queued_draft to load "
-        "a specific draft into the pending state for approve/reject."
-    )
+    # 8. Capabilities + tool guidance
+    parts.append(_build_capabilities_section())
 
-    # 9. Generation rules (present but not forced)
+    # 9. Common workflows (multi-tool patterns)
+    parts.append(_build_workflows_section())
+
+    # 10. Generation rules (present but not forced)
     parts.append(f"--- GENERATION RULES (when you generate content) ---\n{_get_generation_rules()}")
 
     return "\n\n".join(parts)
+
+
+def _build_capabilities_section() -> str:
+    """Build structured capabilities section with tool guidance."""
+    return (
+        "--- CAPABILITIES ---\n"
+        "You have two modes. You decide which to use based on the message, "
+        "and can combine them in one turn.\n\n"
+
+        "**CHAT** — Natural conversation. 1-3 sentences unless asked for detail. "
+        "Sound like a person, not a bot.\n\n"
+
+        "**GENERATE** — Create social media post drafts with images. "
+        "Use your tools, then output a JSON draft block.\n\n"
+
+        "## APPROVE / POST / SCHEDULE\n"
+        "Approving a draft does NOT post it. After approval:\n"
+        "- \"post it\" / \"send it\" → use `post_approved` to publish to X now\n"
+        "- \"schedule for 3pm\" → use `schedule_post` with natural language time\n"
+        "- Always ask: \"Want me to post now or schedule for later?\"\n\n"
+
+        "## REVISIONS\n"
+        "When the user gives feedback on a pending draft (e.g. 'change the image', "
+        "'make it shorter'), call `revise_draft` with their feedback, then generate "
+        "a revised version. Don't ask them to formally reject first.\n\n"
+
+        "## SESSION PLANS\n"
+        "After a draft is approved, propose the next plan item. Don't auto-generate — "
+        "ask first. Use `start_autonomous_plan` if the operator wants batch generation. "
+        "Use `show_queued_draft` to load a specific draft for review.\n\n"
+
+        "## TOOL REFERENCE\n"
+        "Content creation: `read_brand_guidelines`, `read_references`, `read_feedback_history`, "
+        "`check_figma_design`, `generate_image`, `img2img` (from reference photo), `log_resource_usage`\n"
+        "Draft management: `get_pending_draft`, `revise_draft`\n"
+        "Publishing: `post_approved`, `schedule_post`, `list_scheduled_posts`, `cancel_scheduled_post`\n"
+        "Planning: `save_session_plan`, `get_session_plan`, `update_plan_item`, "
+        "`start_autonomous_plan`, `show_queued_draft`\n"
+        "Research: `web_fetch` (read URLs), `read_state_file` (read state/brand data)\n"
+        "Utilities: `execute_code` (run Python scripts), `send_file` (deliver files to user), "
+        "`check_auto_post_status`, `run_self_review`\n\n"
+
+        "You can chain tools freely. Read a URL, then use what you learned in a draft. "
+        "Read state data, run a script to analyze it, send the result as a file."
+    )
+
+
+def _build_workflows_section() -> str:
+    """Build common multi-tool workflow patterns."""
+    return (
+        "--- WORKFLOWS (common multi-tool patterns) ---\n"
+
+        "**Content creation**: read_brand_guidelines → read_feedback_history → "
+        "generate_image → output JSON draft block → user approves → post_approved or schedule_post\n\n"
+
+        "**Photo-based content**: User sends photo (stored as reference) → "
+        "read_brand_guidelines → img2img with reference → output draft → "
+        "if user says 'use that photo again', reference persists across revisions\n\n"
+
+        "**Web-informed content**: web_fetch URL → extract key info → "
+        "use it in your caption/image prompt → generate as normal\n\n"
+
+        "**Approve → publish**: User approves draft → ask 'post now or schedule?' → "
+        "post_approved (immediate) or schedule_post with time\n\n"
+
+        "**Content session**: Discuss strategy → save_session_plan → "
+        "generate item #1 → approve → next item → ... → all done. "
+        "Or: start_autonomous_plan to batch generate, then show_queued_draft to review each.\n\n"
+
+        "**Report / analysis**: read_state_file (feedback.json, generation_history.json, etc.) → "
+        "execute_code to process data or build HTML/charts → send_file to deliver\n\n"
+
+        "**Schedule queue**: schedule_post to add → list_scheduled_posts to check → "
+        "cancel_scheduled_post to remove. Times: '3pm', 'tomorrow 9am', 'in 2 hours', 'friday 3:30pm'.\n\n"
+
+        "**Self-improvement**: run_self_review analyzes approval rates, rejection patterns, "
+        "and updates learned preferences. Use when asked about performance."
+    )

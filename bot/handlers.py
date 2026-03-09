@@ -249,62 +249,8 @@ async def _do_approve(update: Update, context: ContextTypes.DEFAULT_TYPE, option
         except Exception as e:
             logger.warning("Failed to add LoRA training image: %s", e)
 
-    # Post to X — prefer composed image (template/compositor) over raw URL
-    tweet_url = None
-    try:
-        await update.message.chat.send_action("typing")
-        publish_image = pending.get("image_url")
-        if composed_path and Path(composed_path).exists():
-            publish_image = composed_path
-        tweet_url = await publisher.post_to_x(
-            pending.get("caption", ""),
-            pending.get("hashtags", []),
-            publish_image,
-        )
-    except Exception as e:
-        logger.error("Failed to post to X: %s", e)
-        await update.message.reply_text(
-            f"Approved, but X posting failed. Check logs for details.\n"
-            f"Feedback logged ({count} total entries).",
-            parse_mode="HTML",
-        )
-        state.clear_pending(user_id=user_id)
-        state.clear_draft_history(user_id=user_id)
-        if composed_path and Path(composed_path).exists():
-            Path(composed_path).unlink(missing_ok=True)
-            state.clear_last_composed(user_id=user_id)
-        return
-
-    # Post to Discord (fire-and-forget)
-    discord_url = None
-    try:
-        from agent import discord_bot, discord_publisher
-        if discord_bot.is_ready():
-            publish_image = pending.get("image_url")
-            if composed_path and Path(composed_path).exists():
-                publish_image = composed_path
-            discord_url = await discord_publisher.post_to_discord(
-                caption=pending.get("caption", ""),
-                hashtags=pending.get("hashtags", []),
-                image_url=publish_image,
-                auto_slot=pending.get("auto_slot"),
-                content_type=pending.get("content_type"),
-            )
-    except Exception as e:
-        logger.warning("Discord posting failed (non-fatal): %s", e)
-
-    # If this draft came from the auto-post scheduler, record it
-    auto_slot = pending.get("auto_slot")
-    if auto_slot:
-        auto_state.record_post(
-            slot_name=auto_slot,
-            caption=pending.get("caption", ""),
-            tweet_url=tweet_url,
-            event_ids=pending.get("auto_event_ids"),
-        )
-        logger.info("Auto-post slot '%s' recorded via approve (%s)", auto_slot, source)
-
-    state.clear_pending(user_id=user_id)
+    # Move from pending → approved (no posting yet)
+    state.approve_pending(user_id=user_id)
     state.clear_draft_history(user_id=user_id)
 
     # Update session plan if active
@@ -315,39 +261,14 @@ async def _do_approve(update: Update, context: ContextTypes.DEFAULT_TYPE, option
             current_id = plan.get("current_item")
             if current_id:
                 session_plan.update_item(current_id, status="approved")
-                logger.info("Session plan: item #%d approved, advancing", current_id)
     except Exception as e:
         logger.debug("Session plan update failed in _do_approve: %s", e)
 
-    slot_note = f"  (auto-slot: {_esc(auto_slot)})" if auto_slot else ""
-    discord_note = f"\nDiscord: {_esc(discord_url)}" if discord_url else ""
     await update.message.reply_text(
-        f"Posted to X!{slot_note}\n"
-        f"{_esc(tweet_url)}{discord_note}\n\n"
-        f"Feedback logged ({count} total entries).",
+        "Approved! Want me to post this to X now, or schedule it for later?",
         parse_mode="HTML",
     )
-    logger.info("Draft approved (%s) and posted: %s (feedback #%d)", source, tweet_url, count)
-
-    # Track context — draft approved, nothing pending
-    try:
-        if user_id:
-            conversation_context.update_context(
-                user_id,
-                last_bot_action="sent_content",
-                pending_draft_exists=False,
-                last_command="/approve",
-            )
-    except Exception as e:
-        logger.debug("Context tracking failed in _do_approve: %s", e)
-
-    # Clean up temp composed file (after publish so it's still available for X upload)
-    if composed_path and Path(composed_path).exists():
-        try:
-            Path(composed_path).unlink(missing_ok=True)
-        except Exception as e:
-            logger.debug("Composed cleanup failed for %s: %s", composed_path, e)
-        state.clear_last_composed(user_id=user_id)
+    logger.info("Draft approved (%s), awaiting post/schedule (feedback #%d)", source, count)
 
     # Auto-summarize preferences at threshold
     if count % settings.FEEDBACK_SUMMARIZE_EVERY == 0:
@@ -369,6 +290,99 @@ async def _do_approve(update: Update, context: ContextTypes.DEFAULT_TYPE, option
             logger.info("Self-review triggered after approval threshold")
     except Exception as e:
         logger.debug("Self-review scheduler failed in _do_approve: %s", e)
+
+
+async def _do_post(update: Update, context: ContextTypes.DEFAULT_TYPE, source: str = "command") -> None:
+    """Core post logic — publishes the approved draft to X/Discord."""
+    user_id = update.effective_user.id if update.effective_user else None
+    approved = state.get_approved(user_id=user_id)
+    if not approved:
+        await update.message.reply_text("Nothing to post. Approve a draft first.")
+        return
+
+    await update.message.chat.send_action("typing")
+
+    composed_path, composed_ct = state.get_last_composed(user_id=user_id)
+
+    # Post to X — prefer composed image over raw URL
+    tweet_url = None
+    try:
+        publish_image = approved.get("image_url")
+        if composed_path and Path(composed_path).exists():
+            publish_image = composed_path
+        tweet_url = await publisher.post_to_x(
+            approved.get("caption", ""),
+            approved.get("hashtags", []),
+            publish_image,
+        )
+    except Exception as e:
+        logger.error("Failed to post to X: %s", e)
+        await update.message.reply_text(
+            f"X posting failed. Check logs for details.\n"
+            f"Your draft is still approved — try again with 'post it'.",
+            parse_mode="HTML",
+        )
+        return
+
+    # Post to Discord (fire-and-forget)
+    discord_url = None
+    try:
+        from agent import discord_bot, discord_publisher
+        if discord_bot.is_ready():
+            publish_image = approved.get("image_url")
+            if composed_path and Path(composed_path).exists():
+                publish_image = composed_path
+            discord_url = await discord_publisher.post_to_discord(
+                caption=approved.get("caption", ""),
+                hashtags=approved.get("hashtags", []),
+                image_url=publish_image,
+                auto_slot=approved.get("auto_slot"),
+                content_type=approved.get("content_type"),
+            )
+    except Exception as e:
+        logger.warning("Discord posting failed (non-fatal): %s", e)
+
+    # If this draft came from the auto-post scheduler, record it
+    auto_slot = approved.get("auto_slot")
+    if auto_slot:
+        auto_state.record_post(
+            slot_name=auto_slot,
+            caption=approved.get("caption", ""),
+            tweet_url=tweet_url,
+            event_ids=approved.get("auto_event_ids"),
+        )
+        logger.info("Auto-post slot '%s' recorded via post (%s)", auto_slot, source)
+
+    state.clear_approved(user_id=user_id)
+
+    # Track context — draft posted, nothing pending
+    try:
+        if user_id:
+            conversation_context.update_context(
+                user_id,
+                last_bot_action="sent_content",
+                pending_draft_exists=False,
+                last_command="/post",
+            )
+    except Exception as e:
+        logger.debug("Context tracking failed in _do_post: %s", e)
+
+    # Clean up temp composed file (after publish so it's still available for X upload)
+    if composed_path and Path(composed_path).exists():
+        try:
+            Path(composed_path).unlink(missing_ok=True)
+        except Exception as e:
+            logger.debug("Composed cleanup failed for %s: %s", composed_path, e)
+        state.clear_last_composed(user_id=user_id)
+
+    slot_note = f"  (auto-slot: {_esc(auto_slot)})" if auto_slot else ""
+    discord_note = f"\nDiscord: {_esc(discord_url)}" if discord_url else ""
+    await update.message.reply_text(
+        f"Posted to X!{slot_note}\n"
+        f"{_esc(tweet_url)}{discord_note}",
+        parse_mode="HTML",
+    )
+    logger.info("Draft posted (%s): %s", source, tweet_url)
 
 
 async def _do_reject(update: Update, context: ContextTypes.DEFAULT_TYPE, feedback_text: str = "", source: str = "command") -> None:
@@ -1769,6 +1783,13 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         return
 
     # --- Normal flow: set as reference image ---
+    # Clean up previous ref file to prevent temp file accumulation
+    old_ref = state.get_reference_image()
+    if old_ref and old_ref != tmp_path:
+        try:
+            Path(old_ref).unlink(missing_ok=True)
+        except Exception:
+            pass
     state.set_reference_image(tmp_path)
     logger.info("Reference image saved to state: %s", tmp_path)
 
@@ -1928,12 +1949,14 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 # Deterministic short-message lookup for draft actions + utility commands.
 # Only used in unified brain mode. Maps normalized lowercase → action.
 _UNIFIED_FAST_PATH: dict[str, str] = {
-    # Approve
+    # Approve (save, do NOT post)
     "yes": "approve", "yep": "approve", "yeah": "approve", "y": "approve",
     "ok": "approve", "okay": "approve", "sure": "approve", "looks good": "approve",
-    "lgtm": "approve", "post it": "approve", "send it": "approve",
-    "ship it": "approve", "approve": "approve", "approved": "approve",
-    "go": "approve", "do it": "approve", "publish": "approve",
+    "lgtm": "approve", "approve": "approve", "approved": "approve",
+    # Post (publish to X — requires approved draft)
+    "post it": "post", "send it": "post", "ship it": "post",
+    "publish": "post", "go": "post", "do it": "post",
+    "post": "post", "send": "post",
     # Reroll
     "try again": "reroll", "again": "reroll", "another": "reroll",
     "another one": "reroll", "reroll": "reroll", "redo": "reroll",
@@ -1942,6 +1965,8 @@ _UNIFIED_FAST_PATH: dict[str, str] = {
 
 # Fast path actions that require a pending draft
 _FAST_PATH_DRAFT_ACTIONS = {"approve", "reroll"}
+# Fast path actions that target approved drafts
+_FAST_PATH_APPROVED_ACTIONS = {"post"}
 
 
 async def _fast_path(update: Update, context: ContextTypes.DEFAULT_TYPE, message: str) -> bool:
@@ -1957,6 +1982,21 @@ async def _fast_path(update: Update, context: ContextTypes.DEFAULT_TYPE, message
         return False
 
     has_draft = state.has_pending(user_id=user_id)
+    has_approved = state.has_approved(user_id=user_id)
+
+    # Post action
+    if action == "post":
+        if has_approved:
+            await _do_post(update, context, source="unified_fast")
+            return True
+        elif has_draft:
+            # One-shot shortcut: approve + post in one step
+            await _do_approve(update, context, source="unified_fast")
+            await _do_post(update, context, source="unified_fast_auto")
+            return True
+        else:
+            # Nothing to post — pass to unified brain
+            return False
 
     # Draft-dependent actions without a draft → pass to unified brain
     if action in _FAST_PATH_DRAFT_ACTIONS and not has_draft:
@@ -2099,15 +2139,6 @@ async def _handle_unified(
                 )
             except Exception as e:
                 logger.debug("Unified generation history log failed: %s", e)
-
-            # Clean up reference image
-            ref_cleanup = state.get_reference_image()
-            if ref_cleanup:
-                try:
-                    Path(ref_cleanup).unlink(missing_ok=True)
-                except Exception as e:
-                    logger.debug("Ref cleanup failed for %s: %s", ref_cleanup, e)
-                state.clear_reference_image()
 
             await _send_draft(update, result.draft, image_url, resources=result.resources, image_urls=image_urls, user_id=user_id)
 
@@ -2580,15 +2611,6 @@ async def _handle_agent_mode(update: Update, request: str, user_id: int | None =
             )
         except Exception as e:
             logger.debug("Agent generation history log failed: %s", e)
-
-        # Clean up reference image temp file if one was used
-        ref_cleanup = state.get_reference_image()
-        if ref_cleanup:
-            try:
-                Path(ref_cleanup).unlink(missing_ok=True)
-            except Exception as e:
-                logger.debug("Ref cleanup failed for %s: %s", ref_cleanup, e)
-            state.clear_reference_image()
 
         await _send_draft(update, result.draft, image_url, resources=result.resources, image_urls=image_urls, user_id=user_id)
 

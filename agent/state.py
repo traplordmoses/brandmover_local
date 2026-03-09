@@ -166,6 +166,35 @@ def clear_pending(user_id: int | None = None) -> None:
     logger.info("Cleared pending state")
 
 
+def approve_pending(user_id: int | None = None) -> dict | None:
+    """Move pending → approved (approved but not yet posted). Returns approved draft."""
+    s = _read_state(user_id)
+    pending = s.pop("pending", None)
+    if not pending:
+        return None
+    pending["approved_at"] = time.time()
+    s["approved"] = pending
+    _write_state(s, user_id)
+    return pending
+
+
+def get_approved(user_id: int | None = None) -> dict | None:
+    """Return the approved draft dict, or None."""
+    return _read_state(user_id).get("approved")
+
+
+def has_approved(user_id: int | None = None) -> bool:
+    """Check if there is an approved draft awaiting post."""
+    return "approved" in _read_state(user_id)
+
+
+def clear_approved(user_id: int | None = None) -> None:
+    """Clear any approved draft."""
+    s = _read_state(user_id)
+    s.pop("approved", None)
+    _write_state(s, user_id)
+
+
 def get_draft_history(user_id: int | None = None) -> list[dict]:
     """Return the list of previous draft revisions (most recent last)."""
     return _read_state(user_id).get("draft_history", [])
