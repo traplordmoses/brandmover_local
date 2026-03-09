@@ -608,6 +608,12 @@ def _render_centered(
 # ---------------------------------------------------------------------------
 
 async def _download_image(url: str) -> bytes | None:
+    # Local file path (e.g. from cache_image()) — read directly
+    if not url.startswith("http"):
+        p = Path(url)
+        if p.exists():
+            return p.read_bytes()
+        return None
     try:
         from agent._client import get_httpx
         r = await get_httpx().get(url)

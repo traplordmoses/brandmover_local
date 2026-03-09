@@ -15,7 +15,7 @@ from PIL import Image as _PILImage
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import ContextTypes
 
-from agent import asset_gen, asset_library, auto_state, brain, chat, compositor, compositor_config, conversation_context, engine, feedback, generation_history, guidelines, image_gen, intent_router, onboarding, publisher, schedule_queue, scheduler, state
+from agent import asset_gen, asset_library, auto_state, brain, chat, compositor, compositor_config, conversation_context, engine, feedback, generation_history, guidelines, image_gen, intent_router, onboarding, publisher, schedule_queue, scheduler, state, unified_brain
 from agent import compositor_config as _cc
 from config import settings
 
@@ -306,6 +306,19 @@ async def _do_approve(update: Update, context: ContextTypes.DEFAULT_TYPE, option
 
     state.clear_pending(user_id=user_id)
     state.clear_draft_history(user_id=user_id)
+
+    # Update session plan if active
+    try:
+        from agent import session_plan
+        plan = session_plan.get_plan()
+        if plan:
+            current_id = plan.get("current_item")
+            if current_id:
+                session_plan.update_item(current_id, status="approved")
+                logger.info("Session plan: item #%d approved, advancing", current_id)
+    except Exception as e:
+        logger.debug("Session plan update failed in _do_approve: %s", e)
+
     slot_note = f"  (auto-slot: {_esc(auto_slot)})" if auto_slot else ""
     discord_note = f"\nDiscord: {_esc(discord_url)}" if discord_url else ""
     await update.message.reply_text(
@@ -346,6 +359,16 @@ async def _do_approve(update: Update, context: ContextTypes.DEFAULT_TYPE, option
             )
         except Exception as e:
             logger.error("Auto-summarize failed: %s", e)
+
+    # Self-review: increment approval counter, trigger background review if threshold reached
+    try:
+        from agent import self_review_scheduler
+        should_review = self_review_scheduler.record_approval()
+        if should_review:
+            await self_review_scheduler.maybe_trigger_review()
+            logger.info("Self-review triggered after approval threshold")
+    except Exception as e:
+        logger.debug("Self-review scheduler failed in _do_approve: %s", e)
 
 
 async def _do_reject(update: Update, context: ContextTypes.DEFAULT_TYPE, feedback_text: str = "", source: str = "command") -> None:
@@ -394,6 +417,18 @@ async def _do_reject(update: Update, context: ContextTypes.DEFAULT_TYPE, feedbac
     # Clear the old pending before running revision
     state.clear_pending(user_id=user_id)
 
+    # Update session plan if active
+    try:
+        from agent import session_plan
+        plan = session_plan.get_plan()
+        if plan:
+            current_id = plan.get("current_item")
+            if current_id:
+                session_plan.update_item(current_id, status="rejected", notes=feedback_text[:200])
+                logger.info("Session plan: item #%d rejected", current_id)
+    except Exception as e:
+        logger.debug("Session plan update failed in _do_reject: %s", e)
+
     # Track context — draft rejected, revision incoming
     try:
         if user_id:
@@ -416,6 +451,39 @@ async def _do_reject(update: Update, context: ContextTypes.DEFAULT_TYPE, feedbac
 def _esc(text: str) -> str:
     """HTML-escape text for Telegram messages."""
     return html.escape(str(text))
+
+
+import random as _random
+
+_REVIEW_PROMPTS = [
+    "how does this look?",
+    "what do you think?",
+    "want any changes?",
+    "ready to go, or need tweaks?",
+]
+
+
+def _prepare_photo(photo) -> io.BytesIO | str | None:
+    """Convert any photo source to a Telegram-compatible format.
+
+    - BytesIO → pass through
+    - HTTP URL string → pass through
+    - Local file path string → BytesIO(read_bytes())
+    - Missing file → None
+    """
+    if isinstance(photo, io.BytesIO):
+        return photo
+    if isinstance(photo, str):
+        if photo.startswith("http"):
+            return photo
+        # Local file path from cache_image()
+        p = Path(photo)
+        if p.exists():
+            buf = io.BytesIO(p.read_bytes())
+            buf.name = p.name  # Telegram uses .name for format detection
+            return buf
+        return None
+    return photo  # other file-like objects
 
 
 _STEP_ICONS = {
@@ -501,6 +569,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             "/refs — Show loaded reference materials\n"
             "/feedback — Show approval/rejection stats\n"
             "/learn — Trigger preference learning from feedback history\n"
+            "/review — Run a self-review of agent performance\n"
             "/style — Manage visual style profiles\n"
             "/brand — Show active brand config\n"
             "/setup — Bootstrap guidelines from a PDF upload\n"
@@ -774,22 +843,39 @@ async def edit_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
                 user_id=user_id,
             )
 
-        try:
-            await update.message.reply_photo(
-                photo=photo,
-                caption=(
-                    f"<b>Edited</b>: {_esc(feedback_text)}\n\n"
-                    f"/approve to post\n"
-                    f"/edit <i>more changes</i>\n"
-                    f"/reject <i>feedback</i> to start over"
-                ),
-                parse_mode="HTML",
-            )
-        except Exception as e:
-            logger.warning("Failed to send edited image: %s", e)
+        photo = _prepare_photo(photo)
+        edit_keyboard = InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton("Approve", callback_data="draft_approve"),
+                InlineKeyboardButton("Reject", callback_data="draft_reject"),
+            ],
+            [
+                InlineKeyboardButton("Edit", callback_data="draft_edit"),
+                InlineKeyboardButton("Reroll", callback_data="draft_reroll"),
+            ],
+        ])
+        review = _random.choice(_REVIEW_PROMPTS)
+        if photo:
+            edit_caption = f"<b>Edited</b>: {_esc(feedback_text)}\n\n{review}"
+            try:
+                await update.message.reply_photo(
+                    photo=photo,
+                    caption=edit_caption[:1024],
+                    parse_mode="HTML",
+                    reply_markup=edit_keyboard,
+                )
+            except Exception as e:
+                logger.warning("Failed to send edited image: %s", e)
+                await update.message.reply_text(
+                    f"<b>Edited</b>: {_esc(feedback_text)}\n\n<i>(image unavailable)</i>\n\n{review}",
+                    parse_mode="HTML",
+                    reply_markup=edit_keyboard,
+                )
+        else:
             await update.message.reply_text(
-                f"Edit complete but couldn't send image: {_esc(str(e))}",
+                f"<b>Edited</b>: {_esc(feedback_text)}\n\n<i>(image unavailable)</i>\n\n{review}",
                 parse_mode="HTML",
+                reply_markup=edit_keyboard,
             )
 
     except Exception as e:
@@ -876,12 +962,21 @@ async def _handle_agent_revision(update: Update, pending: dict, feedback_text: s
         f"Please revise the draft based on this feedback. Address the specific concerns raised."
     )
 
+    _rev_status_msg = None
+    _rev_status_lines: list[str] = []
+
     async def on_tool_call(tool_name: str, description: str):
+        nonlocal _rev_status_msg
         icon = _TOOL_ICONS.get(tool_name, "\u26A1")
-        await update.message.reply_text(
-            f"{icon} {_esc(description)}",
-            parse_mode="HTML",
-        )
+        _rev_status_lines.append(f"{icon} {_esc(description)}")
+        text = "\n".join(_rev_status_lines)
+        if _rev_status_msg is None:
+            _rev_status_msg = await update.message.reply_text(text, parse_mode="HTML")
+        else:
+            try:
+                await _rev_status_msg.edit_text(text, parse_mode="HTML")
+            except Exception:
+                pass
         await update.message.chat.send_action("typing")
 
     try:
@@ -890,6 +985,13 @@ async def _handle_agent_revision(update: Update, pending: dict, feedback_text: s
             on_tool_call=on_tool_call,
             revision_context=revision_context,
         )
+
+        # Delete the status message now that we're done
+        if _rev_status_msg:
+            try:
+                await _rev_status_msg.delete()
+            except Exception:
+                pass
 
         if not result.draft:
             await update.message.reply_text(
@@ -964,6 +1066,58 @@ async def learn_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         logger.error("Learn command failed: %s", e)
         await update.message.reply_text(
             f"Failed to summarize preferences: {_esc(str(e))}",
+            parse_mode="HTML",
+        )
+
+
+async def review_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /review — trigger a self-review of agent performance."""
+    if not _authorized(update.effective_user.id):
+        return
+
+    await update.message.chat.send_action("typing")
+    await update.message.reply_text("Running self-review... analyzing feedback and generation history.")
+
+    try:
+        from agent.self_review import run_self_review
+        from agent.self_review_scheduler import mark_review_complete
+
+        result = await run_self_review()
+
+        if result.get("error"):
+            await update.message.reply_text(
+                f"<b>Self-Review</b> (partial)\n\n{_esc(result['error'])}",
+                parse_mode="HTML",
+            )
+            return
+
+        mark_review_complete()
+
+        stats = result.get("stats", {})
+        approval_rate = stats.get("approval_rate", 0)
+        avg_rejections = stats.get("avg_rejections_before_approval", 0)
+        best_type = stats.get("best_content_type", "unknown")
+        reasons = stats.get("common_rejection_reasons", [])
+
+        insights = result.get("insights", [])
+        top_insights = "\n".join(f"  - {i}" for i in insights[:5]) if insights else "  (none)"
+        top_reasons = "\n".join(f"  - {r}" for r in reasons[:3]) if reasons else "  (none)"
+
+        msg = (
+            f"<b>Self-Review Complete</b>\n\n"
+            f"<b>Stats:</b>\n"
+            f"  Approval rate: {approval_rate * 100:.0f}%\n"
+            f"  Avg rejections before approval: {avg_rejections:.1f}\n"
+            f"  Best content type: {_esc(str(best_type))}\n\n"
+            f"<b>Top rejection reasons:</b>\n{top_reasons}\n\n"
+            f"<b>Key insights:</b>\n{top_insights}\n\n"
+            f"Learned preferences updated."
+        )
+        await update.message.reply_text(msg, parse_mode="HTML")
+    except Exception as e:
+        logger.error("Review command failed: %s", e)
+        await update.message.reply_text(
+            f"Self-review failed: {_esc(str(e))}",
             parse_mode="HTML",
         )
 
@@ -1753,6 +1907,304 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         )
 
 
+# ---------------------------------------------------------------------------
+# Unified brain — fast path + unified handler
+# ---------------------------------------------------------------------------
+
+# Deterministic short-message lookup for draft actions + utility commands.
+# Only used in unified brain mode. Maps normalized lowercase → action.
+_UNIFIED_FAST_PATH: dict[str, str] = {
+    # Approve
+    "yes": "approve", "yep": "approve", "yeah": "approve", "y": "approve",
+    "ok": "approve", "okay": "approve", "sure": "approve", "looks good": "approve",
+    "lgtm": "approve", "post it": "approve", "send it": "approve",
+    "ship it": "approve", "approve": "approve", "approved": "approve",
+    "go": "approve", "do it": "approve", "publish": "approve",
+    # Reroll
+    "try again": "reroll", "again": "reroll", "another": "reroll",
+    "another one": "reroll", "reroll": "reroll", "redo": "reroll",
+    "regenerate": "reroll", "new one": "reroll",
+}
+
+# Fast path actions that require a pending draft
+_FAST_PATH_DRAFT_ACTIONS = {"approve", "reroll"}
+
+
+async def _fast_path(update: Update, context: ContextTypes.DEFAULT_TYPE, message: str) -> bool:
+    """Handle deterministic short-message actions for the unified brain path.
+
+    Returns True if the message was handled, False to pass to unified brain.
+    """
+    user_id = update.effective_user.id
+    normalized = message.lower().strip()
+
+    action = _UNIFIED_FAST_PATH.get(normalized)
+    if not action:
+        return False
+
+    has_draft = state.has_pending(user_id=user_id)
+
+    # Draft-dependent actions without a draft → pass to unified brain
+    if action in _FAST_PATH_DRAFT_ACTIONS and not has_draft:
+        return False
+
+    if action == "approve":
+        await _do_approve(update, context, source="unified_fast")
+        return True
+
+    if action == "reroll":
+        if _rate_limited(user_id):
+            await update.message.reply_text(f"Please wait {_RATE_LIMIT_SECONDS}s between requests.")
+            return True
+        pending = state.get_pending(user_id=user_id)
+        if pending:
+            original = pending.get("original_request", "")
+            state.clear_pending(user_id=user_id)
+            state.clear_draft_history(user_id=user_id)
+            await update.message.reply_text("Regenerating...")
+            if original:
+                await _handle_unified(update, context, original, user_id=user_id)
+            return True
+
+    return False
+
+
+def _extract_commentary(response_text: str) -> str:
+    """Extract personality commentary from before the JSON draft block.
+
+    Returns the text before the ```json fence, stripped and cleaned.
+    """
+    # Find the start of the JSON fence
+    fence_idx = response_text.find("```json")
+    if fence_idx == -1:
+        fence_idx = response_text.find("```\n{")
+    if fence_idx == -1:
+        return ""
+
+    commentary = response_text[:fence_idx].strip()
+    # Remove trailing markers like "Here's your draft:" that are just filler
+    commentary = re.sub(r"\s*(here'?s?\s+(the|your)\s+draft:?\s*)$", "", commentary, flags=re.IGNORECASE).strip()
+    return commentary
+
+
+async def _handle_unified(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    request: str,
+    user_id: int | None = None,
+) -> None:
+    """Run the unified brain and handle the result."""
+    await update.message.chat.send_action("typing")
+
+    # Load conversation context and sync pending state
+    ctx = conversation_context.get_context(user_id or update.effective_user.id)
+    ctx.pending_draft_exists = state.has_pending(user_id=user_id)
+
+    # Set user name if available
+    if update.effective_user and update.effective_user.first_name and not ctx.user_name:
+        ctx.user_name = update.effective_user.first_name
+
+    # Inject reference image path if stored
+    ref_path = state.get_reference_image()
+    if ref_path and Path(ref_path).exists():
+        request = f"{request}\n\n[REFERENCE IMAGE: {ref_path}]"
+
+    # Status message for tool calls (same live-edit pattern as _handle_agent_mode)
+    _status_msg = None
+    _status_lines: list[str] = []
+
+    async def on_tool_call(tool_name: str, description: str):
+        nonlocal _status_msg
+        icon = _TOOL_ICONS.get(tool_name, "\u26A1")
+        _status_lines.append(f"{icon} {_esc(description)}")
+        text = "\n".join(_status_lines)
+        if _status_msg is None:
+            _status_msg = await update.message.reply_text(text, parse_mode="HTML")
+        else:
+            try:
+                await _status_msg.edit_text(text, parse_mode="HTML")
+            except Exception:
+                pass
+        await update.message.chat.send_action("typing")
+
+    try:
+        result = await unified_brain.run_unified(
+            message=request,
+            context=ctx,
+            on_tool_call=on_tool_call,
+            user_id=user_id,
+            tool_context={
+                "bot": context.bot,
+                "chat_id": update.effective_chat.id,
+            },
+        )
+
+        # Delete status message
+        if _status_msg:
+            try:
+                await _status_msg.delete()
+            except Exception:
+                pass
+
+        if result.is_generation and result.draft:
+            # --- Generation path: save draft + send for review ---
+
+            # Send agent's personality commentary as a separate message
+            commentary = _extract_commentary(result.response_text)
+            if commentary and len(commentary) > 10:
+                try:
+                    await update.message.reply_text(commentary[:2000])
+                except Exception:
+                    pass
+
+            image_url = result.image_url
+            image_urls = result.image_urls
+
+            # Save pending state
+            state.save_pending(
+                caption=result.draft["caption"],
+                hashtags=result.draft.get("hashtags", []),
+                image_url=image_url,
+                alt_text=result.draft.get("alt_text", ""),
+                image_prompt=result.draft.get("image_prompt", ""),
+                original_request=request,
+                image_urls=image_urls if len(image_urls) > 1 else None,
+                content_type=result.draft.get("content_type"),
+                user_id=user_id,
+            )
+
+            # Log to generation history
+            try:
+                await generation_history.async_log_generation(
+                    asset_type="social_post",
+                    content_type=result.draft.get("content_type", "unknown"),
+                    prompt=result.draft.get("image_prompt", ""),
+                    model_id=settings.SONNET_MODEL,
+                    image_urls=image_urls or ([image_url] if image_url else []),
+                    original_request=request,
+                )
+            except Exception as e:
+                logger.debug("Unified generation history log failed: %s", e)
+
+            # Clean up reference image
+            ref_cleanup = state.get_reference_image()
+            if ref_cleanup:
+                try:
+                    Path(ref_cleanup).unlink(missing_ok=True)
+                except Exception as e:
+                    logger.debug("Ref cleanup failed for %s: %s", ref_cleanup, e)
+                state.clear_reference_image()
+
+            await _send_draft(update, result.draft, image_url, resources=result.resources, image_urls=image_urls, user_id=user_id)
+
+        else:
+            # --- Chat path: send text response ---
+            text = result.response_text or "I'm here — what would you like to do?"
+            max_len = 3900
+            if len(text) > max_len:
+                text = text[:max_len] + "..."
+            await update.message.reply_text(text)
+
+        # Update conversation history
+        uid = user_id or update.effective_user.id
+        history_entries = conversation_context.condense_turn(request, result.response_text)
+        new_history = list(ctx.conversation_history) + history_entries
+        conversation_context.update_context(
+            uid,
+            conversation_history=new_history,
+            last_bot_action="sent_draft" if result.is_generation else "sent_content",
+            pending_draft_exists=result.is_generation and bool(result.draft),
+            user_name=ctx.user_name,
+        )
+
+    except Exception as e:
+        logger.error("Unified brain error: %s", e)
+        if _status_msg:
+            try:
+                await _status_msg.delete()
+            except Exception:
+                pass
+        await update.message.reply_text(
+            f"Something went wrong: {_esc(str(e))}\n\nPlease try again.",
+            parse_mode="HTML",
+        )
+
+
+# ---------------------------------------------------------------------------
+# Voice message handler
+# ---------------------------------------------------------------------------
+
+
+async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle voice/audio messages — transcribe with Whisper, then process as text."""
+    user_id = update.effective_user.id
+    if not _can_operate(user_id):
+        return
+
+    if not settings.WHISPER_ENABLED:
+        await update.message.reply_text("Voice messages are disabled (no OpenAI API key configured).")
+        return
+
+    if not settings.OPENAI_API_KEY:
+        await update.message.reply_text("Voice messages require an OpenAI API key for transcription.")
+        return
+
+    # Get the voice or audio file
+    voice = update.message.voice or update.message.audio
+    if not voice:
+        return
+
+    await update.message.chat.send_action("typing")
+
+    # Download the audio file
+    try:
+        tg_file = await context.bot.get_file(voice.file_id)
+        audio_bytes = await tg_file.download_as_bytearray()
+    except Exception as e:
+        logger.error("Failed to download voice file: %s", e)
+        await update.message.reply_text("Couldn't download the voice message. Try again?")
+        return
+
+    # Transcribe with Whisper
+    try:
+        import openai
+        client = openai.AsyncOpenAI(api_key=settings.OPENAI_API_KEY)
+
+        # Whisper expects a file-like object with a name
+        audio_file = io.BytesIO(audio_bytes)
+        audio_file.name = "voice.ogg"
+
+        transcription = await client.audio.transcriptions.create(
+            model="whisper-1",
+            file=audio_file,
+        )
+        text = transcription.text.strip()
+    except Exception as e:
+        logger.error("Whisper transcription failed: %s", e)
+        await update.message.reply_text("Transcription failed. Try sending a text message instead.")
+        return
+
+    if not text:
+        await update.message.reply_text("Couldn't make out what you said. Try again?")
+        return
+
+    logger.info("Voice transcribed (%d chars): %s", len(text), text[:100])
+
+    # Confirm what we heard
+    preview = text[:120] + ("..." if len(text) > 120 else "")
+    await update.message.reply_text(f'heard: "{_esc(preview)}" — processing...', parse_mode="HTML")
+
+    # Feed through handle_message by injecting the text
+    # We create a lightweight wrapper so the rest of the pipeline works unchanged
+    update.message.text = text
+    await handle_message(update, context)
+
+
+# ---------------------------------------------------------------------------
+# Main message handler
+# ---------------------------------------------------------------------------
+
+
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle any plain text message — routes through intent router before generation."""
     user_id = update.effective_user.id
@@ -1802,6 +2254,15 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             summary = await onboarding.finalize_onboarding(session)
             await update.message.reply_text(summary, parse_mode="HTML")
         return
+
+    # --- Unified brain path ---
+    if settings.UNIFIED_BRAIN_ENABLED:
+        handled = await _fast_path(update, context, request)
+        if not handled:
+            await _handle_unified(update, context, request, user_id=user_id)
+        return
+
+    # --- Legacy path: intent router + separate brains ---
 
     # Intent routing — classify message and dispatch if confident
     if settings.INTENT_ROUTER_ENABLED:
@@ -2027,12 +2488,21 @@ async def _handle_agent_mode(update: Update, request: str, user_id: int | None =
     if ref_path and Path(ref_path).exists():
         request = f"{request}\n\n[REFERENCE IMAGE: {ref_path}]"
 
+    _status_msg = None
+    _status_lines: list[str] = []
+
     async def on_tool_call(tool_name: str, description: str):
+        nonlocal _status_msg
         icon = _TOOL_ICONS.get(tool_name, "\u26A1")
-        await update.message.reply_text(
-            f"{icon} {_esc(description)}",
-            parse_mode="HTML",
-        )
+        _status_lines.append(f"{icon} {_esc(description)}")
+        text = "\n".join(_status_lines)
+        if _status_msg is None:
+            _status_msg = await update.message.reply_text(text, parse_mode="HTML")
+        else:
+            try:
+                await _status_msg.edit_text(text, parse_mode="HTML")
+            except Exception:
+                pass  # Telegram rejects edits if text unchanged
         await update.message.chat.send_action("typing")
 
     try:
@@ -2041,11 +2511,15 @@ async def _handle_agent_mode(update: Update, request: str, user_id: int | None =
             on_tool_call=on_tool_call,
         )
 
+        # Delete the status message now that we're done
+        if _status_msg:
+            try:
+                await _status_msg.delete()
+            except Exception:
+                pass
+
         if not result.draft:
-            # Agent gave a conversational response (strategy, advice, etc.)
-            # rather than a structured social media draft — show it cleanly
             text = result.final_text or "I processed your request but didn't generate a draft."
-            # Truncate for Telegram's 4096 char limit, leaving room for footer
             max_len = 3900
             if len(text) > max_len:
                 text = text[:max_len] + "..."
@@ -2826,13 +3300,21 @@ async def _handle_pipeline_mode(update: Update, request: str, user_id: int | Non
     """Run the existing multi-step pipeline for a content request."""
     await update.message.chat.send_action("typing")
 
-    step_messages = {}
+    _pipe_status_msg = None
+    _pipe_status_lines: list[str] = []
 
     async def on_step(step_num: int, total: int, step_name: str, summary: str):
+        nonlocal _pipe_status_msg
         icon = _STEP_ICONS.get(step_name, "\u26A1")
-        msg_text = f"{icon} <b>[{step_num}/{total}] {step_name}</b>\n{_esc(summary)}"
-        sent = await update.message.reply_text(msg_text, parse_mode="HTML")
-        step_messages[step_num] = sent
+        _pipe_status_lines.append(f"{icon} [{step_num}/{total}] {step_name}")
+        text = "\n".join(_pipe_status_lines)
+        if _pipe_status_msg is None:
+            _pipe_status_msg = await update.message.reply_text(text, parse_mode="HTML")
+        else:
+            try:
+                await _pipe_status_msg.edit_text(text, parse_mode="HTML")
+            except Exception:
+                pass
         await update.message.chat.send_action("typing")
 
     try:
@@ -2846,6 +3328,13 @@ async def _handle_pipeline_mode(update: Update, request: str, user_id: int | Non
         )
 
         draft = pipeline_result.draft
+
+        # Delete the status message now that we're done
+        if _pipe_status_msg:
+            try:
+                await _pipe_status_msg.delete()
+            except Exception:
+                pass
 
         if pipeline_result.fell_back:
             await update.message.reply_text(
@@ -2913,20 +3402,19 @@ async def _send_draft(
         draft["title"] = sentences[0].rstrip(".")
         draft["subtitle"] = sentences[1] if len(sentences) > 1 else ""
 
-    # Build template section if title/subtitle present
-    template_section = ""
-    if draft.get("title") or draft.get("subtitle"):
-        cfg = _cc.get_config()
-        platform_line = (
-            f"<b>Platform:</b> {_esc(draft.get('platform', cfg.badge_text or ''))}\n"
-            if cfg.badge_text else ""
-        )
-        template_section = (
-            f"\n<b>--- Image Template ---</b>\n"
-            f"<b>Title:</b> {_esc(draft.get('title', ''))}\n"
-            f"<b>Subtitle:</b> {_esc(draft.get('subtitle', ''))}\n"
-            + platform_line
-        )
+    # Inline keyboard for quick actions
+    keyboard = InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("Approve", callback_data="draft_approve"),
+            InlineKeyboardButton("Reject", callback_data="draft_reject"),
+        ],
+        [
+            InlineKeyboardButton("Edit", callback_data="draft_edit"),
+            InlineKeyboardButton("Reroll", callback_data="draft_reroll"),
+        ],
+    ])
+
+    review = _random.choice(_REVIEW_PROMPTS)
 
     # --- Multi-option path (N>1 images) ---
     if image_urls and len(image_urls) > 1:
@@ -2948,65 +3436,32 @@ async def _send_draft(
                     with open(tmp_composed, "wb") as f:
                         f.write(composed.getvalue())
                     composed.seek(0)
-                    # Store last composed for the first option by default
                     if idx == 1:
                         state.set_last_composed(tmp_composed, content_type, user_id=user_id)
                 except Exception as e:
                     logger.warning("Failed to save composed option %d: %s", idx, e)
 
+            photo = _prepare_photo(photo)
             opt_caption = f"<b>Option {idx} of {len(image_urls)}</b>"
-            try:
-                await update.message.reply_photo(
-                    photo=photo,
-                    caption=opt_caption,
-                    parse_mode="HTML",
-                )
-            except Exception as e:
-                logger.warning("Failed to send option %d image: %s", idx, e)
+            if photo:
+                try:
+                    await update.message.reply_photo(
+                        photo=photo,
+                        caption=opt_caption,
+                        parse_mode="HTML",
+                    )
+                except Exception as e:
+                    logger.warning("Failed to send option %d image: %s", idx, e)
+            else:
+                logger.warning("Option %d image unavailable", idx)
 
         # Send summary text after all options
         approve_hints = " | ".join(f"/approve {i}" for i in range(1, len(image_urls) + 1))
-        text_msg = (
-            f"<b>Draft Ready — {len(image_urls)} options</b>\n\n"
-            f"{_esc(caption)}\n"
-            f"{template_section}\n"
-            f"<i>Alt text:</i> {_esc(draft.get('alt_text', ''))}\n\n"
-            f"{approve_hints}\n"
-            f"/reject <i>feedback</i> to revise\n"
-            f"/edit [feedback] to surgically fix specific elements"
-        )
-        if resources:
-            text_msg += f"\n\n<i>Resources: {_esc(resources.to_summary())}</i>"
+        text_msg = f"{_esc(caption)}\n\n{approve_hints}\n/reject <i>feedback</i> to revise"
         await update.message.reply_text(text_msg, parse_mode="HTML")
         return
 
-    # --- Single image path (original behavior) ---
-    text_msg = (
-        f"<b>Draft Ready</b>\n\n"
-        f"{_esc(caption)}\n"
-        f"{template_section}\n"
-        f"<i>Alt text:</i> {_esc(draft.get('alt_text', ''))}\n\n"
-        f"/approve to post to X\n"
-        f"/reject <i>feedback</i> to revise\n"
-        f"/edit [feedback] to surgically fix specific elements"
-    )
-
-    # Append resource summary if available
-    if resources:
-        text_msg += f"\n\n<i>Resources: {_esc(resources.to_summary())}</i>"
-
-    # Inline keyboard for quick actions
-    keyboard = InlineKeyboardMarkup([
-        [
-            InlineKeyboardButton("Approve", callback_data="draft_approve"),
-            InlineKeyboardButton("Reject", callback_data="draft_reject"),
-        ],
-        [
-            InlineKeyboardButton("Edit", callback_data="draft_edit"),
-            InlineKeyboardButton("Reroll", callback_data="draft_reroll"),
-        ],
-    ])
-
+    # --- Single image path ---
     if image_url:
         photo, composed = await _maybe_compose(draft, image_url, content_type)
 
@@ -3021,19 +3476,27 @@ async def _send_draft(
             except Exception as e:
                 logger.warning("Failed to save composed image for archiving: %s", e)
 
-        try:
-            await update.message.reply_photo(
-                photo=photo,
-                caption=text_msg[:1024],  # Telegram photo caption limit
-                parse_mode="HTML",
-                reply_markup=keyboard,
-            )
-            if len(text_msg) > 1024:
-                await update.message.reply_text(text_msg, parse_mode="HTML")
-        except Exception as e:
-            logger.warning("Failed to send image via Telegram: %s — sending text only", e)
+        photo = _prepare_photo(photo)
+        if photo:
+            # Slim caption: just the post text + review prompt
+            photo_caption = f"{_esc(caption)}\n\n{review}"
+            try:
+                await update.message.reply_photo(
+                    photo=photo,
+                    caption=photo_caption[:1024],
+                    parse_mode="HTML",
+                    reply_markup=keyboard,
+                )
+            except Exception as e:
+                logger.warning("Failed to send image via Telegram: %s — sending text only", e)
+                text_msg = f"{_esc(caption)}\n\n<i>(image unavailable)</i>\n\n{review}"
+                await update.message.reply_text(text_msg, parse_mode="HTML", reply_markup=keyboard)
+        else:
+            text_msg = f"{_esc(caption)}\n\n<i>(image unavailable)</i>\n\n{review}"
             await update.message.reply_text(text_msg, parse_mode="HTML", reply_markup=keyboard)
     else:
+        # Text-only draft
+        text_msg = f"{_esc(caption)}\n\n{review}"
         await update.message.reply_text(text_msg, parse_mode="HTML", reply_markup=keyboard)
 
     # Track context — draft was sent
@@ -3133,23 +3596,7 @@ async def send_auto_draft(bot, draft: dict, image_url: str | None, slot_name: st
         draft["title"] = sentences[0].rstrip(".")
         draft["subtitle"] = sentences[1] if len(sentences) > 1 else ""
 
-    template_section = ""
-    if draft.get("title") or draft.get("subtitle"):
-        template_section = (
-            f"\n<b>--- Image Template ---</b>\n"
-            f"<b>Title:</b> {_esc(draft.get('title', ''))}\n"
-            f"<b>Subtitle:</b> {_esc(draft.get('subtitle', ''))}\n"
-        )
-
-    text_msg = (
-        f"<b>Auto-Draft Ready</b>  [slot: <code>{_esc(slot_name)}</code>]\n\n"
-        f"{_esc(caption)}\n"
-        f"{template_section}\n"
-        f"<i>Alt text:</i> {_esc(draft.get('alt_text', ''))}\n\n"
-        f"/approve to post to X\n"
-        f"/reject <i>feedback</i> to revise\n"
-        f"/cancel to discard"
-    )
+    review = _random.choice(_REVIEW_PROMPTS)
 
     if image_url:
         photo, composed = await _maybe_compose(draft, image_url, content_type)
@@ -3165,19 +3612,25 @@ async def send_auto_draft(bot, draft: dict, image_url: str | None, slot_name: st
             except Exception as e:
                 logger.warning("Failed to save auto composed image: %s", e)
 
-        try:
-            await bot.send_photo(
-                chat_id=chat_id,
-                photo=photo,
-                caption=text_msg[:1024],
-                parse_mode="HTML",
-            )
-            if len(text_msg) > 1024:
+        photo = _prepare_photo(photo)
+        if photo:
+            photo_caption = f"[auto: {_esc(slot_name)}]\n{_esc(caption)}\n\n{review}"
+            try:
+                await bot.send_photo(
+                    chat_id=chat_id,
+                    photo=photo,
+                    caption=photo_caption[:1024],
+                    parse_mode="HTML",
+                )
+            except Exception as e:
+                logger.warning("Failed to send auto-draft image: %s — sending text", e)
+                text_msg = f"[auto: {_esc(slot_name)}]\n{_esc(caption)}\n\n<i>(image unavailable)</i>"
                 await bot.send_message(chat_id=chat_id, text=text_msg, parse_mode="HTML")
-        except Exception as e:
-            logger.warning("Failed to send auto-draft image: %s — sending text", e)
+        else:
+            text_msg = f"[auto: {_esc(slot_name)}]\n{_esc(caption)}\n\n<i>(image unavailable)</i>"
             await bot.send_message(chat_id=chat_id, text=text_msg, parse_mode="HTML")
     else:
+        text_msg = f"[auto: {_esc(slot_name)}]\n{_esc(caption)}\n\n{review}"
         await bot.send_message(chat_id=chat_id, text=text_msg, parse_mode="HTML")
 
     logger.info("Auto-draft sent to Telegram for slot: %s", slot_name)

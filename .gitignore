@@ -13,30 +13,25 @@ venv/
 # IDE
 .vscode/
 
-# Runtime / generated
-bot.log
+# Runtime state (per-instance, generated at runtime)
 state/
-state/images/
+!state/.gitkeep
+
+# Runtime logs
+bot.log
 *.bak
 
-# Eval runtime output
-eval/results/*.json
-*.evalbak
-
-# Brand config (per-instance, not shared)
+# Brand config (per-instance — each brand has its own)
 brand/guidelines.md
 brand/styles.json
+brand/config.json
 brand/prompts/*.txt
 brand/examples/articles/*.txt
 brand/training_data/
 brand/loras/
 brand/personality/system_prompt.md
 brand/personality/memory.md
-
-# Per-instance schedule config
-config/schedule.json
-
-# Brand assets (may contain proprietary material)
+brand/personality/voice_rules.md
 brand/references/
 brand/assets/fonts/
 brand/assets/pdf_pages/
@@ -48,12 +43,15 @@ brand/assets/*.jpg
 brand/asset_inventory.json
 brand/asset_library.json
 brand/templates/
+brand/archive/
 
-# Eval baselines (generated per-brand)
+# Per-instance schedule config
+config/schedule.json
+
+# Eval runtime output
+eval/results/*.json
 eval/baselines/*.json
+*.evalbak
 
 # Runtime cache
 .cache/
-
-# Brand archive (old proprietary assets)
-brand/archive/

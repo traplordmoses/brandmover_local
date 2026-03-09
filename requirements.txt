@@ -5,6 +5,8 @@ replicate
 tweepy>=4.0
 python-dotenv
 httpx
+aiohttp
+beautifulsoup4
 Pillow
 numpy
 cairosvg

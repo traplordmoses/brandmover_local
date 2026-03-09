@@ -77,6 +77,15 @@ OPENCLAW_SCRIPTS_DIR: str = os.getenv(
 # --- Intent Router ---
 INTENT_ROUTER_ENABLED: bool = os.getenv("INTENT_ROUTER_ENABLED", "true").lower() in ("true", "1", "yes")
 
+# --- Whisper (voice transcription) ---
+WHISPER_ENABLED: bool = os.getenv(
+    "WHISPER_ENABLED",
+    "true" if os.getenv("OPENAI_API_KEY") else "false",
+).lower() in ("true", "1", "yes")
+
+# --- Unified Brain ---
+UNIFIED_BRAIN_ENABLED: bool = os.getenv("UNIFIED_BRAIN_ENABLED", "false").lower() in ("true", "1", "yes")
+
 # --- Auto Post ---
 AUTO_POST_ENABLED: bool = os.getenv("AUTO_POST_ENABLED", "false").lower() in ("true", "1", "yes")
 AUTO_POST_SCHEDULE_FILE: str = os.getenv(

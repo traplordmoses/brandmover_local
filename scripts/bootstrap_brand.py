@@ -3,8 +3,8 @@
 Brand Bootstrap — auto-generate brand guidelines by scraping X accounts and websites.
 
 Usage:
-    python scripts/bootstrap_brand.py --x-handle @FOIDFUN --website https://foid.fun
-    python scripts/bootstrap_brand.py --x-handle @FOIDFUN --website https://foid.fun --reference pitch_deck.pdf
+    python scripts/bootstrap_brand.py --x-handle @YourBrand --website https://yourbrand.com
+    python scripts/bootstrap_brand.py --x-handle @YourBrand --website https://yourbrand.com --reference pitch_deck.pdf
     python scripts/bootstrap_brand.py --x-handle @YourBrand  # X only, no website
 
 Requires:
@@ -397,7 +397,7 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  python scripts/bootstrap_brand.py --x-handle @FOIDFUN --website https://foid.fun
+  python scripts/bootstrap_brand.py --x-handle @YourBrand --website https://yourbrand.com
   python scripts/bootstrap_brand.py --x-handle @Nike --website https://nike.com
   python scripts/bootstrap_brand.py --x-handle @YourBrand --reference pitch_deck.pdf
   python scripts/bootstrap_brand.py --website https://yourbrand.com  # website only

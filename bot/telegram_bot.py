@@ -38,6 +38,7 @@ def create_bot() -> Application:
     app.add_handler(CommandHandler("reject", handlers.reject_command))
     app.add_handler(CommandHandler("feedback", handlers.feedback_command))
     app.add_handler(CommandHandler("learn", handlers.learn_command))
+    app.add_handler(CommandHandler("review", handlers.review_command))
     app.add_handler(CommandHandler("style", handlers.style_command))
     app.add_handler(CommandHandler("brand", handlers.brand_command))
     app.add_handler(CommandHandler("edit", handlers.edit_command))
@@ -86,6 +87,11 @@ def create_bot() -> Application:
 
     # Template-from-reference inline buttons (Save/Adjust/Discard)
     app.add_handler(CallbackQueryHandler(handlers.tplref_callback, pattern=r"^tplref_"))
+
+    # Voice and audio messages (transcribe → process as text)
+    app.add_handler(
+        MessageHandler(filters.VOICE | filters.AUDIO, handlers.handle_voice)
+    )
 
     # Photo uploads (reference images)
     app.add_handler(

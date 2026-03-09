@@ -6,6 +6,7 @@ Persists to state/conversation.json. Auto-prunes entries older than 24 hours.
 
 import json
 import logging
+import re
 import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -112,3 +113,34 @@ def clear_context(user_id: int) -> None:
     if key in all_ctx:
         del all_ctx[key]
         _save_all(all_ctx)
+
+
+# JSON fence pattern for stripping draft blocks from history
+_JSON_FENCE_RE = re.compile(r"```(?:json)?\s*\n\{.*?\}\s*\n```", re.DOTALL)
+
+_MAX_HISTORY_TEXT = 500
+
+
+def condense_turn(user_message: str, assistant_text: str) -> list[dict]:
+    """Condense a unified brain exchange into storable history entries.
+
+    Strips JSON draft blocks and tool call details from assistant text.
+    Caps assistant text at 500 chars to keep history lean.
+
+    Returns a list of [user, assistant] message dicts.
+    """
+    # Strip JSON draft fences from assistant text
+    condensed = _JSON_FENCE_RE.sub("", assistant_text).strip()
+
+    # Collapse multiple blank lines
+    condensed = re.sub(r"\n{3,}", "\n\n", condensed)
+
+    # Cap length
+    if len(condensed) > _MAX_HISTORY_TEXT:
+        condensed = condensed[:_MAX_HISTORY_TEXT] + "..."
+
+    entries = [{"role": "user", "content": user_message}]
+    if condensed:
+        entries.append({"role": "assistant", "content": condensed})
+
+    return entries

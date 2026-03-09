@@ -439,6 +439,13 @@ async def run_cron(
     # --- 3. Periodic housekeeping ---
     schedule_queue.prune_old()
 
+    # --- 4. Daily self-review check ---
+    try:
+        from agent.self_review_scheduler import maybe_trigger_daily_review
+        await maybe_trigger_daily_review()
+    except Exception as e:
+        logger.debug("Self-review daily check failed: %s", e)
+
     return drafts_made
 
 
