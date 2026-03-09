@@ -245,6 +245,7 @@ def _tool_description(tool_name: str, tool_input: dict) -> str:
         "get_session_plan": "Checking session plan...",
         "update_plan_item": f"Updating plan item #{tool_input.get('item_id', '?')}...",
         "execute_code": f"Running script: {tool_input.get('description', 'computation')}...",
+        "register_draft": f"Registering {Path(tool_input.get('image_path', '')).name if tool_input.get('image_path') else '?'} as draft...",
         "send_file": f"Sending file: {Path(tool_input.get('file_path', '')).name if tool_input.get('file_path') else '?'}...",
         "read_state_file": f"Reading {tool_input.get('file_path', 'file')}...",
         "run_self_review": "Analyzing performance and updating preferences...",

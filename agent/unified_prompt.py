@@ -241,7 +241,8 @@ def _build_capabilities_section() -> str:
         "Planning: `save_session_plan`, `get_session_plan`, `update_plan_item`, "
         "`start_autonomous_plan`, `show_queued_draft`\n"
         "Research: `web_fetch` (read URLs), `read_state_file` (read state/brand data)\n"
-        "Utilities: `execute_code` (run Python scripts), `send_file` (deliver files to user), "
+        "Utilities: `execute_code` (run Python scripts), `register_draft` (link execute_code output "
+        "into draft pipeline), `send_file` (deliver files to user), "
         "`check_auto_post_status`, `run_self_review`\n\n"
 
         "You can chain tools freely. Read a URL, then use what you learned in a draft. "
@@ -270,6 +271,10 @@ def _build_workflows_section() -> str:
         "**Content session**: Discuss strategy → save_session_plan → "
         "generate item #1 → approve → next item → ... → all done. "
         "Or: start_autonomous_plan to batch generate, then show_queued_draft to review each.\n\n"
+
+        "**Code-generated content** (memes, graphics): execute_code creates image in state/outputs/ → "
+        "register_draft with the file path and caption → now it's a normal draft the user can "
+        "approve → post/schedule. ALWAYS call register_draft after execute_code produces visual content.\n\n"
 
         "**Report / analysis**: read_state_file (feedback.json, generation_history.json, etc.) → "
         "execute_code to process data or build HTML/charts → send_file to deliver\n\n"

@@ -387,6 +387,46 @@ _cancel_scheduled_post_def = {
     },
 }
 
+_register_draft_def = {
+    "name": "register_draft",
+    "description": (
+        "Register a file produced by execute_code (or any local file in state/outputs/) "
+        "as a pending draft so it enters the normal approve/schedule/post pipeline. "
+        "Use after execute_code creates a meme, graphic, or any visual content that "
+        "the user should be able to approve and post."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "caption": {
+                "type": "string",
+                "description": "Post caption text (can be empty for image-only posts like memes).",
+            },
+            "image_path": {
+                "type": "string",
+                "description": "Path to the image file, usually in state/outputs/.",
+            },
+            "content_type": {
+                "type": "string",
+                "description": "Content type: meme, announcement, brand_3d, etc. Defaults to 'meme'.",
+            },
+            "alt_text": {
+                "type": "string",
+                "description": "Accessible image description.",
+            },
+            "title": {
+                "type": "string",
+                "description": "Optional title for compositor overlay.",
+            },
+            "subtitle": {
+                "type": "string",
+                "description": "Optional subtitle for compositor overlay.",
+            },
+        },
+        "required": ["image_path"],
+    },
+}
+
 UNIFIED_TOOL_DEFINITIONS = _BASE_TOOL_DEFINITIONS + [
     _get_pending_draft_def,
     _revise_draft_def,
@@ -397,6 +437,7 @@ UNIFIED_TOOL_DEFINITIONS = _BASE_TOOL_DEFINITIONS + [
     _get_session_plan_def,
     _update_plan_item_def,
     _execute_code_def,
+    _register_draft_def,
     _send_file_def,
     _read_state_file_def,
     _run_self_review_def,
@@ -588,6 +629,53 @@ async def _handle_execute_code(
         logger.info("execute_code '%s' completed, %d output files", description, len(new_files))
 
     return json.dumps(result)
+
+
+async def _handle_register_draft(
+    input_dict: dict, tracker: ResourceTracker, user_id: int | None = None,
+    tool_context: dict | None = None,
+) -> str:
+    image_path = input_dict.get("image_path", "")
+    if not image_path:
+        return json.dumps({"error": "image_path is required"})
+
+    # Resolve relative paths against project root
+    path = Path(image_path)
+    if not path.is_absolute():
+        path = _PROJECT_ROOT / path
+
+    if not path.exists():
+        return json.dumps({"error": f"File not found: {image_path}"})
+
+    caption = input_dict.get("caption", "")
+    content_type = input_dict.get("content_type", "meme")
+    alt_text = input_dict.get("alt_text", "")
+    title = input_dict.get("title", "")
+    subtitle = input_dict.get("subtitle", "")
+
+    # Save as pending draft with local file path as image_url
+    state.save_pending(
+        caption=caption,
+        hashtags=[],
+        image_url=str(path),
+        alt_text=alt_text,
+        image_prompt="",
+        original_request=caption or f"[registered from {path.name}]",
+        content_type=content_type,
+        user_id=user_id,
+    )
+
+    # Also save as last_composed so the publish flow uses the local file
+    state.set_last_composed(str(path), content_type, user_id=user_id)
+
+    logger.info("register_draft: %s registered as pending draft (content_type=%s)", path.name, content_type)
+
+    return json.dumps({
+        "status": "registered",
+        "image_path": str(path),
+        "content_type": content_type,
+        "message": f"Draft registered with {path.name}. Ready for approve → post/schedule.",
+    })
 
 
 async def _handle_send_file(
@@ -1037,6 +1125,7 @@ _UNIFIED_HANDLERS = {
     "get_session_plan": _handle_get_session_plan,
     "update_plan_item": _handle_update_plan_item,
     "execute_code": _handle_execute_code,
+    "register_draft": _handle_register_draft,
     "send_file": _handle_send_file,
     "read_state_file": _handle_read_state_file,
     "run_self_review": _handle_run_self_review,
