@@ -1832,13 +1832,6 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
                 )
                 return
 
-            if state.has_pending(user_id=user_id):
-                await update.message.reply_text(
-                    "You have a pending draft. /approve, /reject, or /cancel it first.",
-                    parse_mode="HTML",
-                )
-                return
-
             # Strip the direct-photo keywords from caption to get a content hint
             content_hint = caption
             for p in _DIRECT_PHOTO_PATTERNS:
@@ -1846,6 +1839,18 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             if not content_hint:
                 content_hint = "create an announcement"
             request = f"{content_hint}\n\n[DIRECT PHOTO: {tmp_path}]\n[generate text only, do NOT call generate_image]"
+
+            if settings.UNIFIED_BRAIN_ENABLED:
+                await _handle_unified(update, context, request, user_id=user_id)
+                return
+
+            # Legacy path: pending draft blocker
+            if state.has_pending(user_id=user_id):
+                await update.message.reply_text(
+                    "You have a pending draft. /approve, /reject, or /cancel it first.",
+                    parse_mode="HTML",
+                )
+                return
 
             if settings.AGENT_MODE == "agent":
                 await _handle_agent_mode(update, request, user_id=user_id)
@@ -1877,6 +1882,11 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             )
             return
 
+        if settings.UNIFIED_BRAIN_ENABLED:
+            await _handle_unified(update, context, caption, user_id=user_id)
+            return
+
+        # Legacy path: pending draft blocker
         if state.has_pending(user_id=user_id):
             await update.message.reply_text(
                 "You have a pending draft. /approve, /reject, or /cancel it first.",
@@ -1889,7 +1899,11 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         else:
             await _handle_pipeline_mode(update, caption, user_id=user_id)
     else:
-        # Batch uploads: collect images for 3 seconds, then auto-ingest if bulk
+        if settings.UNIFIED_BRAIN_ENABLED:
+            await _handle_unified(update, context, "[User sent a photo]", user_id=user_id)
+            return
+
+        # Legacy: batch uploads — collect images for 3 seconds, then auto-ingest if bulk
         import asyncio as _aio
 
         batch = context.user_data.setdefault("_bulk_uploads", [])
@@ -3569,7 +3583,9 @@ async def draft_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             state.clear_draft_history(user_id=cb_user_id)
             await query.message.reply_text("Regenerating...")
             if original:
-                if settings.AGENT_MODE == "agent":
+                if settings.UNIFIED_BRAIN_ENABLED:
+                    await _handle_unified(proxy, context, original, user_id=cb_user_id)
+                elif settings.AGENT_MODE == "agent":
                     await _handle_agent_mode(proxy, original, user_id=cb_user_id)
                 else:
                     await _handle_pipeline_mode(proxy, original, user_id=cb_user_id)

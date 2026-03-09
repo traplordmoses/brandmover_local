@@ -238,6 +238,7 @@ def _tool_description(tool_name: str, tool_input: dict) -> str:
         "img2img": f"Generating image from reference: {tool_input.get('reference_image_path', 'auto')}...",
         "execute_openclaw_script": f"Running {tool_input.get('script_name', 'script')}...",
         "get_pending_draft": "Checking pending draft...",
+        "revise_draft": f"Revising draft: {tool_input.get('feedback', '?')[:60]}...",
         "check_auto_post_status": "Checking auto-post schedule...",
         "web_fetch": f"Fetching {tool_input.get('url', 'URL')[:60]}...",
         "save_session_plan": "Saving content plan...",

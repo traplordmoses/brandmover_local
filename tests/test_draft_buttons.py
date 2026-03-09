@@ -104,6 +104,7 @@ class TestDraftCallback:
                     "caption": "Old",
                 }
                 mock_settings.AGENT_MODE = "pipeline"
+                mock_settings.UNIFIED_BRAIN_ENABLED = False
                 mock_pipeline.return_value = None
 
                 update = _mock_callback_update("reroll")

@@ -109,8 +109,10 @@ class TestBulkUploadBatching:
                  patch("bot.handlers.onboarding") as mock_onboard, \
                  patch("bot.handlers.state"), \
                  patch("bot.handlers._PILImage") as mock_pil, \
-                 patch("bot.handlers._bulk_upload_tasks", {}):
+                 patch("bot.handlers._bulk_upload_tasks", {}), \
+                 patch("bot.handlers.settings") as mock_settings:
                 mock_onboard.get_session.return_value = None
+                mock_settings.UNIFIED_BRAIN_ENABLED = False
                 mock_img = MagicMock()
                 mock_pil.open.return_value.convert.return_value = mock_img
 
@@ -134,8 +136,10 @@ class TestBulkUploadBatching:
                  patch("bot.handlers.onboarding") as mock_onboard, \
                  patch("bot.handlers.state"), \
                  patch("bot.handlers._PILImage") as mock_pil, \
-                 patch("bot.handlers._bulk_upload_tasks", {}):
+                 patch("bot.handlers._bulk_upload_tasks", {}), \
+                 patch("bot.handlers.settings") as mock_settings:
                 mock_onboard.get_session.return_value = None
+                mock_settings.UNIFIED_BRAIN_ENABLED = False
                 mock_img = MagicMock()
                 mock_pil.open.return_value.convert.return_value = mock_img
 
@@ -164,6 +168,7 @@ class TestBulkUploadBatching:
                 mock_state.has_pending.return_value = False
                 mock_state.get_style_profiles.return_value = {}
                 mock_settings.AGENT_MODE = "pipeline"
+                mock_settings.UNIFIED_BRAIN_ENABLED = False
                 mock_pipeline.return_value = None
 
                 update = _mock_update(caption="write a post about this")

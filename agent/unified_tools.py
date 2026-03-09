@@ -47,6 +47,26 @@ _get_pending_draft_def = {
     },
 }
 
+_revise_draft_def = {
+    "name": "revise_draft",
+    "description": (
+        "Clear the current pending draft and return its details so you can generate "
+        "a revised version. Use when the user gives conversational feedback on a pending "
+        "draft (e.g. 'change the image', 'make it shorter', 'use my photo'). After calling "
+        "this, generate a revised version and output a new JSON draft block."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "feedback": {
+                "type": "string",
+                "description": "Brief summary of what the user wants changed.",
+            },
+        },
+        "required": ["feedback"],
+    },
+}
+
 _check_auto_post_status_def = {
     "name": "check_auto_post_status",
     "description": (
@@ -285,6 +305,7 @@ _show_queued_draft_def = {
 
 UNIFIED_TOOL_DEFINITIONS = _BASE_TOOL_DEFINITIONS + [
     _get_pending_draft_def,
+    _revise_draft_def,
     _check_auto_post_status_def,
     _web_fetch_def,
     _save_session_plan_def,
@@ -316,6 +337,48 @@ async def _handle_get_pending_draft(
         "original_request": pending.get("original_request", ""),
         "revision": state.get_draft_revision_count(user_id=user_id),
         "has_image": bool(pending.get("image_url")),
+    })
+
+
+async def _handle_revise_draft(
+    input_dict: dict, tracker: ResourceTracker, user_id: int | None = None,
+    tool_context: dict | None = None,
+) -> str:
+    pending = state.get_pending(user_id=user_id)
+    if not pending:
+        return json.dumps({"error": "No pending draft to revise"})
+
+    old_draft = {
+        "caption": pending.get("caption", ""),
+        "image_prompt": pending.get("image_prompt", ""),
+        "content_type": pending.get("content_type", "unknown"),
+        "original_request": pending.get("original_request", ""),
+        "alt_text": pending.get("alt_text", ""),
+        "has_image": bool(pending.get("image_url")),
+        "revision": state.get_draft_revision_count(user_id=user_id),
+    }
+
+    feedback_text = input_dict.get("feedback", "")
+
+    # Log rejection to feedback history
+    from agent import feedback as _fb
+    try:
+        await _fb.async_log_feedback(
+            request=pending.get("original_request", ""),
+            draft=pending, accepted=False,
+            feedback_text=feedback_text,
+            resources_used=pending.get("resources_used", []),
+        )
+    except Exception as e:
+        logger.warning("Failed to log revision feedback: %s", e)
+
+    state.clear_pending(user_id=user_id)
+
+    return json.dumps({
+        "status": "draft_cleared",
+        "previous_draft": old_draft,
+        "feedback": feedback_text,
+        "message": "Previous draft cleared. Generate a revised version addressing the feedback.",
     })
 
 
@@ -691,6 +754,7 @@ async def _handle_show_queued_draft(
 
 _UNIFIED_HANDLERS = {
     "get_pending_draft": _handle_get_pending_draft,
+    "revise_draft": _handle_revise_draft,
     "check_auto_post_status": _handle_check_auto_post_status,
     "web_fetch": _handle_web_fetch,
     "save_session_plan": _handle_save_session_plan,
