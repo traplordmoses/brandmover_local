@@ -286,9 +286,9 @@ def parse_time(text: str, now: datetime | None = None) -> tuple[float | None, st
             "\"tomorrow 9am\", \"monday 3:30pm\""
         )
 
-    # Reject if there's unrecognized text after the time portion
+    # Check for trailing text after the time portion — may be a date keyword
     trailing = text[time_match.end():].strip()
-    if trailing:
+    if trailing and trailing not in ("today", "tomorrow") and trailing not in _WEEKDAYS:
         return None, f"Could not parse: unexpected text after time"
 
     hour = int(time_match.group(1))
@@ -307,8 +307,10 @@ def parse_time(text: str, now: datetime | None = None) -> tuple[float | None, st
         return None, f"Invalid time: {hour}:{minute:02d}"
 
     # --- Determine the target date ---
-    # Strip the time portion to check for date keywords
+    # Check both before and after the time portion for date keywords
     date_text = text[:time_match.start()].strip().rstrip("at").strip()
+    if not date_text and trailing:
+        date_text = trailing
 
     if not date_text or date_text == "today":
         # Today
