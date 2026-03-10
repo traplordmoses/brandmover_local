@@ -426,6 +426,220 @@ _register_draft_def = {
     },
 }
 
+_take_screenshot_def = {
+    "name": "take_screenshot",
+    "description": (
+        "Take a screenshot of a web page. Use for checking websites, capturing tweets, "
+        "visual reference, content creation, verifying posts went live."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "url": {
+                "type": "string",
+                "description": "The URL to screenshot.",
+            },
+            "full_page": {
+                "type": "boolean",
+                "description": "Capture the full scrollable page (default: false).",
+            },
+            "width": {
+                "type": "integer",
+                "description": "Viewport width in pixels (default: 1280).",
+            },
+            "height": {
+                "type": "integer",
+                "description": "Viewport height in pixels (default: 720).",
+            },
+        },
+        "required": ["url"],
+    },
+}
+
+_edit_image_def = {
+    "name": "edit_image",
+    "description": (
+        "Perform common image operations using Pillow. Use for: adding text overlay to photos, "
+        "resizing, cropping, compositing images, adding borders, watermarks, or brand elements. "
+        "Faster than writing a full execute_code script for simple image edits."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "source_path": {
+                "type": "string",
+                "description": "Path to the source image file.",
+            },
+            "operations": {
+                "type": "array",
+                "description": (
+                    "Array of operations to apply in order. Each has a 'type' field: "
+                    "'text_overlay' (text, position top/bottom/center, font_size, color, stroke_color), "
+                    "'resize' (width, height), 'crop' (left, top, right, bottom), "
+                    "'composite' (overlay_path, x, y, opacity), 'border' (width, color)."
+                ),
+                "items": {"type": "object"},
+            },
+            "output_path": {
+                "type": "string",
+                "description": "Output file path (default: state/outputs/edited_{timestamp}.png).",
+            },
+        },
+        "required": ["source_path", "operations"],
+    },
+}
+
+_save_note_def = {
+    "name": "save_note",
+    "description": (
+        "Save a persistent note that survives across conversations. Use for: remembering "
+        "operator preferences, key dates (launch date, deadlines), recurring instructions, "
+        "brand-specific context that isn't in guidelines, or anything the operator says "
+        "'remember this'."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "key": {
+                "type": "string",
+                "description": "Short identifier like 'launch_date' or 'annio_preferences'.",
+            },
+            "content": {
+                "type": "string",
+                "description": "The note content to save.",
+            },
+        },
+        "required": ["key", "content"],
+    },
+}
+
+_get_notes_def = {
+    "name": "get_notes",
+    "description": (
+        "Retrieve saved notes. Call with no key to get all notes, or with a specific key."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "key": {
+                "type": "string",
+                "description": "Optional specific note key to retrieve.",
+            },
+        },
+        "required": [],
+    },
+}
+
+_git_info_def = {
+    "name": "git_info",
+    "description": (
+        "Read git repository information. Use for: checking recent changes, understanding "
+        "what was modified, reading diffs, seeing commit history. Helpful for self-awareness "
+        "of your own codebase evolution."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "action": {
+                "type": "string",
+                "enum": ["log", "diff", "show", "status"],
+                "description": "Git action: log, diff, show, or status.",
+            },
+            "args": {
+                "type": "string",
+                "description": "Optional args: commit count for log, ref for diff/show.",
+            },
+        },
+        "required": ["action"],
+    },
+}
+
+_read_telegram_channel_def = {
+    "name": "read_telegram_channel",
+    "description": (
+        "Read recent messages from a Telegram channel or group. Use for: checking community "
+        "sentiment, seeing what people are talking about, finding content ideas from "
+        "community discussions."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "channel_id": {
+                "type": "string",
+                "description": "Channel/group ID (defaults to configured channel).",
+            },
+            "limit": {
+                "type": "integer",
+                "description": "Number of messages to retrieve (default: 20, max: 50).",
+            },
+        },
+        "required": [],
+    },
+}
+
+_save_snippet_def = {
+    "name": "save_snippet",
+    "description": (
+        "Save a piece of content (caption, idea, analysis, draft text) for later use. "
+        "Use when the conversation produces something worth keeping — a good caption, "
+        "a content angle, research findings, or anything the operator might want to "
+        "reference later."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "label": {
+                "type": "string",
+                "description": "Short description of the snippet.",
+            },
+            "content": {
+                "type": "string",
+                "description": "The content to save.",
+            },
+            "tags": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "Optional tags for filtering (e.g. ['meme', 'caption']).",
+            },
+        },
+        "required": ["label", "content"],
+    },
+}
+
+_list_snippets_def = {
+    "name": "list_snippets",
+    "description": "List saved snippets, optionally filtered by tag.",
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "tag": {
+                "type": "string",
+                "description": "Optional tag to filter by.",
+            },
+            "limit": {
+                "type": "integer",
+                "description": "Max snippets to return (default: 10).",
+            },
+        },
+        "required": [],
+    },
+}
+
+_use_snippet_def = {
+    "name": "use_snippet",
+    "description": "Retrieve a specific snippet by ID for use in content generation.",
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "id": {
+                "type": "string",
+                "description": "The snippet ID to retrieve.",
+            },
+        },
+        "required": ["id"],
+    },
+}
+
 UNIFIED_TOOL_DEFINITIONS = _BASE_TOOL_DEFINITIONS + [
     _get_pending_draft_def,
     _revise_draft_def,
@@ -446,6 +660,15 @@ UNIFIED_TOOL_DEFINITIONS = _BASE_TOOL_DEFINITIONS + [
     _schedule_post_def,
     _list_scheduled_posts_def,
     _cancel_scheduled_post_def,
+    _take_screenshot_def,
+    _edit_image_def,
+    _save_note_def,
+    _get_notes_def,
+    _git_info_def,
+    _read_telegram_channel_def,
+    _save_snippet_def,
+    _list_snippets_def,
+    _use_snippet_def,
 ]
 
 
@@ -1124,6 +1347,410 @@ async def _handle_cancel_scheduled_post(
     return json.dumps({"error": f"Item {item_id} not found or already completed"})
 
 
+# ---------------------------------------------------------------------------
+# take_screenshot handler
+# ---------------------------------------------------------------------------
+
+async def _handle_take_screenshot(
+    input_dict: dict, tracker: ResourceTracker, user_id: int | None = None,
+    tool_context: dict | None = None,
+) -> str:
+    url = input_dict.get("url", "")
+    if not url:
+        return json.dumps({"error": "url is required"})
+
+    full_page = input_dict.get("full_page", False)
+    width = input_dict.get("width", 1280)
+    height = input_dict.get("height", 720)
+
+    _OUTPUTS_DIR.mkdir(parents=True, exist_ok=True)
+    ts = int(time.time())
+    out_path = str(_OUTPUTS_DIR / f"screenshot_{ts}.png")
+
+    tracker.log_api(f"take_screenshot:{url[:40]}")
+    logger.info("take_screenshot: %s (full_page=%s)", url, full_page)
+
+    try:
+        def _run_screenshot():
+            from playwright.sync_api import sync_playwright
+            with sync_playwright() as p:
+                browser = p.chromium.launch()
+                page = browser.new_page(viewport={"width": width, "height": height})
+                page.goto(url, wait_until="networkidle", timeout=30000)
+                page.screenshot(path=out_path, full_page=full_page)
+                browser.close()
+
+        await asyncio.to_thread(_run_screenshot)
+        logger.info("Screenshot saved: %s", out_path)
+        return json.dumps({"path": out_path, "url": url})
+    except Exception as e:
+        logger.error("take_screenshot failed: %s", e)
+        return json.dumps({"error": str(e)})
+
+
+# ---------------------------------------------------------------------------
+# edit_image handler
+# ---------------------------------------------------------------------------
+
+def _find_font(preferred: str = "Impact") -> str | None:
+    """Find a font file, preferring brand fonts then system fonts."""
+    from config import settings as _s
+    brand_fonts = Path(_s.BRAND_FOLDER) / "assets" / "fonts"
+    if brand_fonts.exists():
+        for f in brand_fonts.iterdir():
+            if f.suffix in (".ttf", ".otf"):
+                return str(f)
+    # Common system paths
+    for candidate in [
+        f"/usr/share/fonts/truetype/msttcorefonts/{preferred.lower()}.ttf",
+        f"/System/Library/Fonts/{preferred}.ttf",
+        "/System/Library/Fonts/Helvetica.ttc",
+    ]:
+        if Path(candidate).exists():
+            return candidate
+    return None
+
+
+async def _handle_edit_image(
+    input_dict: dict, tracker: ResourceTracker, user_id: int | None = None,
+    tool_context: dict | None = None,
+) -> str:
+    source_path = input_dict.get("source_path", "")
+    operations = input_dict.get("operations", [])
+    if not source_path or not Path(source_path).exists():
+        return json.dumps({"error": f"Source image not found: {source_path}"})
+    if not operations:
+        return json.dumps({"error": "No operations provided"})
+
+    _OUTPUTS_DIR.mkdir(parents=True, exist_ok=True)
+    ts = int(time.time())
+    output_path = input_dict.get("output_path") or str(_OUTPUTS_DIR / f"edited_{ts}.png")
+
+    tracker.log_api("edit_image")
+    logger.info("edit_image: %s → %d operations", source_path, len(operations))
+
+    try:
+        def _run_edit():
+            from PIL import Image, ImageDraw, ImageFont, ImageFilter
+
+            img = Image.open(source_path).convert("RGBA")
+
+            for op in operations:
+                op_type = op.get("type", "")
+
+                if op_type == "text_overlay":
+                    text = op.get("text", "")
+                    position = op.get("position", "bottom")
+                    font_size = op.get("font_size", 48)
+                    color = op.get("color", "white")
+                    stroke_color = op.get("stroke_color", "black")
+
+                    font_path = _find_font()
+                    font = (
+                        ImageFont.truetype(font_path, font_size)
+                        if font_path
+                        else ImageFont.load_default()
+                    )
+                    draw = ImageDraw.Draw(img)
+                    bbox = draw.textbbox((0, 0), text, font=font)
+                    tw, th = bbox[2] - bbox[0], bbox[3] - bbox[1]
+                    x = (img.width - tw) // 2
+                    if position == "top":
+                        y = int(img.height * 0.05)
+                    elif position == "center":
+                        y = (img.height - th) // 2
+                    else:  # bottom
+                        y = int(img.height * 0.85) - th
+                    draw.text((x, y), text, font=font, fill=color,
+                              stroke_width=max(1, font_size // 16),
+                              stroke_fill=stroke_color)
+
+                elif op_type == "resize":
+                    w = op.get("width", img.width)
+                    h = op.get("height", img.height)
+                    img = img.resize((w, h), Image.LANCZOS)
+
+                elif op_type == "crop":
+                    left = op.get("left", 0)
+                    top = op.get("top", 0)
+                    right = op.get("right", img.width)
+                    bottom = op.get("bottom", img.height)
+                    img = img.crop((left, top, right, bottom))
+
+                elif op_type == "composite":
+                    overlay_path = op.get("overlay_path", "")
+                    if not Path(overlay_path).exists():
+                        continue
+                    overlay = Image.open(overlay_path).convert("RGBA")
+                    opacity = op.get("opacity", 1.0)
+                    if opacity < 1.0:
+                        alpha = overlay.split()[3]
+                        alpha = alpha.point(lambda p: int(p * opacity))
+                        overlay.putalpha(alpha)
+                    x = op.get("x", 0)
+                    y = op.get("y", 0)
+                    img.paste(overlay, (x, y), overlay)
+
+                elif op_type == "border":
+                    bw = op.get("width", 5)
+                    bcolor = op.get("color", "white")
+                    from PIL import ImageOps
+                    img = ImageOps.expand(img, border=bw, fill=bcolor)
+
+            # Save as RGB PNG
+            if img.mode == "RGBA":
+                bg = Image.new("RGB", img.size, (0, 0, 0))
+                bg.paste(img, mask=img.split()[3])
+                bg.save(output_path)
+            else:
+                img.save(output_path)
+
+        await asyncio.to_thread(_run_edit)
+        logger.info("edit_image saved: %s", output_path)
+        return json.dumps({"path": output_path})
+    except Exception as e:
+        logger.error("edit_image failed: %s", e)
+        return json.dumps({"error": str(e)})
+
+
+# ---------------------------------------------------------------------------
+# save_note / get_notes handlers
+# ---------------------------------------------------------------------------
+
+_NOTES_FILE = _PROJECT_ROOT / "state" / "agent_notes.json"
+
+
+def _read_notes() -> dict:
+    if not _NOTES_FILE.exists():
+        return {}
+    try:
+        return json.loads(_NOTES_FILE.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return {}
+
+
+def _write_notes(notes: dict) -> None:
+    _NOTES_FILE.parent.mkdir(parents=True, exist_ok=True)
+    _NOTES_FILE.write_text(json.dumps(notes, indent=2, ensure_ascii=False), encoding="utf-8")
+
+
+async def _handle_save_note(
+    input_dict: dict, tracker: ResourceTracker, user_id: int | None = None,
+    tool_context: dict | None = None,
+) -> str:
+    key = input_dict.get("key", "").strip()
+    content = input_dict.get("content", "").strip()
+    if not key or not content:
+        return json.dumps({"error": "Both key and content are required"})
+
+    notes = _read_notes()
+    existed = key in notes
+    notes[key] = content
+    _write_notes(notes)
+    tracker.log_api("save_note")
+    action = "updated" if existed else "saved"
+    logger.info("save_note: %s '%s'", action, key)
+    return json.dumps({"status": action, "key": key})
+
+
+async def _handle_get_notes(
+    input_dict: dict, tracker: ResourceTracker, user_id: int | None = None,
+    tool_context: dict | None = None,
+) -> str:
+    key = input_dict.get("key")
+    notes = _read_notes()
+    if key:
+        content = notes.get(key)
+        if content is None:
+            return json.dumps({"error": f"No note found with key '{key}'"})
+        return json.dumps({"key": key, "content": content})
+    return json.dumps({"notes": notes, "count": len(notes)})
+
+
+# ---------------------------------------------------------------------------
+# git_info handler
+# ---------------------------------------------------------------------------
+
+async def _handle_git_info(
+    input_dict: dict, tracker: ResourceTracker, user_id: int | None = None,
+    tool_context: dict | None = None,
+) -> str:
+    action = input_dict.get("action", "log")
+    args = input_dict.get("args", "")
+
+    tracker.log_api(f"git_info:{action}")
+
+    cmd_map = {
+        "log": ["git", "log", "--oneline", "-n", args or "10"],
+        "diff": ["git", "diff", args or "HEAD~1"],
+        "show": ["git", "show", args or "HEAD", "--stat"],
+        "status": ["git", "status", "--short"],
+    }
+    cmd = cmd_map.get(action)
+    if not cmd:
+        return json.dumps({"error": f"Unknown action: {action}"})
+
+    try:
+        proc = await asyncio.to_thread(
+            subprocess.run, cmd,
+            capture_output=True, text=True, timeout=10,
+            cwd=str(_PROJECT_ROOT),
+        )
+        output = proc.stdout or ""
+        stderr = proc.stderr or ""
+        # Truncate large outputs
+        max_len = 3000 if action == "show" else 5000
+        if len(output) > max_len:
+            output = output[:max_len] + "\n... (truncated)"
+        return json.dumps({"output": output, "stderr": stderr[:500] if stderr else ""})
+    except subprocess.TimeoutExpired:
+        return json.dumps({"error": "Git command timed out (10s)"})
+    except Exception as e:
+        return json.dumps({"error": str(e)})
+
+
+# ---------------------------------------------------------------------------
+# read_telegram_channel handler
+# ---------------------------------------------------------------------------
+
+_CHANNEL_MESSAGES_FILE = _PROJECT_ROOT / "state" / "channel_messages.json"
+
+
+def _read_channel_messages() -> list[dict]:
+    if not _CHANNEL_MESSAGES_FILE.exists():
+        return []
+    try:
+        return json.loads(_CHANNEL_MESSAGES_FILE.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return []
+
+
+def log_channel_message(chat_id: int, author: str, text: str, timestamp: float) -> None:
+    """Called from the Telegram message handler to log channel messages."""
+    messages = _read_channel_messages()
+    messages.append({
+        "chat_id": chat_id,
+        "author": author,
+        "text": text[:500],
+        "timestamp": timestamp,
+    })
+    # Keep last 100 messages
+    messages = messages[-100:]
+    _CHANNEL_MESSAGES_FILE.parent.mkdir(parents=True, exist_ok=True)
+    _CHANNEL_MESSAGES_FILE.write_text(
+        json.dumps(messages, indent=2, ensure_ascii=False), encoding="utf-8"
+    )
+
+
+async def _handle_read_telegram_channel(
+    input_dict: dict, tracker: ResourceTracker, user_id: int | None = None,
+    tool_context: dict | None = None,
+) -> str:
+    channel_id = input_dict.get("channel_id", "")
+    limit = min(input_dict.get("limit", 20), 50)
+
+    tracker.log_api("read_telegram_channel")
+
+    messages = _read_channel_messages()
+    if channel_id:
+        try:
+            cid = int(channel_id)
+            messages = [m for m in messages if m.get("chat_id") == cid]
+        except ValueError:
+            pass
+
+    messages = messages[-limit:]
+    return json.dumps({"messages": messages, "count": len(messages)})
+
+
+# ---------------------------------------------------------------------------
+# save_snippet / list_snippets / use_snippet handlers
+# ---------------------------------------------------------------------------
+
+_SNIPPETS_FILE = _PROJECT_ROOT / "state" / "snippets.json"
+
+
+def _read_snippets() -> list[dict]:
+    if not _SNIPPETS_FILE.exists():
+        return []
+    try:
+        return json.loads(_SNIPPETS_FILE.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return []
+
+
+def _write_snippets(snippets: list[dict]) -> None:
+    _SNIPPETS_FILE.parent.mkdir(parents=True, exist_ok=True)
+    _SNIPPETS_FILE.write_text(
+        json.dumps(snippets, indent=2, ensure_ascii=False), encoding="utf-8"
+    )
+
+
+async def _handle_save_snippet(
+    input_dict: dict, tracker: ResourceTracker, user_id: int | None = None,
+    tool_context: dict | None = None,
+) -> str:
+    label = input_dict.get("label", "").strip()
+    content = input_dict.get("content", "").strip()
+    tags = input_dict.get("tags", [])
+    if not label or not content:
+        return json.dumps({"error": "Both label and content are required"})
+
+    import uuid
+    snippet = {
+        "id": uuid.uuid4().hex[:8],
+        "label": label,
+        "content": content,
+        "tags": tags,
+        "saved_at": time.time(),
+    }
+    snippets = _read_snippets()
+    snippets.append(snippet)
+    # Keep max 100
+    if len(snippets) > 100:
+        snippets = snippets[-100:]
+    _write_snippets(snippets)
+    tracker.log_api("save_snippet")
+    logger.info("save_snippet: '%s' (id=%s)", label, snippet["id"])
+    return json.dumps({"status": "saved", "id": snippet["id"], "label": label})
+
+
+async def _handle_list_snippets(
+    input_dict: dict, tracker: ResourceTracker, user_id: int | None = None,
+    tool_context: dict | None = None,
+) -> str:
+    tag = input_dict.get("tag", "")
+    limit = input_dict.get("limit", 10)
+
+    snippets = _read_snippets()
+    if tag:
+        snippets = [s for s in snippets if tag in s.get("tags", [])]
+    # Most recent first
+    snippets = list(reversed(snippets))[:limit]
+    # Return compact summaries
+    results = [
+        {"id": s["id"], "label": s["label"], "tags": s.get("tags", []),
+         "preview": s["content"][:100]}
+        for s in snippets
+    ]
+    return json.dumps({"snippets": results, "count": len(results)})
+
+
+async def _handle_use_snippet(
+    input_dict: dict, tracker: ResourceTracker, user_id: int | None = None,
+    tool_context: dict | None = None,
+) -> str:
+    snippet_id = input_dict.get("id", "")
+    if not snippet_id:
+        return json.dumps({"error": "id is required"})
+
+    snippets = _read_snippets()
+    for s in snippets:
+        if s["id"] == snippet_id:
+            return json.dumps(s)
+    return json.dumps({"error": f"Snippet '{snippet_id}' not found"})
+
+
 _UNIFIED_HANDLERS = {
     "get_pending_draft": _handle_get_pending_draft,
     "revise_draft": _handle_revise_draft,
@@ -1144,6 +1771,15 @@ _UNIFIED_HANDLERS = {
     "schedule_post": _handle_schedule_post,
     "list_scheduled_posts": _handle_list_scheduled_posts,
     "cancel_scheduled_post": _handle_cancel_scheduled_post,
+    "take_screenshot": _handle_take_screenshot,
+    "edit_image": _handle_edit_image,
+    "save_note": _handle_save_note,
+    "get_notes": _handle_get_notes,
+    "git_info": _handle_git_info,
+    "read_telegram_channel": _handle_read_telegram_channel,
+    "save_snippet": _handle_save_snippet,
+    "list_snippets": _handle_list_snippets,
+    "use_snippet": _handle_use_snippet,
 }
 
 

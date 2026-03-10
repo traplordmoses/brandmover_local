@@ -256,5 +256,14 @@ def _tool_description(tool_name: str, tool_input: dict) -> str:
         "schedule_post": f"Scheduling post for {tool_input.get('time_description', '?')}...",
         "list_scheduled_posts": "Checking scheduled posts...",
         "cancel_scheduled_post": f"Cancelling scheduled post {tool_input.get('item_id', '?')}...",
+        "take_screenshot": f"Capturing screenshot of {tool_input.get('url', 'page')[:50]}...",
+        "edit_image": f"Editing image: {len(tool_input.get('operations', []))} operation(s)...",
+        "save_note": f"Saving note: {tool_input.get('key', '?')}...",
+        "get_notes": f"Retrieving note(s){': ' + tool_input.get('key', '') if tool_input.get('key') else ''}...",
+        "git_info": f"Git {tool_input.get('action', 'info')}...",
+        "read_telegram_channel": "Reading channel messages...",
+        "save_snippet": f"Saving snippet: {tool_input.get('label', '?')[:40]}...",
+        "list_snippets": "Listing saved snippets...",
+        "use_snippet": f"Loading snippet {tool_input.get('id', '?')}...",
     }
     return descs.get(tool_name, f"Executing {tool_name}...")

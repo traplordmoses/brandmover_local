@@ -116,6 +116,35 @@ def create_bot() -> Application:
         MessageHandler(filters.TEXT & ~filters.COMMAND, handlers.handle_message)
     )
 
+    # Channel/group message logger (lowest priority — logs silently, doesn't block)
+    _monitor_ids = settings.TELEGRAM_MONITOR_CHANNELS
+    if _monitor_ids:
+        try:
+            _chat_ids = [int(x.strip()) for x in _monitor_ids.split(",") if x.strip()]
+            if _chat_ids:
+                from agent.unified_tools import log_channel_message
+
+                async def _log_channel_msg(update, context):
+                    msg = update.effective_message
+                    if not msg or not msg.text:
+                        return
+                    chat_id = msg.chat_id
+                    author = ""
+                    if msg.from_user:
+                        author = msg.from_user.first_name or msg.from_user.username or str(msg.from_user.id)
+                    log_channel_message(chat_id, author, msg.text, msg.date.timestamp())
+
+                app.add_handler(
+                    MessageHandler(
+                        filters.Chat(chat_id=_chat_ids) & filters.TEXT & ~filters.COMMAND,
+                        _log_channel_msg,
+                    ),
+                    group=1,  # separate handler group so it doesn't conflict
+                )
+                logger.info("Channel message logger active for: %s", _chat_ids)
+        except ValueError:
+            logger.warning("Invalid TELEGRAM_MONITOR_CHANNELS: %s", _monitor_ids)
+
     logger.info("Bot configured with %d handlers", len(app.handlers[0]))
     return app
 

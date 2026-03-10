@@ -103,6 +103,10 @@ AUTO_POST_DRY_RUN: bool = os.getenv("AUTO_POST_DRY_RUN", "false").lower() in ("t
 # If not set, uses the system's local timezone automatically.
 TIMEZONE: str = os.getenv("TIMEZONE", "")
 
+# --- Telegram channel monitoring ---
+# Comma-separated channel/group IDs to silently log messages from
+TELEGRAM_MONITOR_CHANNELS: str = os.getenv("TELEGRAM_MONITOR_CHANNELS", "")
+
 
 # ---------------------------------------------------------------------------
 # Startup validation

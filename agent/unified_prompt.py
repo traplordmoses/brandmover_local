@@ -6,6 +6,7 @@ Used by unified_brain.py so every message (chat or generation) goes through
 one LLM call with full context.
 """
 
+import json
 import logging
 from pathlib import Path
 
@@ -54,6 +55,21 @@ def _get_recent_feedback() -> str:
     return ctx
 
 
+def _get_agent_notes_summary() -> str:
+    """Load agent notes and return a compact summary for the system prompt."""
+    notes_file = _project_root / "state" / "agent_notes.json"
+    if not notes_file.exists():
+        return ""
+    try:
+        notes = json.loads(notes_file.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return ""
+    if not notes:
+        return ""
+    lines = [f"- {k}: {str(v)[:100]}" for k, v in notes.items()]
+    return "NOTES:\n" + "\n".join(lines)
+
+
 def _get_state_context(context: ConversationContext, user_id: int | None = None) -> str:
     """Return current state info: approved draft, pending draft, schedule status."""
     parts = []
@@ -90,6 +106,11 @@ def _get_state_context(context: ConversationContext, user_id: int | None = None)
     plan_summary = session_plan.get_plan_summary()
     if plan_summary:
         parts.append(plan_summary)
+
+    # Agent notes (persistent memory)
+    notes = _get_agent_notes_summary()
+    if notes:
+        parts.append(notes)
 
     return "\n".join(parts)
 
@@ -256,10 +277,16 @@ def _build_capabilities_section() -> str:
         "Publishing: `post_approved`, `schedule_post`, `list_scheduled_posts`, `cancel_scheduled_post`\n"
         "Planning: `save_session_plan`, `get_session_plan`, `update_plan_item`, "
         "`start_autonomous_plan`, `show_queued_draft`\n"
-        "Research: `web_fetch` (read URLs), `read_state_file` (read state/brand data)\n"
+        "Research: `web_fetch` (read URLs), `read_state_file` (read state/brand data), "
+        "`take_screenshot` (capture web pages)\n"
+        "Image editing: `edit_image` (text overlay, resize, crop, composite, border), "
+        "`generate_image`, `img2img`\n"
+        "Memory: `save_note` / `get_notes` (persistent key-value notes), "
+        "`save_snippet` / `list_snippets` / `use_snippet` (content library)\n"
         "Utilities: `execute_code` (run Python scripts), `register_draft` (link execute_code output "
         "into draft pipeline), `send_file` (deliver files to user), "
-        "`check_auto_post_status`, `run_self_review`\n\n"
+        "`check_auto_post_status`, `run_self_review`\n"
+        "Dev tools: `git_info` (log/diff/show/status), `read_telegram_channel` (community messages)\n\n"
 
         "You can chain tools freely. Read a URL, then use what you learned in a draft. "
         "Read state data, run a script to analyze it, send the result as a file.\n\n"
