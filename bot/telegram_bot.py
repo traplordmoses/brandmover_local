@@ -132,7 +132,11 @@ def create_bot() -> Application:
                     author = ""
                     if msg.from_user:
                         author = msg.from_user.first_name or msg.from_user.username or str(msg.from_user.id)
-                    log_channel_message(chat_id, author, msg.text, msg.date.timestamp())
+                    elif msg.sender_chat:
+                        author = msg.sender_chat.title or str(msg.sender_chat.id)
+                    import time as _time
+                    timestamp = msg.date.timestamp() if msg.date else _time.time()
+                    log_channel_message(chat_id, author, msg.text, timestamp)
 
                 app.add_handler(
                     MessageHandler(

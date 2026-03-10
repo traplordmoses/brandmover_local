@@ -14,11 +14,14 @@ import asyncio
 import json
 import logging
 import os
+import re
 import subprocess
 import sys
 import tempfile
 import time
+import uuid
 from pathlib import Path
+from urllib.parse import urlparse
 
 from agent import auto_state, publisher, schedule_queue, session_plan, state, web_fetch
 from agent.resource_log import ResourceTracker
@@ -1359,13 +1362,17 @@ async def _handle_take_screenshot(
     if not url:
         return json.dumps({"error": "url is required"})
 
+    # Validate URL scheme (prevent file://, ftp://, internal IPs)
+    parsed = urlparse(url)
+    if parsed.scheme not in ("http", "https"):
+        return json.dumps({"error": "Only http/https URLs are supported"})
+
     full_page = input_dict.get("full_page", False)
     width = input_dict.get("width", 1280)
     height = input_dict.get("height", 720)
 
     _OUTPUTS_DIR.mkdir(parents=True, exist_ok=True)
-    ts = int(time.time())
-    out_path = str(_OUTPUTS_DIR / f"screenshot_{ts}.png")
+    out_path = str(_OUTPUTS_DIR / f"screenshot_{int(time.time())}_{uuid.uuid4().hex[:6]}.png")
 
     tracker.log_api(f"take_screenshot:{url[:40]}")
     logger.info("take_screenshot: %s (full_page=%s)", url, full_page)
@@ -1375,10 +1382,12 @@ async def _handle_take_screenshot(
             from playwright.sync_api import sync_playwright
             with sync_playwright() as p:
                 browser = p.chromium.launch()
-                page = browser.new_page(viewport={"width": width, "height": height})
-                page.goto(url, wait_until="networkidle", timeout=30000)
-                page.screenshot(path=out_path, full_page=full_page)
-                browser.close()
+                try:
+                    page = browser.new_page(viewport={"width": width, "height": height})
+                    page.goto(url, wait_until="networkidle", timeout=30000)
+                    page.screenshot(path=out_path, full_page=full_page)
+                finally:
+                    browser.close()
 
         await asyncio.to_thread(_run_screenshot)
         logger.info("Screenshot saved: %s", out_path)
@@ -1417,14 +1426,27 @@ async def _handle_edit_image(
 ) -> str:
     source_path = input_dict.get("source_path", "")
     operations = input_dict.get("operations", [])
-    if not source_path or not Path(source_path).exists():
+    if not source_path:
+        return json.dumps({"error": "source_path is required"})
+    # Resolve relative paths against project root
+    src = Path(source_path)
+    if not src.is_absolute():
+        src = _PROJECT_ROOT / src
+    if not src.exists():
         return json.dumps({"error": f"Source image not found: {source_path}"})
+    source_path = str(src)
     if not operations:
         return json.dumps({"error": "No operations provided"})
 
     _OUTPUTS_DIR.mkdir(parents=True, exist_ok=True)
-    ts = int(time.time())
-    output_path = input_dict.get("output_path") or str(_OUTPUTS_DIR / f"edited_{ts}.png")
+    output_path = input_dict.get("output_path") or str(
+        _OUTPUTS_DIR / f"edited_{int(time.time())}_{uuid.uuid4().hex[:6]}.png"
+    )
+    # Contain output to outputs dir if user-provided
+    if input_dict.get("output_path"):
+        out_resolved = Path(output_path).resolve()
+        if not str(out_resolved).startswith(str(_OUTPUTS_DIR.resolve()) + "/"):
+            output_path = str(_OUTPUTS_DIR / out_resolved.name)
 
     tracker.log_api("edit_image")
     logger.info("edit_image: %s → %d operations", source_path, len(operations))
@@ -1578,6 +1600,10 @@ async def _handle_git_info(
     action = input_dict.get("action", "log")
     args = input_dict.get("args", "")
 
+    # Sanitize args: allow only safe git ref patterns (alphanumeric, ~, ^, ., -, /)
+    if args and not re.match(r'^[a-zA-Z0-9_.~^/\-]+$', args):
+        return json.dumps({"error": "Invalid args: only alphanumeric, ~, ^, ., -, / allowed"})
+
     tracker.log_api(f"git_info:{action}")
 
     cmd_map = {
@@ -1696,7 +1722,6 @@ async def _handle_save_snippet(
     if not label or not content:
         return json.dumps({"error": "Both label and content are required"})
 
-    import uuid
     snippet = {
         "id": uuid.uuid4().hex[:8],
         "label": label,
