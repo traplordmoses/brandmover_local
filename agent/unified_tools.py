@@ -1,13 +1,40 @@
 """
 Extended tool registry for unified brain.
 
-Re-exports all 8 existing tools from tools.py and adds unified-only tools:
-- get_pending_draft: returns current pending draft state
-- check_auto_post_status: returns auto-post schedule summary
-- web_fetch: fetches and reads web page content
-- execute_code: run Python scripts for reports, analysis, file generation
-- send_file: deliver generated files to the user via Telegram
-- read_state_file: read raw data from state/ and brand/ directories
+ARCHITECTURE:
+This is the TOOL LAYER — it defines everything the agent can DO. Each tool has:
+1. A definition dict (JSON schema for Claude's tool-use API)
+2. An async handler function that actually executes the action
+
+The module follows a TWO-TIER DISPATCH pattern:
+- _UNIFIED_HANDLERS: New tools added specifically for the unified brain
+- _base_execute_tool: Falls through to the original 8 tools from tools.py
+
+This layered approach means we can add new tools without touching the original
+tool registry, and the unified brain gets ALL tools (old + new).
+
+TOOL CATEGORIES:
+- Draft management: get_pending_draft, revise_draft, approve_draft
+- Publishing: post_approved, schedule_post, list_scheduled, cancel_scheduled
+- Content creation: execute_code, register_draft
+- Research: web_fetch, read_state_file, take_screenshot
+- Image editing: edit_image (Pillow-based operations)
+- Memory: save_note, get_notes, save_snippet, list_snippets, use_snippet
+- Dev tools: git_info, read_telegram_channel
+- Planning: save_session_plan, get_session_plan, update_plan_item
+
+SECURITY NOTES:
+- take_screenshot: URL scheme validation (http/https only) prevents SSRF
+- git_info: Args sanitized with strict regex to prevent command injection
+- edit_image: Output paths contained to state/outputs/ directory
+- execute_code: Full system access BY DESIGN (the agent needs it to be powerful)
+
+INTERVIEW TALKING POINT:
+"Tools are declarative JSON schemas that Claude discovers through its tool-use API.
+Adding a new capability is: define the schema, write an async handler, register it.
+The agent automatically learns to use new tools from their descriptions — no
+prompt engineering needed for individual tools. We use a two-tier dispatch so
+new tools don't affect the battle-tested original tool registry."
 """
 
 import asyncio
@@ -1352,6 +1379,11 @@ async def _handle_cancel_scheduled_post(
 
 # ---------------------------------------------------------------------------
 # take_screenshot handler
+# Uses Playwright (headless Chromium) to capture web page screenshots.
+# Useful for: verifying posts went live, capturing tweets, visual reference.
+#
+# SECURITY: URL scheme validation prevents SSRF attacks (file://, ftp://, etc.)
+# RESOURCE SAFETY: Browser is wrapped in try/finally to prevent leaked processes.
 # ---------------------------------------------------------------------------
 
 async def _handle_take_screenshot(
@@ -1399,6 +1431,12 @@ async def _handle_take_screenshot(
 
 # ---------------------------------------------------------------------------
 # edit_image handler
+# Uses Pillow for common image operations: text overlay (meme text), resize,
+# crop, composite (overlay images), and border. This is a convenience tool —
+# faster than writing a full execute_code script for simple edits.
+#
+# SECURITY: Relative paths resolved against project root. Output paths
+# contained to state/outputs/ to prevent arbitrary file writes.
 # ---------------------------------------------------------------------------
 
 def _find_font(preferred: str = "Impact") -> str | None:
@@ -1537,6 +1575,10 @@ async def _handle_edit_image(
 
 # ---------------------------------------------------------------------------
 # save_note / get_notes handlers
+# Persistent key-value notes that survive across conversations.
+# Stored in state/agent_notes.json as a simple {key: value} dict.
+# Notes are also injected into the system prompt via unified_prompt.py
+# so the agent always has them in context without calling get_notes.
 # ---------------------------------------------------------------------------
 
 _NOTES_FILE = _PROJECT_ROOT / "state" / "agent_notes.json"
@@ -1591,6 +1633,12 @@ async def _handle_get_notes(
 
 # ---------------------------------------------------------------------------
 # git_info handler
+# Reads git repository information: log, diff, show, status.
+# Gives the agent self-awareness of its own codebase evolution.
+#
+# SECURITY: Args are sanitized with a strict regex that only allows
+# alphanumeric chars, ~, ^, ., -, / — prevents command injection and
+# prevents reading sensitive files via git show ":path/to/.env".
 # ---------------------------------------------------------------------------
 
 async def _handle_git_info(
@@ -1637,6 +1685,11 @@ async def _handle_git_info(
 
 # ---------------------------------------------------------------------------
 # read_telegram_channel handler
+# Reads messages logged by the channel message logger (see telegram_bot.py).
+# Bots can't read channel history directly via Telegram API, so we use a
+# passive approach: a MessageHandler in telegram_bot.py silently logs messages
+# from configured channels to state/channel_messages.json (rolling 100 msgs).
+# This tool reads from that file.
 # ---------------------------------------------------------------------------
 
 _CHANNEL_MESSAGES_FILE = _PROJECT_ROOT / "state" / "channel_messages.json"
@@ -1691,6 +1744,11 @@ async def _handle_read_telegram_channel(
 
 # ---------------------------------------------------------------------------
 # save_snippet / list_snippets / use_snippet handlers
+# Content snippet library — saves captions, ideas, research findings for reuse.
+# Stored in state/snippets.json as an array of tagged entries (max 100).
+# Each snippet has: id, label, content, tags[], saved_at timestamp.
+# Useful for: building a content bank, saving good captions for reuse,
+# storing research findings for later content generation.
 # ---------------------------------------------------------------------------
 
 _SNIPPETS_FILE = _PROJECT_ROOT / "state" / "snippets.json"
