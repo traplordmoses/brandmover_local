@@ -12,6 +12,7 @@ from typing import Callable, Awaitable
 
 import anthropic
 
+from agent.context_engine import ContextEngine
 from agent.resource_log import ResourceTracker
 from agent.skill_prompt import build_system_prompt
 from agent.tools import TOOL_DEFINITIONS, execute_tool
@@ -166,19 +167,32 @@ async def _run_loop(
     on_tool_call: OnToolCall | None = None,
     on_reasoning: OnReasoning | None = None,
     force_first_tool: bool = True,
+    system_blocks: list[dict] | None = None,
 ) -> AgentResult:
     """Shared agent loop logic used by both run_agent() and run_agent_with_history().
 
     Args:
         client: Anthropic client instance.
-        system_prompt: System prompt string.
+        system_prompt: System prompt string (used if system_blocks not provided).
         messages: Conversation messages (mutated in place).
         tracker: Resource usage tracker.
         on_tool_call: Optional progress callback.
         force_first_tool: If True, force tool_choice="any" on turn 0 (fresh runs).
+        system_blocks: Optional pre-built system blocks with separate cache_control.
+                       When provided, overrides system_prompt for multi-block caching.
     """
     result = AgentResult()
     result.resources = tracker
+
+    # Build system parameter — use pre-built blocks if provided, else single block
+    if system_blocks is not None:
+        system_param = system_blocks
+    else:
+        system_param = [{
+            "type": "text",
+            "text": system_prompt,
+            "cache_control": {"type": "ephemeral"},
+        }]
 
     max_budget = settings.AGENT_MAX_TURNS
     tool_call_log = []
@@ -201,11 +215,7 @@ async def _run_loop(
                 client=client,
                 primary_model=settings.AGENT_MODEL,
                 max_tokens=4096,
-                system=[{
-                    "type": "text",
-                    "text": system_prompt,
-                    "cache_control": {"type": "ephemeral"},
-                }],
+                system=system_param,
                 tools=TOOL_DEFINITIONS,
                 tool_choice=tool_choice,
                 messages=messages,
@@ -460,6 +470,36 @@ async def run_agent(
 
     system_prompt = build_system_prompt()
 
+    # --- Pre-load brand context into cached system blocks ---
+    # Instead of requiring the agent to call read_brand_guidelines as a tool
+    # (which wastes a full turn + re-reads the files every time), we inject
+    # brand context directly into the system prompt as a separately-cached block.
+    # Anthropic's cache_control means this block is processed once and reused
+    # across turns, eliminating the "rereading tax" on every API call.
+    #
+    # Uses ContextEngine for budget-aware assembly: as the brand corpus grows
+    # (more PDFs, more examples), lower-priority blocks are truncated or dropped
+    # to keep the context within the model's effective attention window.
+    from agent.context_engine import build_brand_context_block
+    brand_context = build_brand_context_block()
+
+    system_blocks = [
+        {
+            "type": "text",
+            "text": system_prompt,
+            "cache_control": {"type": "ephemeral"},
+        },
+    ]
+    if brand_context:
+        system_blocks.append({
+            "type": "text",
+            "text": f"## BRAND CONTEXT (pre-loaded)\n\n{brand_context}",
+            "cache_control": {"type": "ephemeral"},
+        })
+        tracker.log_file("guidelines.md")
+        tracker.log_file("references")
+        logger.info("Brand context pre-loaded into system prompt: %d chars", len(brand_context))
+
     # Build the initial user message
     user_content = request
     if revision_context:
@@ -476,7 +516,7 @@ async def run_agent(
     result = await _run_loop(
         client, system_prompt, messages, tracker,
         on_tool_call=on_tool_call, on_reasoning=on_reasoning,
-        force_first_tool=True,
+        force_first_tool=True, system_blocks=system_blocks,
     )
     result.total_time = round(time.time() - t_start, 1)
 

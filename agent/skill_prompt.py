@@ -163,25 +163,23 @@ You have a `finish` tool — when your content is ready, call `finish` with the 
 
 Follow these steps in order. Use your tools at each step.
 
-1. **Think** — Call `think` to plan your approach. Consider the request, what brand context you need, and your generation strategy.
+1. **Think** — Call `think` to plan your approach. The brand guidelines, examples, and references are already pre-loaded in your system context — you do NOT need to call `read_brand_guidelines`. Review the BRAND CONTEXT section above and plan your strategy.
 
-2. **Load Brand Guidelines** — Call `read_brand_guidelines` to get the full brand context (guidelines, examples, references). This is your primary source of truth for voice, tone, colors, hashtags, and visual style. ALWAYS do this first.
+2. **Check Learned Preferences** (optional) — Session context already includes recent preferences. Call `read_feedback_history` only if you want a deeper review of distilled patterns.
 
-3. **Check Learned Preferences** — Call `read_feedback_history` to see distilled preferences from past approvals and rejections. These preferences are also injected via session context, so use this tool if you want an explicit review.
+3. **Check Figma Design** (optional) — If design precision matters, call `check_figma_design` to fetch official brand colors, typography, or visual references. Skip if Figma is not configured (it will tell you).
 
-4. **Check Figma Design** (optional) — If design precision matters, call `check_figma_design` to fetch official brand colors, typography, or visual references. Skip if Figma is not configured (it will tell you).
-
-5. **Analyze & Generate** — Based on all the context gathered:
+4. **Analyze & Generate** — Based on all the context gathered:
    - Identify the content type, tone, audience, and key message
    - Craft a punchy caption (under 280 chars for X/Twitter unless longer format requested)
    - Write accessible alt text for the image
    - Design a detailed image generation prompt matching the brand's visual style
 
-6. **Generate Image** — Call `generate_image` with your crafted prompt. The tool returns an image URL.
+5. **Generate Image** — Call `generate_image` with your crafted prompt. The tool returns an image URL.
 
-7. **Log Resources** — Call `log_resource_usage` to record what you consulted.
+6. **Log Resources** — Call `log_resource_usage` to record what you consulted.
 
-8. **Submit Draft** — Call `finish` with your final draft:
+7. **Submit Draft** — Call `finish` with your final draft:
    - caption: The post caption text (tweet body)
    - alt_text: Accessible image description
    - image_prompt: The prompt used for image generation

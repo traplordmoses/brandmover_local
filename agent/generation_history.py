@@ -100,6 +100,12 @@ def log_generation(
     _write_history(entries)
     count = len(entries)
     logger.info("Logged generation #%d (%s/%s, status=%s)", count, asset_type, content_type, status)
+    # Invalidate the search index so the next search_memory call picks up the new entry
+    try:
+        from agent.memory import invalidate_search_index
+        invalidate_search_index()
+    except ImportError:
+        pass
     return count
 
 

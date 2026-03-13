@@ -136,6 +136,31 @@ async def run_unified(
     # This changes with every call because state (pending drafts, notes) changes.
     system_prompt = build_unified_system_prompt(context, user_id=user_id)
 
+    # --- Pre-load brand context into cached system blocks ---
+    # Brand guidelines are injected directly into the system prompt instead of
+    # requiring a tool call. This eliminates the "rereading tax" — the brand
+    # context is cached by Anthropic's API and reused across turns.
+    # Uses ContextEngine for budget-aware assembly as the brand corpus grows.
+    from agent.context_engine import build_brand_context_block
+    brand_context = build_brand_context_block()
+
+    system_blocks = [
+        {
+            "type": "text",
+            "text": system_prompt,
+            "cache_control": {"type": "ephemeral"},
+        },
+    ]
+    if brand_context:
+        system_blocks.append({
+            "type": "text",
+            "text": f"## BRAND CONTEXT (pre-loaded)\n\n{brand_context}",
+            "cache_control": {"type": "ephemeral"},
+        })
+        tracker.log_file("guidelines.md")
+        tracker.log_file("references")
+        logger.info("Unified brain: brand context pre-loaded (%d chars)", len(brand_context))
+
     # Build messages array from conversation history + the new user message.
     # ConversationContext stores past turns so Claude has memory across messages.
     messages = []
@@ -178,14 +203,7 @@ async def run_unified(
             response = await client.messages.create(
                 model=settings.SONNET_MODEL,  # Default: claude-sonnet-4-6
                 max_tokens=4096,
-                system=[{
-                    "type": "text",
-                    "text": system_prompt,
-                    # cache_control: ephemeral tells Anthropic's API to cache this
-                    # system prompt across turns. Since it's ~4K tokens and identical
-                    # across turns, this saves significant token costs (only charged once).
-                    "cache_control": {"type": "ephemeral"},
-                }],
+                system=system_blocks,
                 tools=UNIFIED_TOOL_DEFINITIONS,  # All 36 tool schemas
                 tool_choice=tool_choice,
                 messages=messages,

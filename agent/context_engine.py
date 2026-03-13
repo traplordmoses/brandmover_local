@@ -159,3 +159,65 @@ class ContextEngine:
             ],
             "total_tokens": sum(b.tokens for b in self.blocks),
         }
+
+
+def build_brand_context_block(budget_tokens: int = DEFAULT_BUDGET_TOKENS) -> str:
+    """Build brand context using priority-based budget assembly.
+
+    Assembles brand guidelines, examples, references, session context, and
+    learned preferences within a token budget. Higher-priority blocks are
+    included first; lower-priority blocks are truncated or dropped if they
+    don't fit.
+
+    This replaces ad-hoc string concatenation with intelligent budgeting —
+    as the brand corpus grows, this ensures the most important context
+    always fits within the model's effective attention window.
+
+    Returns:
+        Assembled brand context string.
+    """
+    engine = ContextEngine(budget_tokens=budget_tokens)
+
+    # Priority 0: Brand guidelines (core — always included)
+    from agent import guidelines
+    guidelines_text = guidelines.load_guidelines()
+    if guidelines_text:
+        engine.add(
+            "guidelines",
+            f"--- BRAND GUIDELINES ---\n{guidelines_text}",
+            priority=0,
+        )
+
+    # Priority 1: Example posts (important for voice matching, truncatable)
+    examples = guidelines.load_examples()
+    if examples:
+        examples_text = "--- EXAMPLE POSTS ---\n" + "\n\n".join(
+            f"Example {i}:\n{ex}" for i, ex in enumerate(examples, 1)
+        )
+        engine.add("examples", examples_text, priority=1, truncatable=True)
+
+    # Priority 2: Session context (recent posts, rejections, preferences)
+    from agent.session import build_session_context
+    session_ctx = build_session_context()
+    if session_ctx:
+        engine.add("session", session_ctx, priority=2)
+
+    # Priority 3: Reference materials (PDFs, docs — truncatable, lower priority)
+    references = guidelines.load_references()
+    if references:
+        refs_text = "--- REFERENCE MATERIALS ---\n" + "\n\n".join(
+            f"[{ref['name']}]\n{ref['text']}" for ref in references
+        )
+        engine.add(
+            "references", refs_text, priority=3,
+            truncatable=True, min_chars=1000,
+        )
+
+    assembled = engine.assemble()
+    stats = engine.get_stats()
+    logger.info(
+        "Brand context assembled: ~%d/%d tokens, %d/%d blocks included",
+        stats["total_tokens"], budget_tokens,
+        len([b for b in stats["blocks"]]), len(stats["blocks"]),
+    )
+    return assembled

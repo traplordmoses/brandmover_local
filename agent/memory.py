@@ -110,6 +110,80 @@ def _load_history() -> list[dict]:
         return []
 
 
+# ---------------------------------------------------------------------------
+# Persistent TF-IDF index — avoids recomputing from scratch on every search
+# ---------------------------------------------------------------------------
+
+class _SearchIndex:
+    """Cached TF-IDF index over generation history.
+
+    Rebuilds only when the history file changes (mtime check) or when
+    new entries are added beyond what was last indexed. This matters
+    as generation history grows — without caching, every search_memory
+    call tokenizes and computes IDF across the entire history.
+    """
+
+    def __init__(self):
+        self._entries: list[dict] = []
+        self._doc_tokens: list[list[str]] = []
+        self._idf: dict[str, float] = {}
+        self._last_mtime: float = 0
+        self._last_count: int = 0
+
+    def _needs_rebuild(self) -> bool:
+        if not _HISTORY_FILE.exists():
+            return bool(self._entries)
+        try:
+            mtime = _HISTORY_FILE.stat().st_mtime
+        except OSError:
+            return True
+        return mtime != self._last_mtime
+
+    def _rebuild(self, entries: list[dict]) -> None:
+        self._entries = entries
+        self._doc_tokens = []
+        for entry in entries:
+            text = _build_entry_text(entry)
+            self._doc_tokens.append(_tokenize(text))
+
+        # Compute IDF
+        n_docs = len(self._doc_tokens)
+        doc_freq: Counter = Counter()
+        for tokens in self._doc_tokens:
+            for token in set(tokens):
+                doc_freq[token] += 1
+        self._idf = {
+            token: math.log(n_docs / (1 + freq))
+            for token, freq in doc_freq.items()
+        }
+
+        try:
+            self._last_mtime = _HISTORY_FILE.stat().st_mtime
+        except OSError:
+            self._last_mtime = 0
+        self._last_count = len(entries)
+        logger.debug("Search index rebuilt: %d entries, %d terms", n_docs, len(self._idf))
+
+    def get(self) -> tuple[list[dict], list[list[str]], dict[str, float]]:
+        """Return (entries, doc_tokens, idf), rebuilding if stale."""
+        if self._needs_rebuild():
+            entries = _load_history()
+            self._rebuild(entries)
+        return self._entries, self._doc_tokens, self._idf
+
+    def invalidate(self) -> None:
+        """Force rebuild on next access."""
+        self._last_mtime = 0
+
+
+_index = _SearchIndex()
+
+
+def invalidate_search_index() -> None:
+    """Force the search index to rebuild. Call after logging new generations."""
+    _index.invalidate()
+
+
 def search_past_generations(
     query: str,
     top_k: int = 5,
@@ -127,14 +201,7 @@ def search_past_generations(
     Returns:
         List of {score, entry} dicts sorted by descending relevance.
     """
-    entries = _load_history()
-    if not entries:
-        return []
-
-    # Filter by status if specified
-    if status_filter:
-        entries = [e for e in entries if e.get("status") == status_filter]
-
+    entries, all_doc_tokens, idf = _index.get()
     if not entries:
         return []
 
@@ -143,28 +210,12 @@ def search_past_generations(
     if not query_tokens:
         return []
 
-    # Tokenize all documents
-    docs = []
-    for entry in entries:
-        text = _build_entry_text(entry)
-        tokens = _tokenize(text)
-        docs.append(tokens)
-
-    # Compute IDF scores
-    n_docs = len(docs)
-    doc_freq: Counter = Counter()
-    for doc_tokens in docs:
-        for token in set(doc_tokens):
-            doc_freq[token] += 1
-
-    idf = {
-        token: math.log(n_docs / (1 + freq))
-        for token, freq in doc_freq.items()
-    }
-
-    # Score each entry
+    # Score each entry (with optional status filter)
     scored = []
-    for entry, doc_tokens in zip(entries, docs):
+    for entry, doc_tokens in zip(entries, all_doc_tokens):
+        if status_filter and entry.get("status") != status_filter:
+            continue
+
         relevance = _tfidf_score(query_tokens, doc_tokens, idf)
         temporal = _temporal_weight(entry.get("timestamp", 0))
 

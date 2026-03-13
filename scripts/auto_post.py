@@ -417,24 +417,24 @@ async def run_cron(
     slots = schedule.get("slots", {})
     drafts_made = 0
 
-    # --- 1. Process user-scheduled queue items (always, even if auto-post is off) ---
+    # --- 1. Process user-scheduled queue items (always, even if auto-post is paused) ---
     # User-scheduled posts are explicit user requests, not auto-pilot.
+    # They fire regardless of pause state — pausing only affects predefined slots.
     due_items = schedule_queue.get_due_items(window_seconds=SCHEDULER_INTERVAL_SECONDS)
     if due_items and not force_slot:
-        if not auto_state.is_paused():
-            for item in due_items:
-                if await state.async_has_pending() and not dry_run:
-                    logger.info("User queue: pending draft exists, deferring")
+        for item in due_items:
+            if await state.async_has_pending() and not dry_run:
+                logger.info("User queue: pending draft exists, deferring")
+                break
+            success = await process_scheduled_item(
+                item, global_config,
+                dry_run=dry_run or settings.AUTO_POST_DRY_RUN,
+                bot=bot,
+            )
+            if success:
+                drafts_made += 1
+                if not dry_run:
                     break
-                success = await process_scheduled_item(
-                    item, global_config,
-                    dry_run=dry_run or settings.AUTO_POST_DRY_RUN,
-                    bot=bot,
-                )
-                if success:
-                    drafts_made += 1
-                    if not dry_run:
-                        break
 
     # If a user-scheduled draft was generated, skip predefined slots this cycle
     if drafts_made and not dry_run:
