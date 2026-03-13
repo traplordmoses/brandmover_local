@@ -105,6 +105,11 @@ def load_skill(name: str) -> dict | None:
     The agent receives the full SKILL.md text and any script files, so it can
     follow the instructions and execute code directly.
     """
+    import re as _re
+    if not name or not _re.fullmatch(r"[A-Za-z0-9_-]+", name):
+        logger.warning("Rejected invalid skill name in load_skill: %s", name)
+        return None
+
     skill_dir = _SKILLS_DIR / name
     skill_file = skill_dir / "SKILL.md"
     if not skill_file.exists():

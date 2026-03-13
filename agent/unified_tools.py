@@ -854,7 +854,11 @@ async def _handle_execute_code(
             text=True,
             timeout=60,
             cwd=str(_PROJECT_ROOT),
-            env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"},
+            env={
+                **{k: v for k, v in os.environ.items()
+                   if not any(s in k.upper() for s in ("KEY", "TOKEN", "SECRET", "PASSWORD", "CREDENTIAL"))},
+                "PYTHONDONTWRITEBYTECODE": "1",
+            },
         )
         stdout = proc.stdout[:10000] if proc.stdout else ""
         stderr = proc.stderr[:5000] if proc.stderr else ""

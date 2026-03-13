@@ -119,6 +119,10 @@ async def _run_openclaw_script(script_name: str, args: str = "") -> dict | list 
 
     cmd = ["node", str(script_path)]
     if args:
+        _UNSAFE_CHARS = re.compile(r"[;&|`$(){}!<>\\\n\r\t]")
+        if _UNSAFE_CHARS.search(args):
+            logger.error("Unsafe characters in args for %s", script_name)
+            return None
         try:
             cmd.extend(shlex.split(args))
         except ValueError as e:

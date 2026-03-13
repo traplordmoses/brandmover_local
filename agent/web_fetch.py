@@ -5,8 +5,11 @@ Returns structured metadata (title, OG tags) + extracted text content.
 Handles tweet URLs, articles, and general web pages.
 """
 
+import ipaddress
 import logging
 import re
+import socket
+from urllib.parse import urlparse
 
 import aiohttp
 from bs4 import BeautifulSoup
@@ -68,6 +71,32 @@ async def fetch_url(url: str, max_chars: int = 15000) -> str:
     Returns:
         Formatted string with metadata and content.
     """
+    # --- SSRF protection ---
+    parsed = urlparse(url)
+    if parsed.scheme not in ("http", "https"):
+        return f"URL: {url}\nError: Only http and https URLs are allowed."
+    hostname = parsed.hostname
+    if not hostname:
+        return f"URL: {url}\nError: Could not parse hostname from URL."
+    try:
+        addrinfos = socket.getaddrinfo(hostname, None)
+    except socket.gaierror:
+        return f"URL: {url}\nError: Could not resolve hostname '{hostname}'."
+    _BLOCKED_NETWORKS = [
+        ipaddress.ip_network("127.0.0.0/8"),
+        ipaddress.ip_network("10.0.0.0/8"),
+        ipaddress.ip_network("172.16.0.0/12"),
+        ipaddress.ip_network("192.168.0.0/16"),
+        ipaddress.ip_network("169.254.0.0/16"),
+        ipaddress.ip_network("::1/128"),
+        ipaddress.ip_network("fc00::/7"),
+    ]
+    for info in addrinfos:
+        addr = ipaddress.ip_address(info[4][0])
+        for net in _BLOCKED_NETWORKS:
+            if addr in net:
+                return f"URL: {url}\nError: Access to private/internal network addresses is blocked."
+
     timeout = aiohttp.ClientTimeout(total=_TIMEOUT_SECONDS)
     headers = {"User-Agent": _USER_AGENT}
 

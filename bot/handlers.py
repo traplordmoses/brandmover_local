@@ -2836,7 +2836,7 @@ async def _handle_agent_mode(update: Update, request: str, user_id: int | None =
                 f"{', tools: ' + ', '.join(result.tool_calls_made) if result.tool_calls_made else ''})</i>"
             )
             await update.message.reply_text(
-                f"{text}{footer}",
+                f"{_esc(text)}{footer}",
                 parse_mode="HTML",
             )
             return
