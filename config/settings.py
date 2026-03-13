@@ -165,6 +165,25 @@ AUTO_POST_DRY_RUN: bool = os.getenv("AUTO_POST_DRY_RUN", "false").lower() in ("t
 HEARTBEAT_ENABLED: bool = os.getenv("HEARTBEAT_ENABLED", "true").lower() in ("true", "1", "yes")
 HEARTBEAT_PROACTIVE_HOURS: int = int(os.getenv("HEARTBEAT_PROACTIVE_HOURS", "8"))
 
+# ── Content Mix Ratios ──
+# Configurable content type distribution for auto-posting (proactive/scheduled).
+# Format: "type:weight,type:weight,..." — weights are relative, not percentages.
+# Default: educational 25%, community 20%, announcement 20%, engagement 15%,
+#          lifestyle 10%, meme 10%. Adjust via CONTENT_MIX_RATIOS env var.
+_raw_mix = os.getenv(
+    "CONTENT_MIX_RATIOS",
+    "educational:25,community:20,announcement:20,engagement:15,lifestyle:10,meme:10"
+)
+CONTENT_MIX_RATIOS: dict[str, int] = {}
+for _pair in _raw_mix.split(","):
+    _pair = _pair.strip()
+    if ":" in _pair:
+        _k, _v = _pair.split(":", 1)
+        _k = _k.strip()
+        _v = _v.strip()
+        if _k and _v.isdigit():
+            CONTENT_MIX_RATIOS[_k] = int(_v)
+
 # ── Topic Bank ──
 # How often (hours) to refresh the topic bank with new Claude-generated angles.
 TOPIC_BANK_REFRESH_INTERVAL_HOURS: int = int(os.getenv("TOPIC_BANK_REFRESH_INTERVAL_HOURS", "72"))

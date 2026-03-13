@@ -84,6 +84,7 @@ def log_feedback(
     accepted: bool,
     feedback_text: str = "",
     resources_used: list[str] | None = None,
+    tags: list[str] | None = None,
 ) -> int:
     """Append a feedback entry to the log. Returns the new total count.
 
@@ -94,16 +95,20 @@ def log_feedback(
     - accepted: True = approved, False = rejected
     - feedback_text: Optional reason (e.g., "too formal", "love the image")
     - resources_used: Which APIs/files were consulted during generation
+    - tags: Structured tags for retrieval (e.g., ["content_type:meme", "mood:casual"])
     """
     entries = _read_feedback()
-    entries.append({
+    entry: dict = {
         "request": request,
         "draft": draft,
         "accepted": accepted,
         "feedback_text": feedback_text,
         "resources_used": resources_used or [],
         "timestamp": time.time(),
-    })
+    }
+    if tags:
+        entry["tags"] = tags
+    entries.append(entry)
     _write_feedback(entries)
     count = len(entries)
     logger.info("Logged feedback #%d (accepted=%s)", count, accepted)

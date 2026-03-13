@@ -71,11 +71,16 @@ def log_generation(
     image_urls: list[str],
     original_request: str,
     status: str = "draft",
+    tags: list[str] | None = None,
 ) -> int:
-    """Append a generation entry. Returns the new total count."""
+    """Append a generation entry. Returns the new total count.
+
+    Tags enable structured retrieval — e.g. ["campaign:launch", "mood:urgent",
+    "topic:feature-release"]. Memory search includes tags for better matching.
+    """
     cost = _estimate_cost(model_id, max(len(image_urls), 1))
     entries = _read_history()
-    entries.append({
+    entry: dict = {
         "asset_type": asset_type,
         "content_type": content_type,
         "prompt": prompt,
@@ -85,7 +90,10 @@ def log_generation(
         "status": status,
         "estimated_cost_usd": cost,
         "timestamp": time.time(),
-    })
+    }
+    if tags:
+        entry["tags"] = tags
+    entries.append(entry)
     # Cap history size to prevent unbounded growth
     if len(entries) > _MAX_HISTORY_ENTRIES:
         entries = entries[-_MAX_HISTORY_ENTRIES:]

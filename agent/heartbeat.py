@@ -7,6 +7,7 @@ Replaces the dumb cron loop with an assess → reason → dispatch cycle.
 
 import json
 import logging
+import random
 import time
 from dataclasses import dataclass
 from enum import Enum
@@ -18,6 +19,20 @@ from pathlib import Path
 from agent import auto_state, schedule_queue, scheduler, state
 from agent.session import build_session_context, load_session
 from config import settings
+
+
+def _pick_content_type_by_mix() -> str:
+    """Select a content type using weighted random based on CONTENT_MIX_RATIOS.
+
+    Falls back to random choice from all selectable types if no mix is configured.
+    """
+    mix = settings.CONTENT_MIX_RATIOS
+    if not mix:
+        from agent.content_types import AGENT_SELECTABLE_TYPES
+        return random.choice(AGENT_SELECTABLE_TYPES)
+    types = list(mix.keys())
+    weights = list(mix.values())
+    return random.choices(types, weights=weights, k=1)[0]
 
 logger = logging.getLogger(__name__)
 
@@ -126,10 +141,14 @@ async def cheap_gate() -> list[dict]:
             if last_ts > 0:
                 hours_since = (time.time() - last_ts) / 3600
                 if hours_since >= settings.HEARTBEAT_PROACTIVE_HOURS:
+                    suggested_type = _pick_content_type_by_mix()
                     signals.append({
                         "type": "proactive",
                         "priority": 3,
-                        "data": {"hours_since_last": round(hours_since, 1)},
+                        "data": {
+                            "hours_since_last": round(hours_since, 1),
+                            "suggested_content_type": suggested_type,
+                        },
                     })
         except Exception as e:
             logger.debug("cheap_gate: proactive check failed: %s", e)

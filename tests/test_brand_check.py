@@ -159,26 +159,26 @@ class TestCalculateScore:
     def test_mixed_score(self):
         report = parse_compliance_response(MOCK_FULL_RESPONSE)
         passed, total = calculate_score(report)
-        assert total == 5
-        assert passed == 3  # colors=pass, typography=partial, visual=pass, brand_elements=fail, layout=pass
+        assert total == 7  # 5 original + 2 new (voice_tone, emotional_alignment)
+        assert passed == 3  # colors=pass, visual=pass, layout=pass; new dims default to partial
 
     def test_all_pass(self):
         report = parse_compliance_response(MOCK_ALL_PASS)
         passed, total = calculate_score(report)
-        assert passed == 5
-        assert total == 5
+        assert passed == 5  # 5 original pass, 2 new default to partial
+        assert total == 7
 
     def test_all_fail(self):
         report = parse_compliance_response(MOCK_ALL_FAIL)
         passed, total = calculate_score(report)
         assert passed == 0
-        assert total == 5
+        assert total == 7  # 5 explicit fail + 2 new default to partial (not pass)
 
     def test_empty_report(self):
         report = _empty_report("Error")
         passed, total = calculate_score(report)
         assert passed == 0
-        assert total == 5
+        assert total == 7  # All 7 dimensions present with partial verdict
 
 
 # ---------------------------------------------------------------------------
@@ -189,7 +189,7 @@ class TestFormatReport:
     def test_contains_score(self):
         report = parse_compliance_response(MOCK_FULL_RESPONSE)
         formatted = format_compliance_report(report)
-        assert "3/5" in formatted
+        assert "3/7" in formatted
 
     def test_contains_all_dimension_labels(self):
         report = parse_compliance_response(MOCK_FULL_RESPONSE)

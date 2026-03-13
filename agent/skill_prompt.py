@@ -252,29 +252,50 @@ For {settings.BRAND_NAME} image prompts, ALWAYS follow these rules:
 - Match the brand's color scheme, backgrounds, and illustration style as described in the guidelines
 - Never use colors or aesthetics that contradict the guidelines
 
-**SPLICE Prompt Structure — use this framework for every image_prompt:**
-Write prompts following this order for best results:
-1. **Subject** — What is the main subject? Be specific (e.g. "3D metallic smartphone displaying a product dashboard" not "a phone")
-2. **Parameters** — Style, medium, artist reference (e.g. "3D product render, octane render style")
-3. **Lighting** — How is it lit? (e.g. "dramatic rim lighting, volumetric light rays, dark ambient")
-4. **Image Type** — Photo, illustration, 3D render? (e.g. "product visualization, studio shot")
-5. **Composition** — Camera angle, framing (e.g. "three-quarter angle, centered, rule of thirds")
-6. **Enhancers** — Quality terms (e.g. "sharp focus, 8K, ultra-detailed, professional")
+**5-Layer Prompt Framework — use this for every image_prompt:**
+Build prompts in these 5 layers, in order. Each layer adds specificity:
 
-**Prompt writing tips:**
-- Be SPECIFIC: "3D matte black metallic cube with glowing brand logo etched on front face" beats "a cube with logo"
-- Use professional art terms: chiaroscuro, bokeh, volumetric, rim light, specular highlight
-- Front-load the most important elements — models pay more attention to the start
-- Keep prompts 40-80 words — enough detail without overwhelming the model
-- Describe materials and textures: "brushed aluminum", "matte black metal", "frosted glass"
-- The prompt enhancer will automatically add quality boosters and brand terms, so focus on the SUBJECT and COMPOSITION
+1. **Subject Description** — The main subject with precise detail. Be ultra-specific.
+   - BAD: "a phone" / GOOD: "3D metallic smartphone displaying a crypto dashboard with live charts"
+   - Include materials and textures: "brushed aluminum", "matte black metal", "frosted glass"
+   - Describe the subject's state/action: "floating at 15-degree tilt", "glowing edges pulsing"
+
+2. **Environment & Setting** — Where is the subject? What surrounds it?
+   - Background type: solid color, gradient, environment, abstract
+   - Atmospheric elements: particles, fog, reflections, shadows
+   - Context objects: supporting props, secondary elements
+   - Example: "on a matte black surface with soft reflections, surrounded by floating holographic data particles"
+
+3. **Lighting Specification** — How is the scene lit? This defines mood.
+   - Key light direction and quality: "dramatic side rim lighting from upper right"
+   - Fill and accent lights: "subtle blue fill from below, warm accent on edges"
+   - Lighting style: chiaroscuro, high-key, low-key, volumetric, neon glow
+   - Shadows: "deep shadows, contact shadows, ambient occlusion"
+
+4. **Technical Photography** — Camera and render settings
+   - Camera angle: three-quarter, top-down, eye-level, worm's-eye, isometric
+   - Lens: wide-angle, macro, telephoto, tilt-shift
+   - Depth of field: "shallow DOF with background bokeh", "everything sharp"
+   - Render type: product photography, CGI render, editorial photo, illustration
+
+5. **Style & Aesthetic** — The artistic DNA
+   - Style references: "Pixar quality", "octane render", "editorial fashion photography"
+   - Quality terms: 8K, ultra-detailed, sharp focus, professional
+   - Mood: cinematic, minimal, energetic, luxurious, playful
+   - The enhancer adds brand terms automatically — focus on the creative vision
+
+**Prompt tips:**
+- Front-load the subject — models pay most attention to the start
+- Keep prompts 40-80 words — enough detail without overwhelming
+- Skip layers that aren't relevant (e.g. skip Environment for tight product shots)
+- The prompt enhancer adds brand colors, quality boosters, and style keywords automatically
 
 **Content-type image styles:**
 - **Announcements/features**: Product renders, app UI mockups, 3D isometric tech objects
-- **Lifestyle/events**: Photorealistic scenes, conference vibes, dramatic angles
-- **Educational**: Clean diagrams, infographic-style, technical illustrations
-- **Market commentary**: Futuristic data HUDs, charts, neon data streams
-- **Community/memes**: 3D CGI characters, playful scenes, exaggerated expressions
+- **Lifestyle/events**: Photorealistic scenes, conference vibes, dramatic angles, shallow DOF
+- **Educational**: Clean diagrams, infographic-style, technical illustrations, high-key lighting
+- **Market commentary**: Futuristic data HUDs, holographic panels, neon data streams
+- **Community/memes**: 3D CGI characters, playful scenes, exaggerated expressions, vibrant colors
 
 **Mascot** (if defined in brand guidelines):
 - Check the MASCOT section of the brand guidelines for visual details and prompt base

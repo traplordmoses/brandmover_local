@@ -380,6 +380,16 @@ async def _run_loop(
                     result.draft["content_type"] = ct
                     break
 
+    # Run default-FAIL quality gate on finalized draft
+    if result.draft:
+        from agent.self_review import draft_quality_gate
+        gate = draft_quality_gate(result.draft)
+        if gate["auto_fixed"]:
+            logger.info("Quality gate auto-fixed: %s", gate["auto_fixed"])
+        if not gate["passed"]:
+            failed = [c for c in gate["checks"] if not c["passed"]]
+            logger.warning("Quality gate: NEEDS WORK — %s", [c["rule"] for c in failed])
+
     result.image_url = _extract_image_url(tool_call_log)
     result.image_urls = _extract_image_urls(tool_call_log)
     result.conversation_history = _trim_conversation(messages)

@@ -40,18 +40,47 @@ _TEXT_OVERLAY_KEYWORDS = re.compile(
 )
 
 # ---------------------------------------------------------------------------
-# Prompt enhancement — SPLICE-based enrichment
+# Prompt enhancement — 5-Layer enrichment
 # ---------------------------------------------------------------------------
 
-# Per-content-type modifiers — combined with brand style keywords at runtime.
+# Per-content-type modifiers organized by the 5-layer prompt framework:
+# Each entry covers: environment, lighting, technical, style/aesthetic
+# Layer 1 (Subject) comes from the agent's prompt — we don't override it.
 _CONTENT_TYPE_MODIFIERS = {
-    "announcement": "volumetric light, 3D render, ultra-detailed, 8K resolution",
-    "lifestyle": "glossy reflective surfaces, polished 3D render feel, shallow depth of field on background only",
-    "event": "atmospheric glow, dynamic composition, high detail",
-    "educational": "clean composition, minimalist UI, sharp focus",
-    "brand_asset": "clean vector-ready edges, professional, premium feel",
-    "community": "3D CGI render, smooth shading, polished finish",
-    "market_commentary": "holographic HUD panels, data visualization aesthetic, volumetric light, sharp focus",
+    "announcement": (
+        "dramatic rim lighting from upper right, volumetric light rays, "
+        "3D product render, three-quarter angle, ultra-detailed, 8K resolution"
+    ),
+    "lifestyle": (
+        "natural environment with soft bokeh background, "
+        "golden hour warm lighting, shallow depth of field, "
+        "editorial photography style, glossy reflective surfaces"
+    ),
+    "event": (
+        "atmospheric environment with particle effects, "
+        "dynamic dramatic lighting with colored accent glow, "
+        "wide-angle dynamic composition, cinematic high detail"
+    ),
+    "educational": (
+        "clean minimal white or light background, "
+        "high-key even studio lighting, sharp focus everywhere, "
+        "infographic illustration style, minimalist UI aesthetic"
+    ),
+    "brand_asset": (
+        "isolated on transparent or solid background, "
+        "soft studio lighting, clean vector-ready edges, "
+        "professional product photography, premium polished feel"
+    ),
+    "community": (
+        "playful colorful environment, "
+        "bright soft studio lighting, smooth shading, "
+        "3D CGI Pixar-quality render, polished finish"
+    ),
+    "market_commentary": (
+        "dark tech environment with floating data panels, "
+        "neon holographic glow lighting, volumetric light, "
+        "futuristic HUD data visualization aesthetic, sharp focus"
+    ),
 }
 
 # Base negative terms — always included regardless of brand config.
@@ -218,11 +247,10 @@ def enhance_prompt(raw_prompt: str, content_type: str) -> tuple[str, str]:
     """
     Enhance a raw image prompt with quality boosters and brand terms.
 
-    Uses SPLICE-inspired enrichment:
-    - Subject: preserved from raw prompt (agent-written)
-    - Parameters + Lighting + Image Type: added from quality profile
-    - Composition: preserved from raw prompt if present
-    - Enhancers: quality boosters and brand terms
+    Uses 5-layer enrichment:
+    - Layer 1 (Subject): preserved from raw prompt (agent-written)
+    - Layers 2-4 (Environment, Lighting, Technical): added from content-type profile
+    - Layer 5 (Style/Aesthetic): brand terms and quality boosters
 
     Locked directives (e.g. "upright", "70 degree", "matte black background")
     are detected in the raw prompt and preserved verbatim.  Enhancement phrases

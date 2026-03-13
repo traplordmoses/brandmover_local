@@ -50,13 +50,23 @@ def _tokenize(text: str) -> list[str]:
 
 
 def _build_entry_text(entry: dict) -> str:
-    """Build a searchable text representation of a generation entry."""
+    """Build a searchable text representation of a generation entry.
+
+    Includes tags if present — tags use 'key:value' format and both the key
+    and value are indexed as separate tokens for flexible retrieval.
+    """
     parts = [
         entry.get("original_request", ""),
         entry.get("prompt", ""),
         entry.get("content_type", ""),
         entry.get("asset_type", ""),
     ]
+    # Include tags as searchable text
+    tags = entry.get("tags", [])
+    if tags:
+        for tag in tags:
+            # "campaign:launch" → "campaign launch" so both tokens are searchable
+            parts.append(tag.replace(":", " "))
     return " ".join(parts)
 
 

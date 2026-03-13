@@ -16,7 +16,9 @@ from config import settings
 logger = logging.getLogger(__name__)
 
 # Dimensions checked in the compliance report
-DIMENSIONS = ("colors", "typography", "visual_style", "brand_elements", "layout")
+# v9: added voice_tone and emotional_alignment for Brand Guardian audit
+DIMENSIONS = ("colors", "typography", "visual_style", "brand_elements", "layout",
+              "voice_tone", "emotional_alignment")
 
 VERDICT_PASS = "pass"
 VERDICT_PARTIAL = "partial"
@@ -142,8 +144,11 @@ def _build_check_prompt(guidelines_context: str, inventory_context: str = "",
         )
 
     return (
-        "You are a brand compliance auditor. Analyze this image against the brand "
-        "guidelines below and return a structured JSON compliance report.\n\n"
+        "You are a brand compliance auditor using the Brand Guardian methodology. "
+        "Your DEFAULT verdict is FAIL — the content must prove it belongs with "
+        "overwhelming evidence. Be rigorous.\n\n"
+        "Analyze this image against the brand guidelines below and return a structured "
+        "JSON compliance report.\n\n"
         "IMPORTANT: Brand compliance means 'does this look like it belongs with the rest "
         "of the brand's visual identity' — not 'does every pixel match a hex code.' "
         "Evaluate the overall visual DNA: character designs, color relationships, "
@@ -156,19 +161,19 @@ def _build_check_prompt(guidelines_context: str, inventory_context: str = "",
         '    "found": ["#hex1", "#hex2", ...],\n'
         '    "on_palette": ["#hex values that match brand palette"],\n'
         '    "off_palette": ["#hex values NOT in brand palette"],\n'
-        '    "findings": "Brief explanation of color compliance"\n'
+        '    "findings": "Brief explanation"\n'
         "  },\n"
         '  "typography": {\n'
         '    "verdict": "pass" | "partial" | "fail",\n'
         '    "found_fonts": ["Font Name (weight)"],\n'
         '    "expected_fonts": ["Font Name from guidelines"],\n'
-        '    "findings": "Brief explanation of typography compliance"\n'
+        '    "findings": "Brief explanation"\n'
         "  },\n"
         '  "visual_style": {\n'
         '    "verdict": "pass" | "partial" | "fail",\n'
         '    "matched_keywords": ["style keywords that match"],\n'
         '    "conflicting_elements": ["elements that conflict with brand style"],\n'
-        '    "findings": "Brief explanation of style compliance"\n'
+        '    "findings": "Brief explanation"\n'
         "  },\n"
         '  "brand_elements": {\n'
         '    "verdict": "pass" | "partial" | "fail",\n'
@@ -176,27 +181,38 @@ def _build_check_prompt(guidelines_context: str, inventory_context: str = "",
         '    "logo_correct": true | false | null,\n'
         '    "text_found": ["any visible text strings"],\n'
         '    "brand_phrases_used": ["matching brand phrases if any"],\n'
-        '    "findings": "Brief explanation of brand element compliance"\n'
+        '    "findings": "Brief explanation"\n'
         "  },\n"
         '  "layout": {\n'
         '    "verdict": "pass" | "partial" | "fail",\n'
         '    "composition_notes": "Brief description of layout/composition",\n'
-        '    "findings": "Brief explanation of layout compliance"\n'
+        '    "findings": "Brief explanation"\n'
+        "  },\n"
+        '  "voice_tone": {\n'
+        '    "verdict": "pass" | "partial" | "fail",\n'
+        '    "detected_tone": "The emotional tone conveyed by the image",\n'
+        '    "expected_tone": "The brand tone from guidelines",\n'
+        '    "findings": "Does the image feel like the brand? Does it match voice traits?"\n'
+        "  },\n"
+        '  "emotional_alignment": {\n'
+        '    "verdict": "pass" | "partial" | "fail",\n'
+        '    "detected_emotion": "What emotion does the image evoke?",\n'
+        '    "brand_emotion": "What emotion should the brand evoke?",\n'
+        '    "findings": "Is the emotional impact aligned with brand mission/values?"\n'
         "  },\n"
         '  "recommendations": ["Actionable fix 1", "Actionable fix 2"]\n'
         "}\n\n"
-        "Rules for verdicts:\n"
-        '- "pass": fully on-brand for this dimension\n'
+        "Rules for verdicts (DEFAULT FAIL — prove readiness):\n"
+        '- "pass": overwhelmingly on-brand — no reasonable objection\n'
         '- "partial": mostly on-brand with minor deviations\n'
-        '- "fail": significant deviation from brand guidelines\n'
-        "- For colors, a color is on-palette if it's within a close perceptual range "
-        "of any brand color OR if it's a natural variation of the brand's color family. "
-        "Do not fail colors for minor shade differences.\n"
+        '- "fail": any significant deviation from brand guidelines, or insufficient evidence of compliance\n'
+        "- For colors, a color is on-palette if within a close perceptual range of any brand color.\n"
         "- For typography, if no text is visible, verdict is \"pass\" with a note. "
         "If guidelines say \"defined by brand assets\" for typography, verdict is \"pass\".\n"
         "- For brand_elements, if no logo or text is expected/visible, verdict is \"pass\".\n"
-        "- For visual_style, evaluate whether the image shares the same artistic DNA "
-        "as described in the guidelines (character style, illustration approach, energy).\n\n"
+        "- For visual_style, evaluate artistic DNA (character style, illustration approach, energy).\n"
+        "- For voice_tone, does the image feel like the brand's personality? Match against voice_traits.\n"
+        "- For emotional_alignment, does the image evoke the right feeling for the brand's mission?\n\n"
         "Return ONLY the JSON, no markdown formatting or code fences."
         + inventory_block
         + raw_guidelines_block
@@ -297,6 +313,8 @@ _DIM_LABELS = {
     "visual_style": "Visual Style",
     "brand_elements": "Brand Elements",
     "layout": "Layout",
+    "voice_tone": "Voice & Tone",
+    "emotional_alignment": "Emotional Alignment",
 }
 
 
