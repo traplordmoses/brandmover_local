@@ -1,0 +1,31 @@
+{
+  "name": "swipe-feature-demo",
+  "url": "https://foidfun.vercel.app",
+  "viewport_width": 1280,
+  "viewport_height": 720,
+  "mode": "video",
+  "steps": [
+    {
+      "action": "goto",
+      "target": "/swipe",
+      "narration": "Navigate to Swipe",
+      "wait": 2.5
+    },
+    {
+      "action": "click",
+      "target": ".card:first-child",
+      "narration": "Click a card",
+      "wait": 2.0
+    },
+    {
+      "action": "wait",
+      "wait": 3.0,
+      "narration": "Watch the animation"
+    },
+    {
+      "action": "screenshot",
+      "narration": "Final state",
+      "wait": 1.0
+    }
+  ]
+}

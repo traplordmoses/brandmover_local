@@ -54,6 +54,7 @@ from agent.engine import (
     _extract_image_url,   # Pulls first image URL from tool call results
     _extract_image_urls,  # Pulls ALL image URLs from tool call results
     OnToolCall,           # Type alias for progress callback
+    OnReasoning,          # Type alias for reasoning trace callback
 )
 from agent.resource_log import ResourceTracker  # Tracks API calls, files read, tokens used
 from agent.unified_prompt import build_unified_system_prompt
@@ -97,6 +98,7 @@ async def run_unified(
     message: str,
     context: ConversationContext,
     on_tool_call: OnToolCall | None = None,
+    on_reasoning: OnReasoning | None = None,
     user_id: int | None = None,
     tool_context: dict | None = None,
 ) -> UnifiedResult:
@@ -111,6 +113,8 @@ async def run_unified(
         context: Conversation context with history (past messages for continuity).
         on_tool_call: Optional progress callback — called with (tool_name, description)
                       each time a tool is invoked, so the UI can show "Generating image...".
+        on_reasoning: Optional progress callback — called with Claude's reasoning text
+                      between tool calls, so the UI can show live thinking traces.
         user_id: Telegram user ID for per-user state (drafts, preferences).
         tool_context: Optional dict with bot/chat_id for tools that need Telegram access
                       (e.g., send_file needs the bot instance to send files to the user).
@@ -205,6 +209,12 @@ async def run_unified(
         # Accumulate text output across turns (Claude may speak on multiple turns).
         for tb in text_blocks:
             result.response_text += tb.text + "\n"
+
+        # Fire reasoning callback with Claude's text between tool calls
+        if on_reasoning and text_blocks:
+            combined = " ".join(tb.text.strip() for tb in text_blocks if tb.text.strip())
+            if combined:
+                await on_reasoning(combined)
 
         # EXIT CONDITION: If Claude didn't call any tools, or explicitly said "end_turn",
         # the reasoning is complete. Break out of the loop.

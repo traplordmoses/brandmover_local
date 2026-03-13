@@ -490,6 +490,22 @@ def _esc(text: str) -> str:
     return html.escape(str(text))
 
 
+def _truncate_reasoning(text: str, max_len: int = 100) -> str:
+    """Truncate Claude's reasoning text to a short summary line for the status message."""
+    # Take the first sentence or up to max_len chars
+    text = text.replace("\n", " ").strip()
+    # Find first sentence end
+    for end in (".", "!", "?"):
+        idx = text.find(end)
+        if 0 < idx < max_len:
+            return text[: idx + 1]
+    if len(text) > max_len:
+        # Cut at last word boundary
+        cut = text[:max_len].rsplit(" ", 1)[0]
+        return cut + "…"
+    return text
+
+
 import random as _random
 
 _REVIEW_PROMPTS = [
@@ -995,12 +1011,19 @@ async def _handle_agent_revision(update: Update, pending: dict, feedback_text: s
 
     _rev_status_msg = None
     _rev_status_lines: list[str] = []
+    _rev_reasoning_line: str = ""
 
-    async def on_tool_call(tool_name: str, description: str):
+    def _build_rev_status_text() -> str:
+        parts = list(_rev_status_lines)
+        if _rev_reasoning_line:
+            parts.append(f"<i>💭 {_esc(_rev_reasoning_line)}</i>")
+        return "\n".join(parts)
+
+    async def _update_rev_status():
         nonlocal _rev_status_msg
-        icon = _TOOL_ICONS.get(tool_name, "\u26A1")
-        _rev_status_lines.append(f"{icon} {_esc(description)}")
-        text = "\n".join(_rev_status_lines)
+        text = _build_rev_status_text()
+        if not text:
+            return
         if _rev_status_msg is None:
             _rev_status_msg = await update.message.reply_text(text, parse_mode="HTML")
         else:
@@ -1008,6 +1031,19 @@ async def _handle_agent_revision(update: Update, pending: dict, feedback_text: s
                 await _rev_status_msg.edit_text(text, parse_mode="HTML")
             except Exception:
                 pass
+
+    async def on_tool_call(tool_name: str, description: str):
+        nonlocal _rev_reasoning_line
+        _rev_reasoning_line = ""
+        icon = _TOOL_ICONS.get(tool_name, "\u26A1")
+        _rev_status_lines.append(f"{icon} {_esc(description)}")
+        await _update_rev_status()
+        await update.message.chat.send_action("typing")
+
+    async def on_reasoning(text: str):
+        nonlocal _rev_reasoning_line
+        _rev_reasoning_line = _truncate_reasoning(text)
+        await _update_rev_status()
         await update.message.chat.send_action("typing")
 
     try:
@@ -1024,6 +1060,7 @@ async def _handle_agent_revision(update: Update, pending: dict, feedback_text: s
             })
             result = await engine.run_agent_with_history(
                 history, on_tool_call=on_tool_call,
+                on_reasoning=on_reasoning,
             )
         else:
             # Fallback: no history available (legacy pending drafts)
@@ -1037,6 +1074,7 @@ async def _handle_agent_revision(update: Update, pending: dict, feedback_text: s
             result = await engine.run_agent(
                 request=pending.get("original_request", ""),
                 on_tool_call=on_tool_call,
+                on_reasoning=on_reasoning,
                 revision_context=revision_context,
             )
 
@@ -2319,15 +2357,22 @@ async def _handle_unified(
     if ref_path and Path(ref_path).exists():
         request = f"{request}\n\n[REFERENCE IMAGE: {ref_path}]"
 
-    # Status message for tool calls (same live-edit pattern as _handle_agent_mode)
+    # Status message for tool calls + live reasoning traces
     _status_msg = None
     _status_lines: list[str] = []
+    _reasoning_line: str = ""  # Current reasoning line (replaced each turn)
 
-    async def on_tool_call(tool_name: str, description: str):
+    def _build_status_text() -> str:
+        parts = list(_status_lines)
+        if _reasoning_line:
+            parts.append(f"<i>💭 {_esc(_reasoning_line)}</i>")
+        return "\n".join(parts)
+
+    async def _update_status():
         nonlocal _status_msg
-        icon = _TOOL_ICONS.get(tool_name, "\u26A1")
-        _status_lines.append(f"{icon} {_esc(description)}")
-        text = "\n".join(_status_lines)
+        text = _build_status_text()
+        if not text:
+            return
         if _status_msg is None:
             _status_msg = await update.message.reply_text(text, parse_mode="HTML")
         else:
@@ -2335,6 +2380,19 @@ async def _handle_unified(
                 await _status_msg.edit_text(text, parse_mode="HTML")
             except Exception:
                 pass
+
+    async def on_tool_call(tool_name: str, description: str):
+        nonlocal _reasoning_line
+        _reasoning_line = ""  # Clear reasoning when a tool starts
+        icon = _TOOL_ICONS.get(tool_name, "\u26A1")
+        _status_lines.append(f"{icon} {_esc(description)}")
+        await _update_status()
+        await update.message.chat.send_action("typing")
+
+    async def on_reasoning(text: str):
+        nonlocal _reasoning_line
+        _reasoning_line = _truncate_reasoning(text)
+        await _update_status()
         await update.message.chat.send_action("typing")
 
     try:
@@ -2342,6 +2400,7 @@ async def _handle_unified(
             message=request,
             context=ctx,
             on_tool_call=on_tool_call,
+            on_reasoning=on_reasoning,
             user_id=user_id,
             tool_context={
                 "bot": context.bot,
@@ -2798,12 +2857,19 @@ async def _handle_agent_mode(update: Update, request: str, user_id: int | None =
 
     _status_msg = None
     _status_lines: list[str] = []
+    _reasoning_line: str = ""
 
-    async def on_tool_call(tool_name: str, description: str):
+    def _build_status_text() -> str:
+        parts = list(_status_lines)
+        if _reasoning_line:
+            parts.append(f"<i>💭 {_esc(_reasoning_line)}</i>")
+        return "\n".join(parts)
+
+    async def _update_status():
         nonlocal _status_msg
-        icon = _TOOL_ICONS.get(tool_name, "\u26A1")
-        _status_lines.append(f"{icon} {_esc(description)}")
-        text = "\n".join(_status_lines)
+        text = _build_status_text()
+        if not text:
+            return
         if _status_msg is None:
             _status_msg = await update.message.reply_text(text, parse_mode="HTML")
         else:
@@ -2811,12 +2877,26 @@ async def _handle_agent_mode(update: Update, request: str, user_id: int | None =
                 await _status_msg.edit_text(text, parse_mode="HTML")
             except Exception:
                 pass  # Telegram rejects edits if text unchanged
+
+    async def on_tool_call(tool_name: str, description: str):
+        nonlocal _reasoning_line
+        _reasoning_line = ""
+        icon = _TOOL_ICONS.get(tool_name, "\u26A1")
+        _status_lines.append(f"{icon} {_esc(description)}")
+        await _update_status()
+        await update.message.chat.send_action("typing")
+
+    async def on_reasoning(text: str):
+        nonlocal _reasoning_line
+        _reasoning_line = _truncate_reasoning(text)
+        await _update_status()
         await update.message.chat.send_action("typing")
 
     try:
         result = await engine.run_agent(
             request=request,
             on_tool_call=on_tool_call,
+            on_reasoning=on_reasoning,
         )
 
         # Delete the status message now that we're done

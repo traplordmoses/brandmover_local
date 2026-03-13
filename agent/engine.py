@@ -154,6 +154,8 @@ def _extract_image_urls(tool_calls_made: list[dict]) -> list[str]:
 
 # Type for the on_tool_call callback
 OnToolCall = Callable[[str, str], Awaitable[None]]
+# Type for the on_reasoning callback — fires with Claude's text between tool calls
+OnReasoning = Callable[[str], Awaitable[None]]
 
 
 async def _run_loop(
@@ -162,6 +164,7 @@ async def _run_loop(
     messages: list[dict],
     tracker: ResourceTracker,
     on_tool_call: OnToolCall | None = None,
+    on_reasoning: OnReasoning | None = None,
     force_first_tool: bool = True,
 ) -> AgentResult:
     """Shared agent loop logic used by both run_agent() and run_agent_with_history().
@@ -221,6 +224,12 @@ async def _run_loop(
 
         for tb in text_blocks:
             result.final_text += tb.text + "\n"
+
+        # Fire reasoning callback with Claude's text between tool calls
+        if on_reasoning and text_blocks:
+            combined = " ".join(tb.text.strip() for tb in text_blocks if tb.text.strip())
+            if combined:
+                await on_reasoning(combined)
 
         if not tool_use_blocks or response.stop_reason == "end_turn":
             logger.info("Agent finished after %d turns (stop_reason=%s, no tool calls)", turn + 1, response.stop_reason)
@@ -428,6 +437,7 @@ async def _run_loop(
 async def run_agent(
     request: str,
     on_tool_call: OnToolCall | None = None,
+    on_reasoning: OnReasoning | None = None,
     revision_context: str | None = None,
 ) -> AgentResult:
     """
@@ -436,6 +446,7 @@ async def run_agent(
     Args:
         request: User's content request.
         on_tool_call: Optional async callback(tool_name, brief_description) for progress updates.
+        on_reasoning: Optional async callback(text) for live reasoning traces.
         revision_context: Optional context about a previous draft + feedback for revisions.
 
     Returns:
@@ -464,7 +475,8 @@ async def run_agent(
 
     result = await _run_loop(
         client, system_prompt, messages, tracker,
-        on_tool_call=on_tool_call, force_first_tool=True,
+        on_tool_call=on_tool_call, on_reasoning=on_reasoning,
+        force_first_tool=True,
     )
     result.total_time = round(time.time() - t_start, 1)
 
@@ -496,6 +508,7 @@ async def run_agent(
 async def run_agent_with_history(
     history: list[dict],
     on_tool_call: OnToolCall | None = None,
+    on_reasoning: OnReasoning | None = None,
 ) -> AgentResult:
     """Continue an agent conversation from existing message history.
 
@@ -504,6 +517,7 @@ async def run_agent_with_history(
     Args:
         history: Previous messages list (from AgentResult.conversation_history).
         on_tool_call: Optional progress callback.
+        on_reasoning: Optional async callback(text) for live reasoning traces.
 
     Returns:
         AgentResult with the revised draft and updated conversation history.
@@ -520,7 +534,8 @@ async def run_agent_with_history(
 
     result = await _run_loop(
         client, system_prompt, messages, tracker,
-        on_tool_call=on_tool_call, force_first_tool=False,
+        on_tool_call=on_tool_call, on_reasoning=on_reasoning,
+        force_first_tool=False,
     )
     result.total_time = round(time.time() - t_start, 1)
 
