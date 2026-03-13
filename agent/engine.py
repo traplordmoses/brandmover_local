@@ -390,6 +390,33 @@ async def _run_loop(
             failed = [c for c in gate["checks"] if not c["passed"]]
             logger.warning("Quality gate: NEEDS WORK — %s", [c["rule"] for c in failed])
 
+        # Weighted quality score
+        from agent.scoring import score_draft
+        score = score_draft(result.draft)
+        result.draft["_quality_score"] = score["total_score"]
+        result.draft["_quality_grade"] = score["grade"]
+        logger.info("Quality score: %.0f/100 (Grade %s)", score["total_score"], score["grade"])
+
+        # Dedup check
+        caption = result.draft.get("caption", "")
+        if caption:
+            from agent.dedup import check_duplicate
+            dedup = check_duplicate(caption)
+            if dedup["is_duplicate"]:
+                logger.warning("Dedup: caption too similar (%.0f%%) to recent post",
+                               dedup["max_similarity"] * 100)
+                result.draft["_dedup_warning"] = True
+
+        # Risk scoring
+        all_text = f"{result.draft.get('caption', '')} {result.draft.get('title', '')} {result.draft.get('subtitle', '')}"
+        from agent.risk_score import score_risk
+        risk = score_risk(all_text)
+        if risk["risk_level"] != "low":
+            result.draft["_risk_level"] = risk["risk_level"]
+            result.draft["_risk_flags"] = [f["matched"] for f in risk["flags"]]
+            logger.warning("Risk: %s — flags: %s", risk["risk_level"],
+                           [f["matched"] for f in risk["flags"]])
+
     result.image_url = _extract_image_url(tool_call_log)
     result.image_urls = _extract_image_urls(tool_call_log)
     result.conversation_history = _trim_conversation(messages)

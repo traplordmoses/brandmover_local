@@ -206,6 +206,11 @@ TIMEZONE: str = os.getenv("TIMEZONE", "")
 # Used by the read_telegram_channel tool for community sentiment analysis.
 TELEGRAM_MONITOR_CHANNELS: str = os.getenv("TELEGRAM_MONITOR_CHANNELS", "")
 
+# ── Cost Gate ──
+# Daily budget cap for image generation spend (estimated costs from Replicate).
+# When cumulative daily spend reaches this limit, check_cost_budget() returns allowed=False.
+DAILY_COST_BUDGET_USD: float = float(os.getenv("DAILY_COST_BUDGET_USD", "5.0"))
+
 
 # ---------------------------------------------------------------------------
 # Startup validation
