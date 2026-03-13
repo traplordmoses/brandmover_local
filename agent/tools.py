@@ -143,9 +143,8 @@ TOOL_DEFINITIONS = [
     {
         "name": "read_feedback_history",
         "description": (
-            "Read the history of approved/rejected drafts and any learned brand preferences. "
-            "Use this to understand what the user likes and dislikes before generating content, "
-            "so you can avoid repeating past mistakes."
+            "Read learned content preferences distilled from past approvals and rejections. "
+            "Returns actionable patterns about what works and what doesn't."
         ),
         "input_schema": {
             "type": "object",
@@ -171,6 +170,45 @@ TOOL_DEFINITIONS = [
         },
     },
     {
+        "name": "think",
+        "description": (
+            "Use this to think step-by-step, plan your approach, or reason about the request "
+            "before taking action. Returns 'ok'. Use this before your first real tool call and "
+            "whenever you need to reason."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "thought": {
+                    "type": "string",
+                    "description": "Your reasoning, planning, or analysis",
+                },
+            },
+            "required": ["thought"],
+        },
+    },
+    {
+        "name": "finish",
+        "description": (
+            "Call this when your draft is complete. Submit the final content. "
+            "Do not output raw JSON in your text response — always submit your final draft through this tool."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "caption": {"type": "string"},
+                "hashtags": {"type": "array", "items": {"type": "string"}},
+                "alt_text": {"type": "string"},
+                "image_prompt": {"type": "string"},
+                "content_type": {"type": "string"},
+                "title": {"type": "string"},
+                "subtitle": {"type": "string"},
+                "platform": {"type": "string"},
+            },
+            "required": ["caption"],
+        },
+    },
+    {
         "name": "execute_openclaw_script",
         "description": (
             "Execute an OpenClaw onchain script (Node.js). Available scripts: "
@@ -193,6 +231,130 @@ TOOL_DEFINITIONS = [
                 },
             },
             "required": ["script_name"],
+        },
+    },
+    # --- Skills system --- agent-created persistent capabilities
+    {
+        "name": "use_skill",
+        "description": (
+            "Load a saved skill by name. Returns the skill's full instructions (SKILL.md) "
+            "and any bundled scripts. Follow the instructions to execute the skill. "
+            "Call list_skills first if you're not sure which skill to use."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "name": {
+                    "type": "string",
+                    "description": "The skill name (e.g. 'meme-generator', 'trending-topics').",
+                },
+            },
+            "required": ["name"],
+        },
+    },
+    {
+        "name": "create_skill",
+        "description": (
+            "Save a reusable skill for future sessions. Use this after you've solved a novel "
+            "problem and want to remember HOW you did it. A skill contains: a SKILL.md with "
+            "instructions, and optional scripts the agent can run later. Skills compound — "
+            "each one makes you more capable in future sessions."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "name": {
+                    "type": "string",
+                    "description": "Skill identifier (lowercase, hyphens allowed, e.g. 'meme-generator').",
+                },
+                "description": {
+                    "type": "string",
+                    "description": "One-line description of what this skill does (shown in skill registry).",
+                },
+                "skill_md": {
+                    "type": "string",
+                    "description": (
+                        "Full SKILL.md content in markdown. Should include: "
+                        "YAML frontmatter (name, description), When to Use, How to Use, "
+                        "and any code/commands. Follow the SKILL.md format."
+                    ),
+                },
+                "scripts": {
+                    "type": "string",
+                    "description": (
+                        "Optional JSON object of {filename: code} for reusable scripts. "
+                        "E.g. '{\"make_meme.py\": \"from PIL import Image...\"}'. "
+                        "Scripts are saved to the skill's scripts/ directory."
+                    ),
+                },
+                "overwrite": {
+                    "type": "boolean",
+                    "description": "If true, replace an existing skill with the same name.",
+                    "default": False,
+                },
+            },
+            "required": ["name", "description", "skill_md"],
+        },
+    },
+    {
+        "name": "list_skills",
+        "description": (
+            "List all available skills with their descriptions. Use this to discover "
+            "what capabilities have been saved from previous sessions."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {},
+            "required": [],
+        },
+    },
+    # --- Subagent delegation ---
+    {
+        "name": "delegate_task",
+        "description": (
+            "Delegate a research or analysis sub-task to a lightweight sub-agent. "
+            "The sub-agent runs with Haiku for speed/cost and has access to brand "
+            "guidelines, feedback, and skills. Use for: competitor research, data "
+            "gathering, analysis tasks, or any work that can run independently."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "task": {
+                    "type": "string",
+                    "description": "What the sub-agent should do. Be specific.",
+                },
+                "context": {
+                    "type": "string",
+                    "description": "Additional context to provide (optional).",
+                    "default": "",
+                },
+            },
+            "required": ["task"],
+        },
+    },
+    # --- Semantic memory ---
+    {
+        "name": "search_memory",
+        "description": (
+            "Search past generations by relevance to find what worked before. "
+            "Returns similar past content with approval status. Use this to learn "
+            "from past successes and avoid repeating rejected approaches."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "What to search for (e.g., 'partnership announcement', 'meme about staking').",
+                },
+                "status_filter": {
+                    "type": "string",
+                    "enum": ["approved", "rejected", "draft"],
+                    "description": "Only show entries with this status. Omit for all.",
+                },
+            },
+            "required": ["query"],
         },
     },
 ]
@@ -693,9 +855,21 @@ async def _handle_img2img(
 async def _handle_read_feedback_history(
     input_dict: dict, tracker: ResourceTracker
 ) -> str:
-    context = feedback.get_feedback_context()
-    tracker.log_file("feedback.json")
-    return context
+    from agent.session import load_session
+    session = load_session()
+    tracker.log_file("agent_session.json")
+
+    if not session.learned_preferences:
+        return json.dumps({
+            "preferences": [],
+            "message": "No learned preferences yet. Preferences are auto-extracted from approval/rejection patterns.",
+        })
+
+    return json.dumps({
+        "preferences": session.learned_preferences,
+        "count": len(session.learned_preferences),
+        "message": "These are distilled preferences learned from past approvals and rejections.",
+    })
 
 
 async def _handle_log_resource_usage(
@@ -704,6 +878,19 @@ async def _handle_log_resource_usage(
     summary = input_dict.get("summary", "")
     logger.info("Agent logged resource usage: %s", summary)
     return f"Resource usage logged: {summary}\nCurrent tracker: {tracker.to_summary()}"
+
+
+async def _handle_think(
+    input_dict: dict, tracker: ResourceTracker
+) -> str:
+    logger.info("Agent thinking: %s", str(input_dict.get("thought", ""))[:200])
+    return "ok"
+
+
+async def _handle_finish(
+    input_dict: dict, tracker: ResourceTracker
+) -> str:
+    return json.dumps({"status": "complete", "draft": input_dict})
 
 
 async def _handle_execute_openclaw_script(
@@ -718,7 +905,7 @@ async def _handle_execute_openclaw_script(
 
     script_path = Path(settings.OPENCLAW_SCRIPTS_DIR) / script_name
     if not script_path.exists():
-        return json.dumps({"error": f"Script not found at {script_path}. Install OpenClaw skills first."})
+        return json.dumps({"error": f"Script '{script_name}' not found. Install OpenClaw skills first."})
 
     # Sanitize args — reject shell metacharacters, use shlex for safe splitting
     _UNSAFE_CHARS = re.compile(r"[;&|`$(){}!<>\\\n\r\t]")
@@ -756,6 +943,117 @@ async def _handle_execute_openclaw_script(
 
 
 # ---------------------------------------------------------------------------
+# Skill handlers
+# ---------------------------------------------------------------------------
+
+async def _handle_use_skill(
+    input_dict: dict, tracker: ResourceTracker
+) -> str:
+    """Load a skill's full content and return it as context for the agent."""
+    from agent.skills import load_skill
+    name = input_dict.get("name", "")
+    if not name:
+        return json.dumps({"error": "No skill name provided."})
+
+    skill = load_skill(name)
+    if not skill:
+        return json.dumps({"error": f"Skill '{name}' not found. Use list_skills to see available skills."})
+
+    tracker.log_api(f"skill:{name}")
+
+    result = {"name": skill["name"], "instructions": skill["content"]}
+    if skill["scripts"]:
+        result["scripts"] = skill["scripts"]
+    if skill["references"]:
+        result["references"] = skill["references"]
+    return json.dumps(result, indent=2)
+
+
+async def _handle_create_skill(
+    input_dict: dict, tracker: ResourceTracker
+) -> str:
+    """Create a new persistent skill."""
+    from agent.skills import create_skill
+    name = input_dict.get("name", "")
+    description = input_dict.get("description", "")
+    skill_md = input_dict.get("skill_md", "")
+    overwrite = input_dict.get("overwrite", False)
+
+    if not name or not description or not skill_md:
+        return json.dumps({"error": "name, description, and skill_md are all required."})
+
+    # Parse scripts JSON string if provided
+    scripts = None
+    scripts_raw = input_dict.get("scripts")
+    if scripts_raw:
+        try:
+            scripts = json.loads(scripts_raw) if isinstance(scripts_raw, str) else scripts_raw
+        except json.JSONDecodeError as e:
+            return json.dumps({"error": f"Invalid scripts JSON: {e}"})
+
+    result = create_skill(
+        name=name,
+        description=description,
+        skill_md=skill_md,
+        scripts=scripts,
+        overwrite=overwrite,
+    )
+    tracker.log_api(f"create_skill:{name}")
+    return json.dumps(result)
+
+
+async def _handle_list_skills(
+    input_dict: dict, tracker: ResourceTracker
+) -> str:
+    """List all registered skills."""
+    from agent.skills import load_registry
+    skills = load_registry()
+    if not skills:
+        return json.dumps({
+            "skills": [],
+            "message": "No skills created yet. Use create_skill to save reusable capabilities.",
+        })
+    return json.dumps({"skills": skills, "count": len(skills)}, indent=2)
+
+
+# ---------------------------------------------------------------------------
+# Subagent + memory handlers
+# ---------------------------------------------------------------------------
+
+async def _handle_delegate_task(
+    input_dict: dict, tracker: ResourceTracker
+) -> str:
+    """Spawn a sub-agent for a focused research/analysis task."""
+    from agent.subagent import delegate_task
+    task = input_dict.get("task", "")
+    context = input_dict.get("context", "")
+    if not task:
+        return json.dumps({"error": "No task provided."})
+
+    tracker.log_api("subagent:delegate")
+    result = await delegate_task(task=task, context=context, tracker=tracker)
+    return json.dumps(result, indent=2)
+
+
+async def _handle_search_memory(
+    input_dict: dict, tracker: ResourceTracker
+) -> str:
+    """Search past generations by relevance."""
+    from agent.memory import search_past_generations
+    query = input_dict.get("query", "")
+    if not query:
+        return json.dumps({"error": "No query provided."})
+
+    status_filter = input_dict.get("status_filter")
+    results = search_past_generations(query, top_k=5, status_filter=status_filter)
+    tracker.log_api("memory:search")
+
+    if not results:
+        return json.dumps({"results": [], "message": "No relevant past generations found."})
+    return json.dumps({"results": results, "count": len(results)}, indent=2)
+
+
+# ---------------------------------------------------------------------------
 # Handler dispatch
 # ---------------------------------------------------------------------------
 
@@ -767,7 +1065,14 @@ _HANDLERS = {
     "img2img": _handle_img2img,
     "read_feedback_history": _handle_read_feedback_history,
     "log_resource_usage": _handle_log_resource_usage,
+    "think": _handle_think,
+    "finish": _handle_finish,
     "execute_openclaw_script": _handle_execute_openclaw_script,
+    "use_skill": _handle_use_skill,
+    "create_skill": _handle_create_skill,
+    "list_skills": _handle_list_skills,
+    "delegate_task": _handle_delegate_task,
+    "search_memory": _handle_search_memory,
 }
 
 

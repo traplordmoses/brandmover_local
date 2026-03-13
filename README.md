@@ -2,41 +2,44 @@
 
 An autonomous AI marketing agent that runs via Telegram. Send a natural language request, get a branded post draft with a generated image, review it, and publish to X with one command.
 
-**Pipeline:** Telegram message -> Read brand guidelines -> LLM generates caption + hashtags + image prompt -> Smart model routing generates image -> Template composition with text overlay -> Draft sent to Telegram for review -> /approve posts to X.
+**Pipeline:** Telegram message -> Read brand guidelines -> LLM generates caption + image prompt -> Smart model routing generates image -> Template composition with text overlay -> Draft sent to Telegram for review -> /approve posts to X.
 
 ## Features
 
-- **Agent mode** — Claude tool-use loop with brand guidelines, Figma, feedback history, and onchain scripts
-- **Smart image routing** — auto-selects the best Replicate model per content type (Flux 1.1 Pro Ultra general, Nano Banana for text overlays, Recraft SVG for brand assets, Seedream for lifestyle)
-- **Template system** — upload custom templates (Figma exports, meme frames, etc.), Claude Vision analyzes regions, alpha-composite layering preserves transparency. Meme templates get Impact font with classic top/bottom text.
-- **brand_3d pipeline** — dedicated 3D asset generation with master prompt splicing, category-based reference image routing, optional LoRA trigger, and parallel N=3 option generation
-- **Parallel image options** — brand_3d generates 3 options simultaneously; pick the best with `/approve 1`, `/approve 2`, or `/approve 3`
-- **Surgical /edit** — apply targeted img2img edits to the last generated image without re-running the full pipeline (`/edit make the background darker`)
-- **Adaptive compositor** — fallback branded image composition with glass-morphism backgrounds, text overlay, and platform badges
+- **Agent mode** — Claude tool-use loop with 15 tools: brand guidelines, Figma, feedback, image generation, skills, memory search, subagent delegation, and more
+- **Skills system** — the agent creates and saves reusable capabilities. Skills persist across sessions, so the agent gets cumulatively smarter over time
+- **Smart image routing** — auto-selects the best Replicate model per content type (Flux 1.1 Pro general, Nano Banana for text overlays, Recraft SVG for brand assets, Seedream for lifestyle)
+- **Template system** — upload custom templates (Figma exports, meme frames, etc.), Claude Vision analyzes regions, alpha-composite layering preserves transparency
+- **brand_3d pipeline** — dedicated 3D asset generation with master prompt splicing, reference image routing, optional LoRA trigger, and parallel N=3 option generation
+- **Semantic memory** — searches past generations by relevance to find what worked before, with temporal decay so recent work is weighted higher
+- **Subagent delegation** — the agent can spawn lightweight sub-agents for research and analysis tasks
+- **Model fallback** — automatic retry with fallback models when the primary API returns errors (429/500/503)
+- **Event hooks** — async pub/sub system for decoupled side effects (analytics, notifications, logging)
+- **Session transcripts** — JSONL per-user logs of all agent interactions for debugging and analytics
+- **Channel abstraction** — normalized message envelope for multi-channel publishing (X/Twitter, with pluggable support for Discord, LinkedIn, etc.)
+- **Workspace injection** — operator-editable personality and memory files that customize agent behavior without touching code
+- **Feedback learning** — learns from approve/reject history, auto-extracts preferences with temporal decay
+- **Multi-brand support** — run multiple brand instances from the same codebase with isolated config, state, and brand assets
 - **Style profiles** — named collections of reference images that apply a consistent visual style via img2img
-- **Mascot generation** — character-consistent generation using multi-reference stitched grids
-- **Feedback learning** — learns from approve/reject history and auto-summarizes preferences
+- **Adaptive compositor** — fallback branded image composition with glass-morphism backgrounds, text overlay, and platform badges
 - **PDF brand bootstrap** — upload a brand guidelines PDF and auto-extract structured guidelines
-- **Natural language template editing** — after uploading a template, describe region positions in plain English ("top text across top 15%, image fills full canvas") and Claude converts to pixel coordinates
 
-## Setup
+## Quick Start
 
 ### 1. Clone and install
 
 ```bash
 git clone https://github.com/traplordmoses/brandmover_local.git
 cd brandmover_local
-python -m venv venv
-source venv/bin/activate  # or venv\Scripts\activate on Windows
+python3 -m venv venv
+source venv/bin/activate
 pip install -r requirements.txt
 cp .env.example .env
 ```
 
 ### 2. Fill in `.env`
 
-You need API keys for the following services:
-
-**Required:**
+**Required API keys:**
 
 | Variable | How to get it |
 |----------|---------------|
@@ -51,222 +54,186 @@ You need API keys for the following services:
 |----------|---------------|
 | `X_API_KEY` | [developer.twitter.com](https://developer.twitter.com) — create a project/app |
 | `X_API_SECRET` | Same app, under Keys and Tokens |
-| `X_ACCESS_TOKEN` | Same app — generate Access Token with Read+Write permissions |
+| `X_ACCESS_TOKEN` | Same app — generate Access Token with **Read+Write** permissions |
 | `X_ACCESS_SECRET` | Same app — Access Token Secret |
 | `X_BEARER_TOKEN` | Same app — Bearer Token |
 
-Make sure your X app has **Read and Write** permissions.
-
-**Optional:**
+**Key settings:**
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `LLM_PROVIDER` | `anthropic` | LLM provider (`anthropic`, `openai`, `gemini`) |
-| `AGENT_MODE` | `pipeline` | `pipeline` (4-step) or `agent` (Claude tool-use loop) |
-| `AGENT_MODEL` | `claude-sonnet-4-6` | Which Claude model to use for agent mode |
-| `BRAND_NAME` | `FOID Foundation` | Your brand name — change this! |
+| `AGENT_MODE` | `pipeline` | Set to `agent` for the full tool-use loop (recommended) |
+| `AGENT_MODEL` | `claude-sonnet-4-6` | Which Claude model to use |
+| `BRAND_NAME` | `MyBrand` | Your brand name |
 | `IMAGE_MODEL` | `auto` | `auto` routes by content type, or force a specific model |
 | `AUTO_POST_ENABLED` | `false` | Enable scheduled auto-posting |
-| `FIGMA_ACCESS_TOKEN` | — | Figma personal access token for design reference integration |
+| `HEARTBEAT_ENABLED` | `true` | Enable proactive content generation |
 
 ### 3. Set up your brand
 
-Replace `brand/guidelines.md` with your own brand guidelines. You can either:
+**Option A — Interactive onboarding (recommended):** Send `/onboard` in Telegram and the bot walks you through setup step by step.
 
-**Option A — Write it manually:** Edit `brand/guidelines.md` with your brand's voice, tone, colors, hashtags, and style rules. The agent reads this file before every generation.
+**Option B — Write guidelines manually:** Create `brand/guidelines.md` with your brand's voice, tone, colors, and style rules. See `brand/guidelines.md.example` for the format.
 
-**Option B — Bootstrap from PDF:** Upload a brand guidelines PDF to the bot and it auto-extracts structured guidelines via Claude Vision.
+**Option C — Bootstrap from PDF:** Upload a brand guidelines PDF to the bot and it auto-extracts structured guidelines via Claude Vision.
 
-**Option C — Interactive onboarding:** Send `/onboard` in Telegram and the bot walks you through setup step by step.
+Customize the agent's personality by editing:
+- `brand/personality/system_prompt.md` — the agent's character and tone
+- `brand/personality/memory.md` — persistent notes about you and your preferences
 
 Place your logo at `brand/assets/logo.png` — the compositor overlays it on generated images.
 
 ### 4. Run
 
 ```bash
-python main.py
+python3 main.py
 ```
 
-The bot validates your `.env` on startup and will tell you exactly which variables are missing.
+The bot validates your `.env` on startup and tells you exactly which variables are missing.
 
-## Updating from a Previous Version
+## Setting Up a Second Brand
 
-If you already have a clone of this repo:
+BrandMover supports running multiple brands from the same codebase. Each brand gets its own Telegram bot, X/Twitter account, guidelines, personality, and state.
+
+### 1. Bootstrap the new brand
 
 ```bash
-cd brandmover_local
-git pull origin main
-source venv/bin/activate
-pip install -r requirements.txt  # in case dependencies changed
+./scripts/new_brand.sh mybrand
 ```
 
-Your `brand/` folder, `.env`, and `state/` are all gitignored or user-specific, so `git pull` won't overwrite them.
+This creates:
+- `.env.mybrand` — config file (fill in your API keys)
+- `brand_mybrand/` — brand directory with placeholder guidelines and personality
+- `state_mybrand/` — isolated state directory
 
-**If you get merge conflicts in `brand/guidelines.md`:** This file ships with example content. Keep your version — just `git checkout --ours brand/guidelines.md`.
+### 2. Configure it
 
-After pulling, restart the bot:
+Edit `.env.mybrand` and fill in:
+- A **new Telegram bot token** (create one via @BotFather)
+- Your **Telegram user ID** (same as your main brand, or different)
+- **X/Twitter credentials** for the new brand's account
+- **Anthropic and Replicate keys** (can share with your main brand)
+
+Edit `brand_mybrand/guidelines.md` with the new brand's voice, tone, and style. Customize `brand_mybrand/personality/system_prompt.md` for the agent's character.
+
+### 3. Launch it
+
 ```bash
-python main.py
+./scripts/launch_brand.sh mybrand
 ```
+
+Run it alongside your main brand in a separate terminal:
+
+```bash
+# Terminal 1 — main brand
+python3 main.py
+
+# Terminal 2 — second brand
+./scripts/launch_brand.sh mybrand
+```
+
+Each brand runs as a completely isolated instance — different bot, different state, different personality, different skills.
 
 ## Usage
 
 Message the bot on Telegram:
 
 - **"write a post about our new feature launch"** — generates a draft with image
-- **"make a meme about X"** — generates a meme with Impact font top/bottom text on your meme template
-- **/approve [N]** — approve and post to X (option N if multiple images)
+- **"make a meme about X"** — generates a meme with Impact font top/bottom text
+- **/approve [N]** — approve the draft (option N if multiple images)
 - **/reject make it more urgent** — revises the draft with your feedback
 - **/edit make the background darker** — surgical img2img edit on the last image
+- **/post** — publish the approved draft to X/Twitter
 - **/status** — show the current pending draft
 - **/cancel** — clear the pending draft
-- **/refs** — show loaded reference materials
 - **/feedback** — show approval/rejection stats
-- **/learn** — trigger preference learning from feedback history
+- **/preferences** — view/manage learned preferences
 - **/analytics** — show generation stats and cost tracking
-- **/history** — show recent generations
 - **/help** — show all available commands
 
-Upload a photo to use as a reference image. Add a caption to immediately generate with it, or reply with `reference`, `mascot`, `style <name>`, or `background`.
-
-Only messages from your authorized Telegram user ID are processed. Everyone else is ignored.
+Upload a photo to use as a reference image. Add a caption to immediately generate with it.
 
 ## Templates
 
-Templates let you define branded frames that wrap your generated images. Upload a PNG with transparent regions, and the bot composites generated images into the frame with text overlay.
-
-### Upload a template
+Upload branded frames that wrap your generated images:
 
 ```
-/template_upload meme
+/template_upload meme        # Upload a template image
+/template_test meme          # Preview with placeholder content
+/template on                 # Enable template composition
+/template off                # Disable templates
 ```
 
-Then send the template image. Claude Vision analyzes the image and detects regions (image, text, logo areas).
-
-### Adjust regions with natural language
-
-After uploading, describe the layout in plain English:
-
-```
-top text across the top 15%, bottom text across the bottom 15%, image fills the full canvas
-```
-
-Claude converts this to pixel coordinates and updates the template.
-
-### Test a template
-
-```
-/template_test meme
-```
-
-Generates a preview with placeholder content so you can verify alignment.
-
-### Template commands
-
-| Command | Description |
-|---------|-------------|
-| `/template` | Show compositor status and active templates |
-| `/template on` | Enable template composition |
-| `/template off` | Disable templates and compositor |
-| `/template_upload <name>` | Upload a custom template image |
-| `/template_test [type]` | Preview a template with placeholder content |
-| `/template_from_reference` | Generate a template from a reference image |
-
-### Meme templates
-
-Templates named "meme" automatically get classic meme styling:
-- **Impact font** (falls back to bold sans-serif if unavailable)
-- **ALL CAPS** text
-- **3px black outline** with white fill
-- **Letter spacing** for readability
-- Title at top, subtitle at bottom
-
-### How it works
-
-1. Template is stored as a PNG in `brand/templates/` with a JSON manifest
-2. When generating content, the bot matches templates by `content_type` (exact match first, then universal templates by aspect ratio)
-3. Generated image is composited under the template using alpha blending — transparent areas show the image, opaque frame sits on top
-4. Text is fitted into text regions with binary-search font sizing and word wrap
-5. The composed image is what gets sent to Telegram and posted to X
+Templates named "meme" get classic Impact font styling with top/bottom text.
 
 ## Style Profiles
 
-Style profiles let you train the bot's visual identity from reference images.
-
-### Quick start
+Train the bot's visual identity from reference images:
 
 ```
 /style create 3d_card Revolut-style 3D floating card visuals
+/style 3d_card announcement  # Apply to all announcements
 ```
-Upload reference photos with caption `3d_card` to add them to the profile.
 
-```
-/style 3d_card announcement
-```
-Now every announcement uses the 3D card references at 0.3 strength via img2img.
-
-### Commands
-
-| Command | Description |
-|---------|-------------|
-| `/style` | List all profiles with image counts and active mappings |
-| `/style create <name> <description>` | Create a new profile |
-| `/style <name> <content_type>` | Set profile as active for a content type |
-| `/style <name> info` | Show profile details |
-| `/style <name> remove` | Remove profile from all active mappings |
-
-## Content Types
-
-The agent selects the best content type for each request, which determines image model routing and template selection:
-
-| Type | Description |
-|------|-------------|
-| `announcement` | Product launches, updates, news, partnerships |
-| `campaign` | Marketing campaigns, launches |
-| `meme` | Memes, humor, viral content |
-| `engagement` | Conversation starters, polls |
-| `advice` | Tips, recommendations, guidance |
-| `lifestyle` | Aspirational, day-in-the-life, culture |
-| `event` | Conferences, AMAs, meetups |
-| `educational` | Tutorials, explainers, how-tos |
-| `brand_asset` | Logos, icons, badges, graphics |
-| `community` | Giveaways, engagement posts |
-| `market_commentary` | Market analysis, price action, trends |
-| `brand_3d` | 3D product illustrations, objects |
+Upload reference photos with caption `3d_card` to build the style.
 
 ## Project Structure
 
 ```
-agent/           Core logic (no Telegram dependency)
-  brain.py         Claude LLM calls (pipeline + agent modes)
-  engine.py        Tool-use agent loop
-  tools.py         Tool definitions and handlers
-  image_gen.py     Replicate image generation
-  compositor.py    PIL image composition (fallback when no template)
-  template_memory.py  Template storage, analysis, and composition
-  content_types.py    Content type definitions (single source of truth)
-  state.py         Pending draft management
-  feedback.py      Feedback log + learned preferences
-  publisher.py     X/Twitter posting via tweepy
+agent/              Core logic (no Telegram dependency)
+  engine.py           Tool-use agent loop (main architecture)
+  tools.py            15 tool definitions and handlers
+  skills.py           Persistent agent-created capabilities
+  skill_prompt.py     System prompt builder with workspace injection
+  context_engine.py   Token-budget context assembly
+  memory.py           Semantic search over past generations
+  subagent.py         Sub-agent delegation for parallel tasks
+  model_fallback.py   Automatic model fallback on API errors
+  hooks.py            Async event pub/sub system
+  transcript.py       JSONL session transcript logger
+  channels/           Multi-channel publishing abstraction
+  paths.py            Centralized path definitions (enables multi-brand)
+  image_gen.py        Replicate image generation
+  compositor.py       PIL image composition
+  state.py            Pending draft management
+  session.py          Persistent session memory with temporal decay
+  feedback.py         Feedback log
+  publisher.py        X/Twitter posting via tweepy
 
-bot/             Telegram interface
-  telegram_bot.py  Bot setup, handler registration
-  handlers.py      All command and message handlers
+bot/                Telegram interface
+  telegram_bot.py     Bot setup, handler registration
+  handlers.py         All command and message handlers
 
-config/          Configuration
-  settings.py      .env loader with startup validation
+config/             Configuration
+  settings.py         .env loader with startup validation
 
-brand/           Your brand assets (user-specific, mostly gitignored)
-  guidelines.md    Brand voice, tone, colors, style rules
-  assets/          Logo, fonts, images
-  templates/       Template PNGs + manifest.json
-  references/      Reference images for style consistency
+brand/              Your brand assets (per-instance, mostly gitignored)
+  guidelines.md       Brand voice, tone, colors, style rules
+  personality/        Agent personality and operator notes
+  skills/             Agent-created reusable capabilities
+  assets/             Logo, fonts, images
+  templates/          Template PNGs + manifest
+  references/         Reference images for style consistency
 
-state/           Runtime state (gitignored)
+scripts/            Setup and management
+  new_brand.sh        Bootstrap a new brand instance
+  launch_brand.sh     Launch a specific brand instance
+
+state/              Runtime state (gitignored, per-instance)
 ```
 
 ## Testing
 
 ```bash
-python -m pytest tests/ -v
+python3 -m pytest tests/ -v
 ```
+
+## Updating
+
+```bash
+git pull origin main
+pip install -r requirements.txt
+python3 main.py
+```
+
+Your `brand/`, `.env`, and `state/` are all gitignored, so `git pull` won't overwrite your data.

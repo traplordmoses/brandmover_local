@@ -5,6 +5,13 @@ Supports Anthropic (default), OpenAI, and Gemini.
 Two modes:
 - Single-shot: generate_draft() / revise_draft() — original behavior
 - Pipeline: pipeline_generate() — 4-step (or 3-step "fast") with intermediate callbacks
+
+LEGACY PATH — Not actively maintained.
+This module is only used when AGENT_MODE=pipeline.
+The active architecture uses agent/engine.py with think/finish tools.
+See agent/heartbeat.py for the scheduler and agent/session.py for memory.
+Do not add new features here — they won't benefit from session memory,
+conversation continuity, self-critique, or the heartbeat system.
 """
 
 import json

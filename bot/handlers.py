@@ -15,7 +15,7 @@ from PIL import Image as _PILImage
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import ContextTypes
 
-from agent import asset_gen, asset_library, auto_state, brain, chat, compositor, compositor_config, conversation_context, engine, feedback, generation_history, guidelines, image_gen, intent_router, onboarding, publisher, schedule_queue, scheduler, state, unified_brain
+from agent import asset_gen, asset_library, auto_state, brain, chat, compositor, compositor_config, conversation_context, engine, feedback, generation_history, guidelines, hooks, image_gen, intent_router, onboarding, publisher, schedule_queue, scheduler, state, transcript, unified_brain
 from agent import compositor_config as _cc
 from config import settings
 
@@ -270,16 +270,13 @@ async def _do_approve(update: Update, context: ContextTypes.DEFAULT_TYPE, option
     )
     logger.info("Draft approved (%s), awaiting post/schedule (feedback #%d)", source, count)
 
-    # Auto-summarize preferences at threshold
-    if count % settings.FEEDBACK_SUMMARIZE_EVERY == 0:
-        try:
-            await update.message.reply_text("Auto-learning preferences from feedback history...")
-            summary = await feedback.summarize_preferences()
-            await update.message.reply_text(
-                f"Learned preferences updated ({len(summary)} chars).",
-            )
-        except Exception as e:
-            logger.error("Auto-summarize failed: %s", e)
+    # Fire hooks + transcript
+    transcript.log_draft_action(user_id or 0, "approved", caption=pending.get("caption", ""))
+    await hooks.emit("draft:approved", {"draft": pending, "user_id": user_id, "source": source})
+
+    # NOTE: Auto-summarize into learned_preferences.md disabled.
+    # Preference extraction is now handled by pref_extractor.py → session.learned_preferences.
+    # The /learn command still works as a manual diagnostic tool.
 
     # Self-review: increment approval counter, trigger background review if threshold reached
     try:
@@ -375,6 +372,17 @@ async def _do_post(update: Update, context: ContextTypes.DEFAULT_TYPE, source: s
             logger.debug("Composed cleanup failed for %s: %s", composed_path, e)
         state.clear_last_composed(user_id=user_id)
 
+    # Record in session memory for agent context
+    try:
+        from agent.session import record_approved_post
+        record_approved_post(
+            caption=approved.get("caption", ""),
+            slot=auto_slot or "",
+            tweet_url=tweet_url,
+        )
+    except Exception as e:
+        logger.debug("Session record_approved_post failed: %s", e)
+
     slot_note = f"  (auto-slot: {_esc(auto_slot)})" if auto_slot else ""
     discord_note = f"\nDiscord: {_esc(discord_url)}" if discord_url else ""
     await update.message.reply_text(
@@ -383,6 +391,11 @@ async def _do_post(update: Update, context: ContextTypes.DEFAULT_TYPE, source: s
         parse_mode="HTML",
     )
     logger.info("Draft posted (%s): %s", source, tweet_url)
+
+    # Fire hooks + transcript
+    user_id = update.effective_user.id if update.effective_user else 0
+    transcript.log_publish(user_id, "twitter", url=tweet_url)
+    await hooks.emit("post:published", {"platform": "twitter", "url": tweet_url, "user_id": user_id})
 
 
 async def _do_reject(update: Update, context: ContextTypes.DEFAULT_TYPE, feedback_text: str = "", source: str = "command") -> None:
@@ -412,6 +425,17 @@ async def _do_reject(update: Update, context: ContextTypes.DEFAULT_TYPE, feedbac
     )
     logger.info("Draft rejected (%s, feedback #%d): %s", source, count, feedback_text[:100])
 
+    # Record in session memory for agent context
+    try:
+        from agent.session import record_rejected_draft
+        record_rejected_draft(
+            caption=pending.get("caption", ""),
+            feedback=feedback_text,
+            slot=pending.get("auto_slot", ""),
+        )
+    except Exception as e:
+        logger.debug("Session record_rejected_draft failed: %s", e)
+
     # Update generation history status
     try:
         ts = pending.get("timestamp", 0)
@@ -420,13 +444,8 @@ async def _do_reject(update: Update, context: ContextTypes.DEFAULT_TYPE, feedbac
     except Exception as e:
         logger.debug("Generation history update failed: %s", e)
 
-    # Auto-summarize at threshold
-    if count % settings.FEEDBACK_SUMMARIZE_EVERY == 0:
-        try:
-            await feedback.summarize_preferences()
-            logger.info("Auto-summarized preferences after %d entries", count)
-        except Exception as e:
-            logger.error("Auto-summarize failed: %s", e)
+    # NOTE: Auto-summarize into learned_preferences.md disabled.
+    # Preference extraction is now handled by pref_extractor.py → session.learned_preferences.
 
     # Clear the old pending before running revision
     state.clear_pending(user_id=user_id)
@@ -454,6 +473,10 @@ async def _do_reject(update: Update, context: ContextTypes.DEFAULT_TYPE, feedbac
             )
     except Exception as e:
         logger.debug("Context tracking failed in _do_reject: %s", e)
+
+    # Fire hooks + transcript
+    transcript.log_draft_action(user_id or 0, "rejected", caption=pending.get("caption", ""), feedback=feedback_text)
+    await hooks.emit("draft:rejected", {"draft": pending, "feedback": feedback_text, "user_id": user_id})
 
     # Branch: agent mode re-runs with revision context, pipeline mode uses revise_draft
     if settings.AGENT_MODE == "agent":
@@ -967,14 +990,8 @@ async def _handle_pipeline_revision(update: Update, pending: dict, feedback_text
 
 
 async def _handle_agent_revision(update: Update, pending: dict, feedback_text: str, user_id: int | None = None) -> None:
-    """Revise a draft using agent mode — re-runs the agent with revision context."""
-    revision_context = (
-        f"PREVIOUS DRAFT (REJECTED):\n"
-        f"Caption: {pending.get('caption', '')}\n"
-        f"Image prompt: {pending.get('image_prompt', '')}\n\n"
-        f"USER FEEDBACK: {feedback_text}\n\n"
-        f"Please revise the draft based on this feedback. Address the specific concerns raised."
-    )
+    """Revise a draft using agent mode — continues the conversation thread if history exists."""
+    history = pending.get("conversation_history")
 
     _rev_status_msg = None
     _rev_status_lines: list[str] = []
@@ -994,11 +1011,34 @@ async def _handle_agent_revision(update: Update, pending: dict, feedback_text: s
         await update.message.chat.send_action("typing")
 
     try:
-        result = await engine.run_agent(
-            request=pending.get("original_request", ""),
-            on_tool_call=on_tool_call,
-            revision_context=revision_context,
-        )
+        if history:
+            # Continue the conversation — agent sees its full prior reasoning
+            history.append({
+                "role": "user",
+                "content": (
+                    f"Your draft was rejected. Here is the feedback:\n\n"
+                    f"\"{feedback_text}\"\n\n"
+                    f"Please use think to analyze what went wrong, then revise and submit "
+                    f"an improved draft via finish. Address the feedback directly."
+                ),
+            })
+            result = await engine.run_agent_with_history(
+                history, on_tool_call=on_tool_call,
+            )
+        else:
+            # Fallback: no history available (legacy pending drafts)
+            revision_context = (
+                f"PREVIOUS DRAFT (REJECTED):\n"
+                f"Caption: {pending.get('caption', '')}\n"
+                f"Image prompt: {pending.get('image_prompt', '')}\n\n"
+                f"USER FEEDBACK: {feedback_text}\n\n"
+                f"Please revise the draft based on this feedback. Address the specific concerns raised."
+            )
+            result = await engine.run_agent(
+                request=pending.get("original_request", ""),
+                on_tool_call=on_tool_call,
+                revision_context=revision_context,
+            )
 
         # Delete the status message now that we're done
         if _rev_status_msg:
@@ -1027,6 +1067,7 @@ async def _handle_agent_revision(update: Update, pending: dict, feedback_text: s
             auto_slot=pending.get("auto_slot"),
             auto_event_ids=pending.get("auto_event_ids"),
             user_id=user_id,
+            conversation_history=result.conversation_history,
         )
 
         await _send_draft(update, result.draft, image_url, resources=result.resources, user_id=user_id)
@@ -1082,6 +1123,206 @@ async def learn_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             f"Failed to summarize preferences: {_esc(str(e))}",
             parse_mode="HTML",
         )
+
+
+async def pref_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /pref — add a learned preference to session memory."""
+    if not _authorized(update.effective_user.id):
+        return
+
+    text = update.message.text or ""
+    pref = text.split(maxsplit=1)[1].strip() if " " in text else ""
+    if not pref:
+        await update.message.reply_text(
+            "Usage: /pref <i>prefer shorter captions with more emoji</i>",
+            parse_mode="HTML",
+        )
+        return
+
+    from agent.session import add_learned_preference
+    added = add_learned_preference(pref)
+    if added:
+        await update.message.reply_text(f"Preference added: <i>{_esc(pref)}</i>", parse_mode="HTML")
+    else:
+        await update.message.reply_text("That preference already exists.")
+
+
+async def unpref_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /unpref — remove a learned preference by index."""
+    if not _authorized(update.effective_user.id):
+        return
+
+    text = update.message.text or ""
+    parts = text.split()
+    if len(parts) < 2 or not parts[1].isdigit():
+        await update.message.reply_text(
+            "Usage: /unpref <i>2</i>  (use /preferences to see indices)",
+            parse_mode="HTML",
+        )
+        return
+
+    idx = int(parts[1]) - 1  # 1-indexed for user, 0-indexed internally
+    from agent.session import remove_learned_preference
+    removed = remove_learned_preference(idx)
+    if removed:
+        await update.message.reply_text(f"Removed preference: <i>{_esc(removed)}</i>", parse_mode="HTML")
+    else:
+        await update.message.reply_text("Invalid index. Use /preferences to see the list.")
+
+
+async def preferences_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /preferences — list learned preferences."""
+    if not _authorized(update.effective_user.id):
+        return
+
+    from agent.session import load_session
+    session = load_session()
+    prefs = session.learned_preferences
+    if not prefs:
+        await update.message.reply_text(
+            "No learned preferences yet. Add one with /pref <i>your preference</i>",
+            parse_mode="HTML",
+        )
+        return
+
+    lines = [f"  {i + 1}. {_esc(p)}" for i, p in enumerate(prefs)]
+    await update.message.reply_text(
+        f"<b>Learned Preferences</b>\n\n" + "\n".join(lines) +
+        "\n\nRemove with /unpref <i>number</i>",
+        parse_mode="HTML",
+    )
+
+
+async def topics_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /topics — manage the topic bank. Subcommands: refresh, add, retire."""
+    if not _authorized(update.effective_user.id):
+        return
+
+    text = (update.message.text or "").strip()
+    parts = text.split(maxsplit=1)
+    sub = parts[1].strip() if len(parts) > 1 else ""
+
+    # /topics refresh
+    if sub.lower() == "refresh":
+        await update.message.chat.send_action("typing")
+        try:
+            from agent.topic_refresh import refresh_topic_bank
+            result = await refresh_topic_bank()
+            await update.message.reply_text(
+                f"Topic bank refreshed: +{result['added']} added, -{result['retired']} retired.",
+            )
+        except Exception as e:
+            logger.error("Topic refresh failed: %s", e)
+            await update.message.reply_text(f"Refresh failed: {_esc(str(e))}", parse_mode="HTML")
+        return
+
+    # /topics add <category> | <angle>
+    if sub.lower().startswith("add "):
+        raw = sub[4:].strip()
+        if "|" not in raw:
+            await update.message.reply_text(
+                "Usage: /topics add <i>category</i> | <i>angle description</i>",
+                parse_mode="HTML",
+            )
+            return
+        cat, angle_text = raw.split("|", 1)
+        cat = cat.strip()
+        angle_text = angle_text.strip()
+        if not cat or not angle_text:
+            await update.message.reply_text("Both category and angle are required.")
+            return
+        from agent.topic_bank import add_angle
+        angle_id = add_angle(cat, angle_text)
+        await update.message.reply_text(
+            f"Added angle <code>{_esc(angle_id)}</code> to category <b>{_esc(cat)}</b>",
+            parse_mode="HTML",
+        )
+        return
+
+    # /topics retire <angle_id>
+    if sub.lower().startswith("retire "):
+        angle_id = sub[7:].strip()
+        if not angle_id:
+            await update.message.reply_text("Usage: /topics retire <i>angle_id</i>", parse_mode="HTML")
+            return
+        from agent.topic_bank import retire_angle
+        if retire_angle(angle_id):
+            await update.message.reply_text(f"Retired angle: <code>{_esc(angle_id)}</code>", parse_mode="HTML")
+        else:
+            await update.message.reply_text(f"Angle not found: {_esc(angle_id)}")
+        return
+
+    # /topics (no subcommand) — show summary
+    from agent.topic_bank import load_bank, get_fresh_angles, seed_bank_if_empty
+    from agent.session import _relative_time
+
+    seed_bank_if_empty()
+    bank = load_bank()
+
+    # Count per category
+    cat_counts: dict[str, int] = {}
+    active_count = 0
+    for a in bank.angles:
+        if not a.get("retired", False):
+            cat = a.get("category", "unknown")
+            cat_counts[cat] = cat_counts.get(cat, 0) + 1
+            active_count += 1
+
+    cats_line = ", ".join(f"{c}: {n}" for c, n in sorted(cat_counts.items()))
+    refreshed = _relative_time(bank.last_refreshed) if bank.last_refreshed else "never"
+
+    # Next 3 suggested
+    fresh = get_fresh_angles(3)
+    suggestions = ""
+    if fresh:
+        suggestions = "\n\n<b>Next suggested angles:</b>\n"
+        for a in fresh:
+            suggestions += f"\u2022 [{a.get('category')}] {_esc(a.get('angle', '')[:80])}\n"
+
+    await update.message.reply_text(
+        f"<b>Topic Bank</b>\n\n"
+        f"Active angles: {active_count}\n"
+        f"Categories: {_esc(cats_line)}\n"
+        f"Last refreshed: {refreshed}"
+        f"{suggestions}\n"
+        f"\n/topics refresh — regenerate angles"
+        f"\n/topics add <i>cat</i> | <i>angle</i>"
+        f"\n/topics retire <i>id</i>",
+        parse_mode="HTML",
+    )
+
+
+async def heartbeat_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /heartbeat — show recent heartbeat log entries."""
+    if not _authorized(update.effective_user.id):
+        return
+
+    from agent.heartbeat import get_recent_heartbeat_entries
+    from agent.session import _relative_time
+
+    entries = get_recent_heartbeat_entries(5)
+    if not entries:
+        await update.message.reply_text("No heartbeat log entries yet.")
+        return
+
+    lines = []
+    for e in reversed(entries):
+        ts = e.get("timestamp", 0)
+        action = e.get("decision", "?")
+        reason = e.get("reason", "")[:60]
+        sigs = ", ".join(e.get("signals", []))
+        claude = "claude" if e.get("used_claude_reasoning") else "fast"
+        taken = "yes" if e.get("action_taken") else "no"
+        lines.append(
+            f"\u2022 {_relative_time(ts)} — <b>{_esc(action)}</b> ({claude})\n"
+            f"  Signals: {_esc(sigs)} | Acted: {taken}\n"
+            f"  {_esc(reason)}"
+        )
+
+    await update.message.reply_text(
+        f"<b>Recent Heartbeat</b>\n\n" + "\n\n".join(lines),
+        parse_mode="HTML",
+    )
 
 
 async def review_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -2140,6 +2381,7 @@ async def _handle_unified(
                 image_urls=image_urls if len(image_urls) > 1 else None,
                 content_type=result.draft.get("content_type"),
                 user_id=user_id,
+                conversation_history=result.conversation_history,
             )
 
             # Log to generation history
@@ -2277,6 +2519,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     request = update.message.text.strip()
     if not request:
         return
+
+    # Log to transcript
+    transcript.log_user_message(user_id, request)
 
     # Template-from-reference adjustment intercept (admin only)
     if _authorized(user_id):
@@ -2420,9 +2665,11 @@ async def _route_intent(update: Update, context: ContextTypes.DEFAULT_TYPE, mess
 
     if intent == "modify_last" and confidence >= 0.5:
         fb = result.parameters.get("feedback", message)
+        # Load existing pending to preserve conversation_history through edits
+        existing_pending = state.get_pending(user_id=user_id)
         modified = await chat.handle_modify_last(fb, ctx, user_id=user_id)
         if modified:
-            # Save modified draft and re-send
+            # Save modified draft and re-send (carry forward conversation_history)
             state.save_pending(
                 caption=modified.get("caption", ""),
                 hashtags=modified.get("hashtags", []),
@@ -2431,6 +2678,7 @@ async def _route_intent(update: Update, context: ContextTypes.DEFAULT_TYPE, mess
                 image_prompt=modified.get("image_prompt", ""),
                 original_request=modified.get("original_request", ""),
                 user_id=user_id,
+                conversation_history=existing_pending.get("conversation_history") if existing_pending else None,
             )
             await _send_draft(update, modified, modified.get("image_url"), user_id=user_id)
             return True
@@ -2612,6 +2860,7 @@ async def _handle_agent_mode(update: Update, request: str, user_id: int | None =
             image_urls=image_urls if len(image_urls) > 1 else None,
             content_type=result.draft.get("content_type"),
             user_id=user_id,
+            conversation_history=result.conversation_history,
         )
 
         # Log to generation history (agent mode was previously missing this)
@@ -2628,6 +2877,16 @@ async def _handle_agent_mode(update: Update, request: str, user_id: int | None =
             logger.debug("Agent generation history log failed: %s", e)
 
         await _send_draft(update, result.draft, image_url, resources=result.resources, image_urls=image_urls, user_id=user_id)
+
+        # Fire hooks + transcript
+        transcript.log_agent_response(
+            user_id or 0, result.draft.get("caption", ""),
+            turns=result.turns_used, tools=result.tool_calls_made,
+        )
+        await hooks.emit("draft:generated", {
+            "draft": result.draft, "user_id": user_id,
+            "turns": result.turns_used, "time": result.total_time,
+        })
 
     except Exception as e:
         logger.error("Agent error: %s", e)

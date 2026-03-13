@@ -171,11 +171,18 @@ async def run_self_review() -> dict:
     improvements = review_data.get("improvements", "")
     stats = review_data.get("stats", {})
 
-    # f) Write updated preferences
+    # f) Write updated preferences → session.learned_preferences (single source of truth)
+    added_prefs = []
     if improvements and isinstance(improvements, str):
-        _PREFERENCES_FILE.parent.mkdir(parents=True, exist_ok=True)
-        _PREFERENCES_FILE.write_text(improvements, encoding="utf-8")
-        logger.info("Self-review: updated learned_preferences.md (%d chars)", len(improvements))
+        from agent.session import add_learned_preference
+        # Extract actionable lines from the improvements markdown
+        for line in improvements.splitlines():
+            line = line.strip().lstrip("-•*").strip()
+            if line and len(line) > 10 and not line.startswith("#"):
+                if add_learned_preference(line):
+                    added_prefs.append(line)
+        if added_prefs:
+            logger.info("Self-review: added %d preferences to session", len(added_prefs))
 
     # g) Write full review for debugging
     review_record = {

@@ -15,7 +15,7 @@ from config import settings
 logger = logging.getLogger(__name__)
 
 _project_root = Path(__file__).resolve().parent.parent
-_STATE_DIR = _project_root / "state"
+from agent.paths import STATE_DIR as _STATE_DIR
 _STATE_FILE = _STATE_DIR / "state.json"
 
 # Migrate from old location if needed
@@ -107,6 +107,7 @@ def save_pending(
     auto_event_ids: list[str] | None = None,
     content_type: str | None = None,
     user_id: int | None = None,
+    conversation_history: list | None = None,
 ) -> None:
     """
     Save a draft as pending approval.
@@ -123,6 +124,7 @@ def save_pending(
         auto_event_ids: On-chain event IDs referenced by this auto-post draft.
         content_type: Content type for LoRA training filtering.
         user_id: Telegram user ID. None defaults to admin.
+        conversation_history: Agent conversation messages for revision continuity.
     """
     pending = {
         "caption": caption,
@@ -141,6 +143,8 @@ def save_pending(
         pending["auto_event_ids"] = auto_event_ids
     if content_type:
         pending["content_type"] = content_type
+    if conversation_history:
+        pending["conversation_history"] = conversation_history
     s = _read_state(user_id)
 
     # Archive the current pending draft (if any) before overwriting

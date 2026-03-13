@@ -197,6 +197,7 @@ async def process_slot(
         image_urls=result.image_urls if len(result.image_urls) > 1 else None,
         auto_slot=slot_name,
         auto_event_ids=event_ids if event_ids else None,
+        conversation_history=result.conversation_history,
     )
 
     # Save last generated for /edit support
@@ -371,6 +372,7 @@ async def process_scheduled_item(
         original_request=prompt,
         image_urls=result.image_urls if len(result.image_urls) > 1 else None,
         auto_slot=slot_name,
+        conversation_history=result.conversation_history,
     )
 
     if image_url:
@@ -485,6 +487,36 @@ async def run_cron(
     except Exception as e:
         logger.debug("Self-review daily check failed: %s", e)
 
+    # --- 5. Topic bank refresh (every TOPIC_BANK_REFRESH_INTERVAL_HOURS) ---
+    try:
+        import time as _time
+        from agent.topic_bank import load_bank, seed_bank_if_empty
+        seed_bank_if_empty()
+        bank = load_bank()
+        hours_since_refresh = (_time.time() - (bank.last_refreshed or 0)) / 3600
+        if hours_since_refresh > settings.TOPIC_BANK_REFRESH_INTERVAL_HOURS:
+            from agent.topic_refresh import refresh_topic_bank
+            result = await refresh_topic_bank()
+            logger.info("Topic bank refreshed: %s", result)
+    except Exception as e:
+        logger.debug("Topic bank refresh failed: %s", e)
+
+    # --- 6. Auto preference extraction (every PREF_EXTRACTION_INTERVAL_HOURS) ---
+    if settings.PREF_EXTRACTION_ENABLED:
+        try:
+            from agent.pref_extractor import extract_preferences
+            new_prefs = await extract_preferences()
+            if new_prefs:
+                logger.info("Auto-extracted %d new preferences: %s", len(new_prefs), new_prefs)
+                # Notify via Telegram
+                msg = "<b>Auto-learned preferences</b>\n\n"
+                for p in new_prefs:
+                    msg += f"\u2022 {p}\n"
+                msg += "\nUse /preferences to view all. /unpref <number> to remove any."
+                await _notify_telegram(msg)
+        except Exception as e:
+            logger.debug("Preference extraction failed: %s", e)
+
     return drafts_made
 
 
@@ -492,19 +524,27 @@ async def run_scheduler_loop(bot=None) -> None:
     """Long-running scheduler loop — meant to run as a background task
     inside the Telegram bot process.
 
-    Checks every SCHEDULER_INTERVAL_SECONDS for due slots and generates
-    drafts that get sent to Telegram for approval.
+    When HEARTBEAT_ENABLED=true, uses the heartbeat reasoning layer
+    (assess → reason → dispatch). Otherwise falls back to the original
+    cron-based loop.
     """
+    use_heartbeat = settings.HEARTBEAT_ENABLED
     logger.info(
-        "Auto-post scheduler started (interval=%ds, enabled=%s)",
-        SCHEDULER_INTERVAL_SECONDS, settings.AUTO_POST_ENABLED,
+        "Scheduler started (interval=%ds, enabled=%s, heartbeat=%s)",
+        SCHEDULER_INTERVAL_SECONDS, settings.AUTO_POST_ENABLED, use_heartbeat,
     )
 
     while True:
         try:
-            drafts = await run_cron(bot=bot)
-            if drafts:
-                logger.info("Scheduler cycle: %d draft(s) generated", drafts)
+            if use_heartbeat:
+                from agent.heartbeat import heartbeat_tick
+                action_taken = await heartbeat_tick(bot=bot)
+                if action_taken:
+                    logger.info("Heartbeat: action taken this cycle")
+            else:
+                drafts = await run_cron(bot=bot)
+                if drafts:
+                    logger.info("Scheduler cycle: %d draft(s) generated", drafts)
         except Exception as e:
             logger.error("Scheduler cycle error: %s", e)
 

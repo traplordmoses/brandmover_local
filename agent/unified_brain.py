@@ -1,6 +1,13 @@
 """
 Unified agent brain — single LLM loop with personality + tools.
 
+LEGACY PATH — Not actively maintained.
+This module is only used when UNIFIED_BRAIN_ENABLED=true.
+The active architecture uses agent/engine.py with think/finish tools.
+See agent/heartbeat.py for the scheduler and agent/session.py for memory.
+Do not add new features here — they won't benefit from session memory,
+conversation continuity, self-critique, or the heartbeat system.
+
 ARCHITECTURE:
 This is the core reasoning engine. It replaces the old two-brain architecture
 (chat.handle_casual_chat for conversation + engine.run_agent for generation)

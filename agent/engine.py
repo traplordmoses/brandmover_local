@@ -31,6 +31,7 @@ class AgentResult:
     tool_calls_made: list[str] = field(default_factory=list)
     turns_used: int = 0
     total_time: float = 0.0
+    conversation_history: list = field(default_factory=list)
 
 
 def _try_parse_draft(text: str) -> dict | None:
@@ -155,61 +156,53 @@ def _extract_image_urls(tool_calls_made: list[dict]) -> list[str]:
 OnToolCall = Callable[[str, str], Awaitable[None]]
 
 
-async def run_agent(
-    request: str,
+async def _run_loop(
+    client,
+    system_prompt: str,
+    messages: list[dict],
+    tracker: ResourceTracker,
     on_tool_call: OnToolCall | None = None,
-    revision_context: str | None = None,
+    force_first_tool: bool = True,
 ) -> AgentResult:
-    """
-    Run the agent loop for a content request.
+    """Shared agent loop logic used by both run_agent() and run_agent_with_history().
 
     Args:
-        request: User's content request.
-        on_tool_call: Optional async callback(tool_name, brief_description) for progress updates.
-        revision_context: Optional context about a previous draft + feedback for revisions.
-
-    Returns:
-        AgentResult with the final draft and metadata.
+        client: Anthropic client instance.
+        system_prompt: System prompt string.
+        messages: Conversation messages (mutated in place).
+        tracker: Resource usage tracker.
+        on_tool_call: Optional progress callback.
+        force_first_tool: If True, force tool_choice="any" on turn 0 (fresh runs).
     """
-    t_start = time.time()
     result = AgentResult()
-    tracker = ResourceTracker()
     result.resources = tracker
 
-    from agent._client import get_anthropic
-    client = get_anthropic()
+    max_budget = settings.AGENT_MAX_TURNS
+    tool_call_log = []
+    finished = False
+    critique_done = False
+    consecutive_think_only = 0
+    _MAX_CONSECUTIVE_THINK = 3
 
-    system_prompt = build_system_prompt()
-
-    # Build the initial user message
-    user_content = request
-    if revision_context:
-        user_content = f"{revision_context}\n\nNew request: {request}"
-
-    messages = [{"role": "user", "content": user_content}]
-
-    max_turns = settings.AGENT_MAX_TURNS
-    tool_call_log = []  # For image URL extraction
-
-    for turn in range(max_turns):
+    for turn in range(max_budget):
         result.turns_used = turn + 1
 
-        # Force no tools on the last turn to get a final answer
         tool_choice = (
-            {"type": "any"} if turn == 0  # force at least one tool call first turn
-            else {"type": "none"} if turn >= max_turns - 1
+            {"type": "any"} if turn == 0 and force_first_tool
             else {"type": "auto"}
         )
 
         try:
-            response = await client.messages.create(
-                model=settings.AGENT_MODEL,
+            from agent.model_fallback import call_with_fallback
+            response = await call_with_fallback(
+                client=client,
+                primary_model=settings.AGENT_MODEL,
                 max_tokens=4096,
                 system=[{
-                "type": "text",
-                "text": system_prompt,
-                "cache_control": {"type": "ephemeral"},
-            }],
+                    "type": "text",
+                    "text": system_prompt,
+                    "cache_control": {"type": "ephemeral"},
+                }],
                 tools=TOOL_DEFINITIONS,
                 tool_choice=tool_choice,
                 messages=messages,
@@ -219,45 +212,118 @@ async def run_agent(
             result.final_text = f"API error: {e}"
             break
 
-        # Track token usage
         if hasattr(response, "usage") and response.usage:
             tracker.add_tokens(response.usage.input_tokens, response.usage.output_tokens)
 
-        # Process the response content blocks
         assistant_content = response.content
         tool_use_blocks = [b for b in assistant_content if b.type == "tool_use"]
         text_blocks = [b for b in assistant_content if b.type == "text"]
 
-        # Collect any text output
         for tb in text_blocks:
             result.final_text += tb.text + "\n"
 
-        # If no tool calls, we're done
         if not tool_use_blocks or response.stop_reason == "end_turn":
-            logger.info("Agent finished after %d turns (stop_reason=%s)", turn + 1, response.stop_reason)
+            logger.info("Agent finished after %d turns (stop_reason=%s, no tool calls)", turn + 1, response.stop_reason)
             break
 
-        # Append the assistant message
+        # Check if agent called finish
+        finish_block = None
+        for tb in tool_use_blocks:
+            if tb.name == "finish":
+                finish_block = tb
+                break
+
+        if finish_block:
+            result.draft = _sanitize_draft(dict(finish_block.input))
+            logger.info("Agent called finish on turn %d — draft extracted", turn + 1)
+
+            # --- Self-critique gate ---
+            if settings.AGENT_SELF_CRITIQUE and not critique_done:
+                critique_done = True
+                logger.info("Running self-critique gate")
+
+                messages.append({"role": "assistant", "content": assistant_content})
+
+                critique_tool_results = []
+                for tool_block in tool_use_blocks:
+                    if tool_block.name == "finish":
+                        critique_tool_results.append({
+                            "type": "tool_result",
+                            "tool_use_id": tool_block.id,
+                            "content": json.dumps({"status": "complete", "draft": dict(tool_block.input)}),
+                        })
+                    elif tool_block.name == "think":
+                        critique_tool_results.append({
+                            "type": "tool_result",
+                            "tool_use_id": tool_block.id,
+                            "content": "ok",
+                        })
+                    else:
+                        tool_name = tool_block.name
+                        tool_input = tool_block.input
+                        result.tool_calls_made.append(tool_name)
+                        try:
+                            tool_result_str = await execute_tool(tool_name, tool_input, tracker)
+                            if len(tool_result_str) > 15000:
+                                tool_result_str = tool_result_str[:15000] + "\n\n[... truncated ...]"
+                        except Exception as e:
+                            tool_result_str = json.dumps({"error": str(e)})
+                        critique_tool_results.append({
+                            "type": "tool_result",
+                            "tool_use_id": tool_block.id,
+                            "content": tool_result_str,
+                        })
+
+                critique_msg = (
+                    f"You just produced this draft:\n"
+                    f"{json.dumps(result.draft, indent=2)}\n\n"
+                    f"Score it 1-10 on: brand voice match, originality vs recent posts, caption quality.\n"
+                    f"If any score is below 7, call think with your critique then revise by calling "
+                    f"finish again with an improved draft.\n"
+                    f"If all scores are 7+, call finish again with the same draft to confirm."
+                )
+                messages.append({"role": "user", "content": [
+                    *critique_tool_results,
+                    {"type": "text", "text": critique_msg},
+                ]})
+                continue
+
+            finished = True
+            break
+
+        # --- Normal tool execution ---
+
+        real_tools_this_turn = [b for b in tool_use_blocks if b.name != "think"]
+        if not real_tools_this_turn:
+            consecutive_think_only += 1
+            if consecutive_think_only >= _MAX_CONSECUTIVE_THINK:
+                logger.warning(
+                    "Agent called think %d turns in a row with no real tools — "
+                    "breaking out to prevent spiral",
+                    consecutive_think_only,
+                )
+                break
+        else:
+            consecutive_think_only = 0
+
         messages.append({"role": "assistant", "content": assistant_content})
 
-        # Execute each tool call and build tool results
         tool_results = []
         for tool_block in tool_use_blocks:
             tool_name = tool_block.name
             tool_input = tool_block.input
-            result.tool_calls_made.append(tool_name)
+
+            if tool_name != "think":
+                result.tool_calls_made.append(tool_name)
 
             logger.info("Agent calling tool: %s (input: %s)", tool_name, str(tool_input)[:200])
 
-            # Send progress callback
             if on_tool_call:
                 brief = _tool_description(tool_name, tool_input)
                 await on_tool_call(tool_name, brief)
 
-            # Execute the tool
             try:
                 tool_result = await execute_tool(tool_name, tool_input, tracker)
-                # Truncate very long results to avoid context overflow
                 if len(tool_result) > 15000:
                     tool_result = tool_result[:15000] + "\n\n[... truncated to 15000 chars ...]"
             except Exception as e:
@@ -270,7 +336,6 @@ async def run_agent(
                 "result": tool_result if tool_name in ("generate_image", "img2img") else tool_result[:500],
             }
 
-            # Pre-extract image URL immediately when generate_image/img2img succeeds
             if tool_name in ("generate_image", "img2img"):
                 try:
                     parsed = json.loads(tool_result)
@@ -288,19 +353,25 @@ async def run_agent(
                 "content": tool_result,
             })
 
-        # Append tool results as user message
         messages.append({"role": "user", "content": tool_results})
+
+    # Budget exhaustion warning
+    if not finished and result.turns_used >= max_budget:
+        logger.warning(
+            "Agent exhausted turn budget (%d turns) without calling finish — "
+            "possible spiral or hallucination loop",
+            max_budget,
+        )
 
     # Post-processing
     result.final_text = result.final_text.strip()
-    result.total_time = round(time.time() - t_start, 1)
 
-    # Try to parse a draft from the final text
-    draft = _try_parse_draft(result.final_text)
-    if draft:
-        result.draft = _sanitize_draft(draft)
+    if not result.draft:
+        draft = _try_parse_draft(result.final_text)
+        if draft:
+            result.draft = _sanitize_draft(draft)
+            logger.info("Draft extracted via text fallback (finish tool was not called)")
 
-    # Backfill content_type from generate_image tool call if missing from draft
     if result.draft and not result.draft.get("content_type"):
         for entry in reversed(tool_call_log):
             if entry["name"] == "generate_image" and isinstance(entry.get("input"), dict):
@@ -309,20 +380,229 @@ async def run_agent(
                     result.draft["content_type"] = ct
                     break
 
-    # Extract image URL from tool calls
     result.image_url = _extract_image_url(tool_call_log)
     result.image_urls = _extract_image_urls(tool_call_log)
+    result.conversation_history = _trim_conversation(messages)
 
+    result._finished = finished  # internal flag for caller
+    return result
+
+
+async def run_agent(
+    request: str,
+    on_tool_call: OnToolCall | None = None,
+    revision_context: str | None = None,
+) -> AgentResult:
+    """
+    Run the goal-oriented agent loop for a content request.
+
+    Args:
+        request: User's content request.
+        on_tool_call: Optional async callback(tool_name, brief_description) for progress updates.
+        revision_context: Optional context about a previous draft + feedback for revisions.
+
+    Returns:
+        AgentResult with the final draft and metadata.
+    """
+    t_start = time.time()
+    tracker = ResourceTracker()
+
+    from agent._client import get_anthropic
+    client = get_anthropic()
+
+    system_prompt = build_system_prompt()
+
+    # Build the initial user message
+    user_content = request
+    if revision_context:
+        user_content = f"{revision_context}\n\nNew request: {request}"
+
+    # Inject session memory context (recent posts, rejections, preferences)
+    from agent.session import build_session_context, record_run
+    session_context = build_session_context()
+    if session_context:
+        user_content = f"{session_context}\n\n---\n\n{user_content}"
+
+    messages = [{"role": "user", "content": user_content}]
+
+    result = await _run_loop(
+        client, system_prompt, messages, tracker,
+        on_tool_call=on_tool_call, force_first_tool=True,
+    )
+    result.total_time = round(time.time() - t_start, 1)
+
+    finished_via = "finish" if getattr(result, "_finished", False) else "text_fallback" if result.draft else "no_draft"
     logger.info(
-        "Agent run complete: %d turns, %.1fs, %d tool calls, draft=%s, image=%s",
+        "Agent run complete: %d turns, %.1fs, %d tool calls, draft=%s, image=%s, finished_via=%s",
         result.turns_used,
         result.total_time,
         len(result.tool_calls_made),
         bool(result.draft),
         bool(result.image_url),
+        finished_via,
     )
 
+    # Record this run in session memory
+    try:
+        record_run(
+            slot="",
+            turns_used=result.turns_used,
+            tools_called=result.tool_calls_made,
+            finished_via=finished_via,
+        )
+    except Exception as e:
+        logger.debug("Session record_run failed: %s", e)
+
     return result
+
+
+async def run_agent_with_history(
+    history: list[dict],
+    on_tool_call: OnToolCall | None = None,
+) -> AgentResult:
+    """Continue an agent conversation from existing message history.
+
+    Used for revision flows where we want the agent to see its prior reasoning.
+
+    Args:
+        history: Previous messages list (from AgentResult.conversation_history).
+        on_tool_call: Optional progress callback.
+
+    Returns:
+        AgentResult with the revised draft and updated conversation history.
+    """
+    t_start = time.time()
+    tracker = ResourceTracker()
+
+    from agent._client import get_anthropic
+    from agent.session import record_run
+    client = get_anthropic()
+
+    system_prompt = build_system_prompt()
+    messages = _cap_conversation_depth(list(history))
+
+    result = await _run_loop(
+        client, system_prompt, messages, tracker,
+        on_tool_call=on_tool_call, force_first_tool=False,
+    )
+    result.total_time = round(time.time() - t_start, 1)
+
+    finished_via = "finish" if getattr(result, "_finished", False) else "text_fallback" if result.draft else "no_draft"
+    logger.info(
+        "Agent revision complete: %d turns, %.1fs, %d tool calls, draft=%s, finished_via=%s",
+        result.turns_used,
+        result.total_time,
+        len(result.tool_calls_made),
+        bool(result.draft),
+        finished_via,
+    )
+
+    try:
+        record_run(
+            slot="revision",
+            turns_used=result.turns_used,
+            tools_called=result.tool_calls_made,
+            finished_via=finished_via,
+        )
+    except Exception as e:
+        logger.debug("Session record_run failed: %s", e)
+
+    return result
+
+
+# ---------------------------------------------------------------------------
+# Conversation history trimming for storage / continuity
+# ---------------------------------------------------------------------------
+
+MAX_HISTORY_SIZE_CHARS = 50000
+MAX_REVISION_DEPTH = 4
+
+
+def _block_to_dict(block) -> dict:
+    """Convert Anthropic SDK content block to a plain dict."""
+    if hasattr(block, "model_dump"):
+        return block.model_dump()
+    if isinstance(block, dict):
+        return block
+    return {"type": "text", "text": str(block)}
+
+
+def _trim_conversation(messages: list[dict]) -> list[dict]:
+    """Trim conversation history for storage.
+
+    - Converts SDK objects to plain dicts
+    - Truncates large tool results
+    - Strips base64 data
+    - Caps total serialized size
+    """
+    trimmed = []
+    for msg in messages:
+        msg_copy = dict(msg)
+        content = msg_copy.get("content")
+
+        if isinstance(content, list):
+            new_blocks = []
+            for block in content:
+                bd = _block_to_dict(block) if not isinstance(block, dict) else dict(block)
+                # Truncate tool results
+                if bd.get("type") == "tool_result":
+                    text = bd.get("content", "")
+                    if isinstance(text, str) and len(text) > 2000:
+                        bd["content"] = text[:2000] + "\n[...truncated]"
+                # Strip base64 image data
+                source = bd.get("source", {})
+                if isinstance(source, dict) and source.get("type") == "base64":
+                    bd = {"type": "text", "text": "[image data stripped]"}
+                new_blocks.append(bd)
+            msg_copy["content"] = new_blocks
+        elif not isinstance(content, (str, list)):
+            # Assistant content that is an SDK list of blocks (not yet a list of dicts)
+            try:
+                msg_copy["content"] = [_block_to_dict(b) for b in content]
+            except (TypeError, AttributeError):
+                msg_copy["content"] = str(content)
+
+        # Truncate very long string content
+        if isinstance(msg_copy.get("content"), str) and len(msg_copy["content"]) > 5000:
+            msg_copy["content"] = msg_copy["content"][:5000] + "\n[...truncated]"
+
+        trimmed.append(msg_copy)
+
+    # Final size check
+    serialized = json.dumps(trimmed, default=str)
+    if len(serialized) > MAX_HISTORY_SIZE_CHARS:
+        mid = len(trimmed) // 2
+        trimmed = [trimmed[0]] + trimmed[mid:]
+
+    return trimmed
+
+
+def _cap_conversation_depth(messages: list[dict]) -> list[dict]:
+    """If conversation has too many revision cycles, keep only the most recent ones."""
+    revision_starts = []
+    for i, m in enumerate(messages):
+        if (m.get("role") == "user"
+                and isinstance(m.get("content"), str)
+                and "rejected" in m["content"].lower()):
+            revision_starts.append(i)
+
+    if len(revision_starts) <= MAX_REVISION_DEPTH:
+        return messages
+
+    first_msg = messages[0]
+    cutoff_idx = revision_starts[-MAX_REVISION_DEPTH]
+    prior_cycles = len(revision_starts) - MAX_REVISION_DEPTH
+
+    summary = {
+        "role": "user",
+        "content": (
+            f"[Earlier in this conversation: {cutoff_idx} messages of back-and-forth revision. "
+            f"The agent went through {prior_cycles} prior revision cycles. "
+            f"Focus on the most recent feedback.]"
+        ),
+    }
+
+    return [first_msg, summary] + messages[cutoff_idx:]
 
 
 def _tool_description(tool_name: str, tool_input: dict) -> str:
@@ -336,5 +616,7 @@ def _tool_description(tool_name: str, tool_input: dict) -> str:
         "log_resource_usage": "Logging resources used...",
         "img2img": f"Generating image from reference: {tool_input.get('reference_image_path', 'auto')}...",
         "execute_openclaw_script": f"Running {tool_input.get('script_name', 'script')}...",
+        "think": "Reasoning...",
+        "finish": "Submitting final draft...",
     }
     return descs.get(tool_name, f"Executing {tool_name}...")

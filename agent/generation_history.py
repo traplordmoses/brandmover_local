@@ -14,7 +14,7 @@ from pathlib import Path
 logger = logging.getLogger(__name__)
 
 _project_root = Path(__file__).resolve().parent.parent
-_STATE_DIR = _project_root / "state"
+from agent.paths import STATE_DIR as _STATE_DIR
 _HISTORY_FILE = _STATE_DIR / "generation_history.json"
 
 # Migrate from old location if needed

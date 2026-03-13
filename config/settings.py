@@ -23,9 +23,11 @@ import sys
 from pathlib import Path
 from dotenv import load_dotenv
 
-# Load .env from project root — this must happen before any os.getenv() calls below.
+# Load .env — supports BRANDMOVER_ENV_FILE override for multi-brand instances.
+# Default: .env from project root. Override: set BRANDMOVER_ENV_FILE=/path/to/.env.brand2
 _project_root = Path(__file__).resolve().parent.parent
-load_dotenv(_project_root / ".env")
+_env_file = os.getenv("BRANDMOVER_ENV_FILE", str(_project_root / ".env"))
+load_dotenv(_env_file)
 
 _logger = logging.getLogger(__name__)
 
@@ -70,6 +72,9 @@ X_BEARER_TOKEN: str = os.getenv("X_BEARER_TOKEN", "")
 # BRAND_NAME: Used in system prompts and generation context.
 BRAND_FOLDER: str = os.getenv("BRAND_FOLDER", str(_project_root / "brand"))
 BRAND_NAME: str = os.getenv("BRAND_NAME", "MyBrand")
+# STATE_FOLDER: Root for all runtime state (pending drafts, feedback, transcripts, etc.)
+# Defaults to state/ in project root. Override for multi-brand isolation.
+STATE_FOLDER: str = os.getenv("STATE_FOLDER", str(_project_root / "state"))
 
 # ── Pipeline ──
 # Legacy pipeline mode (4-step: analyze → plan → verify → generate).
@@ -88,12 +93,16 @@ REFERENCES_FOLDER: str = os.getenv("REFERENCES_FOLDER", str(Path(BRAND_FOLDER) /
 AGENT_MODE: str = os.getenv("AGENT_MODE", "pipeline")
 AGENT_MAX_TURNS: int = int(os.getenv("AGENT_MAX_TURNS", "15"))
 AGENT_MODEL: str = os.getenv("AGENT_MODEL", "claude-sonnet-4-6")
+AGENT_SELF_CRITIQUE: bool = os.getenv("AGENT_SELF_CRITIQUE", "true").lower() in ("true", "1", "yes")
 SONNET_MODEL: str = os.getenv("SONNET_MODEL", "claude-sonnet-4-6")
 HAIKU_MODEL: str = os.getenv("HAIKU_MODEL", "claude-haiku-4-5-20251001")
 # FEEDBACK_SUMMARIZE_EVERY: After this many feedback entries, auto-trigger
 # Claude to summarize patterns into learned_preferences.md.
 FEEDBACK_SUMMARIZE_EVERY: int = int(os.getenv("FEEDBACK_SUMMARIZE_EVERY", "10"))
 CHAT_MAX_TOKENS: int = int(os.getenv("CHAT_MAX_TOKENS", "600"))
+# Model fallback — comma-separated fallback chain for agent calls.
+# When primary model fails (429/500/503), tries the next model in the chain.
+AGENT_FALLBACK_MODELS: str = os.getenv("AGENT_FALLBACK_MODELS", "")
 
 # ── Discord ──
 # Optional Discord bot for cross-posting content to Discord channels.
@@ -147,6 +156,24 @@ AUTO_POST_STATE_FILE: str = os.getenv(
     str(_project_root / "state" / "auto_post_state.json"),
 )
 AUTO_POST_DRY_RUN: bool = os.getenv("AUTO_POST_DRY_RUN", "false").lower() in ("true", "1", "yes")
+
+# ── Heartbeat ──
+# HEARTBEAT_ENABLED: When True, the scheduler uses the heartbeat reasoning layer
+# (assess → reason → dispatch). When False, falls back to the original cron loop.
+# HEARTBEAT_PROACTIVE_HOURS: After this many hours without a post, the heartbeat
+# triggers a proactive content generation (Claude decides what to post about).
+HEARTBEAT_ENABLED: bool = os.getenv("HEARTBEAT_ENABLED", "true").lower() in ("true", "1", "yes")
+HEARTBEAT_PROACTIVE_HOURS: int = int(os.getenv("HEARTBEAT_PROACTIVE_HOURS", "8"))
+
+# ── Topic Bank ──
+# How often (hours) to refresh the topic bank with new Claude-generated angles.
+TOPIC_BANK_REFRESH_INTERVAL_HOURS: int = int(os.getenv("TOPIC_BANK_REFRESH_INTERVAL_HOURS", "72"))
+
+# ── Auto Preference Extraction ──
+# Periodically analyzes approval/rejection patterns to auto-generate preferences.
+PREF_EXTRACTION_ENABLED: bool = os.getenv("PREF_EXTRACTION_ENABLED", "true").lower() in ("true", "1", "yes")
+PREF_EXTRACTION_MIN_EVENTS: int = int(os.getenv("PREF_EXTRACTION_MIN_EVENTS", "5"))
+PREF_EXTRACTION_INTERVAL_HOURS: int = int(os.getenv("PREF_EXTRACTION_INTERVAL_HOURS", "24"))
 
 # ── Timezone ──
 # IANA timezone name for interpreting user-provided times (e.g. "America/Chicago").

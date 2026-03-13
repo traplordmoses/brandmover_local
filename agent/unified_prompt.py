@@ -2,6 +2,13 @@
 Unified system prompt builder — combines personality, memory, brand voice,
 learned preferences, current state, and generation rules into a single prompt.
 
+LEGACY PATH — Not actively maintained.
+This module is only used when UNIFIED_BRAIN_ENABLED=true (via unified_brain.py).
+The active architecture uses agent/skill_prompt.py for system prompts.
+See agent/session.py for the current memory/preferences system.
+Do not add new features here — they won't benefit from session memory,
+conversation continuity, self-critique, or the heartbeat system.
+
 ARCHITECTURE:
 This is the "brain configuration" module. Every time unified_brain.py makes an
 LLM call, it calls build_unified_system_prompt() to construct a dynamic system

@@ -39,7 +39,7 @@ logger = logging.getLogger(__name__)
 
 # File paths — all state lives in state/ directory
 _project_root = Path(__file__).resolve().parent.parent
-_STATE_DIR = _project_root / "state"
+from agent.paths import STATE_DIR as _STATE_DIR
 _FEEDBACK_FILE = _STATE_DIR / "feedback.json"        # Append-only feedback log
 _PREFERENCES_FILE = _STATE_DIR / "learned_preferences.md"  # Claude-generated summary
 
@@ -171,11 +171,17 @@ def get_feedback_stats() -> str:
         for e in rejections[-5:]:
             lines.append(f"  - {e['feedback_text'][:100]}")
 
-    # Preferences status
-    if _PREFERENCES_FILE.exists():
-        lines.append(f"\nLearned preferences: Yes (updated at {_PREFERENCES_FILE.stat().st_size} bytes)")
-    else:
-        lines.append(f"\nLearned preferences: Not yet generated (auto-generates every {settings.FEEDBACK_SUMMARIZE_EVERY} entries, or use /learn)")
+    # Preferences status — preferences are now auto-extracted daily via pref_extractor.py
+    try:
+        from agent.session import load_session
+        session = load_session()
+        pref_count = len(session.learned_preferences)
+        if pref_count:
+            lines.append(f"\nLearned preferences: {pref_count} active (auto-extracted daily from approval/rejection patterns, see /preferences)")
+        else:
+            lines.append("\nLearned preferences: None yet (auto-extracted daily from approval/rejection patterns, see /preferences)")
+    except Exception:
+        lines.append("\nLearned preferences: Use /preferences to view")
 
     return "\n".join(lines)
 
