@@ -55,13 +55,16 @@ def _write_queue(items: list[dict]) -> None:
 # ---------------------------------------------------------------------------
 
 
+_DEDUP_WINDOW_SECONDS = 600  # 10-minute window for duplicate detection
+
+
 def add_scheduled(
     prompt: str,
     scheduled_utc: float,
     recurrence: str = "once",
     label: str | None = None,
     draft: dict | None = None,
-) -> dict:
+) -> dict | None:
     """Add a new scheduled post to the queue.
 
     Args:
@@ -72,8 +75,25 @@ def add_scheduled(
         draft: Optional pre-approved draft dict. If provided, the scheduler
                will post this directly instead of regenerating content.
 
-    Returns the created queue item dict.
+    Returns the created queue item dict, or None if a duplicate was detected.
     """
+    items = _read_queue()
+
+    # Dedup: reject if a pending/generating item has the same prompt and
+    # a scheduled time within _DEDUP_WINDOW_SECONDS of this one.
+    prompt_norm = prompt.strip().lower()
+    for existing in items:
+        if existing.get("status") not in ("pending", "generating"):
+            continue
+        if existing.get("prompt", "").strip().lower() != prompt_norm:
+            continue
+        if abs(existing.get("scheduled_utc", 0) - scheduled_utc) <= _DEDUP_WINDOW_SECONDS:
+            logger.info(
+                "Duplicate schedule rejected: '%s' already queued as %s (within %ds window)",
+                prompt[:60], existing["id"], _DEDUP_WINDOW_SECONDS,
+            )
+            return None
+
     item = {
         "id": uuid.uuid4().hex[:8],
         "prompt": prompt,
@@ -85,7 +105,6 @@ def add_scheduled(
     }
     if draft:
         item["draft"] = draft
-    items = _read_queue()
     items.append(item)
     _write_queue(items)
     local_tz = _get_local_tz()

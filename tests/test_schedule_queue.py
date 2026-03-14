@@ -213,6 +213,35 @@ class TestQueueCRUD:
         assert len(items) == 1
         assert items[0]["id"] == item["id"]
 
+    def test_add_duplicate_rejected(self):
+        """Scheduling the same prompt at a similar time returns None."""
+        ts = time.time() + 3600
+        item1 = schedule_queue.add_scheduled("duplicate post", ts)
+        assert item1 is not None
+        # Same prompt, 5 minutes later — within 10-minute dedup window
+        item2 = schedule_queue.add_scheduled("duplicate post", ts + 300)
+        assert item2 is None
+        # Only one item in the queue
+        assert len(schedule_queue.list_scheduled()) == 1
+
+    def test_add_duplicate_different_prompt_allowed(self):
+        """Different prompts at the same time are not duplicates."""
+        ts = time.time() + 3600
+        item1 = schedule_queue.add_scheduled("first post", ts)
+        item2 = schedule_queue.add_scheduled("second post", ts)
+        assert item1 is not None
+        assert item2 is not None
+        assert len(schedule_queue.list_scheduled()) == 2
+
+    def test_add_duplicate_outside_window_allowed(self):
+        """Same prompt but >10 minutes apart is allowed."""
+        ts = time.time() + 3600
+        item1 = schedule_queue.add_scheduled("repeat post", ts)
+        item2 = schedule_queue.add_scheduled("repeat post", ts + 700)
+        assert item1 is not None
+        assert item2 is not None
+        assert len(schedule_queue.list_scheduled()) == 2
+
     def test_cancel(self):
         item = schedule_queue.add_scheduled("test", time.time() + 3600)
         assert schedule_queue.cancel_scheduled(item["id"]) is True

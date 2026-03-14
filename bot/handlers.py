@@ -2782,6 +2782,13 @@ async def _route_intent(update: Update, context: ContextTypes.DEFAULT_TYPE, mess
             prompt, ts, recurrence, display = schedule_queue.parse_schedule_command(combined)
             if prompt and ts:
                 item = schedule_queue.add_scheduled(prompt, ts, recurrence or "once")
+                if item is None:
+                    await update.message.reply_text(
+                        "This post is already scheduled around that time. "
+                        "Use /unschedule to cancel the existing one first.",
+                        parse_mode="HTML",
+                    )
+                    return True
                 await update.message.reply_text(
                     f"<b>Post scheduled</b>\n\n"
                     f"<b>Time:</b> {_esc(display)}\n"
@@ -4223,6 +4230,13 @@ async def schedule_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         return
 
     item = schedule_queue.add_scheduled(prompt, ts, recurrence or "once")
+    if item is None:
+        await update.message.reply_text(
+            "This post is already scheduled around that time. "
+            "Use /unschedule to cancel the existing one first.",
+            parse_mode="HTML",
+        )
+        return
     recurrence_tag = f" ({recurrence})" if recurrence and recurrence != "once" else ""
 
     await update.message.reply_text(

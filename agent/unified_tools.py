@@ -1323,6 +1323,11 @@ async def _handle_schedule_post(
             label=label,
             draft=draft_data,
         )
+        if item is None:
+            return json.dumps({
+                "status": "duplicate",
+                "message": "This post is already scheduled around that time.",
+            })
         state.clear_approved(user_id=user_id)
         return json.dumps({
             "status": "scheduled",
@@ -1334,6 +1339,11 @@ async def _handle_schedule_post(
     elif prompt:
         # Schedule a generate-at-time item
         item = schedule_queue.add_scheduled(prompt=prompt, scheduled_utc=ts, label=prompt[:40])
+        if item is None:
+            return json.dumps({
+                "status": "duplicate",
+                "message": "This post is already scheduled around that time.",
+            })
         return json.dumps({
             "status": "scheduled",
             "item_id": item["id"],
