@@ -83,6 +83,8 @@ def create_bot() -> Application:
     app.add_handler(CommandHandler("preferences", handlers.preferences_command))
     app.add_handler(CommandHandler("topics", handlers.topics_command))
     app.add_handler(CommandHandler("heartbeat", handlers.heartbeat_command))
+    app.add_handler(CommandHandler("campaign", handlers.campaign_command))
+    app.add_handler(CommandHandler("campaign_schedule", handlers.campaign_schedule_command))
 
     # Inline button callbacks (e.g. /generate approve/reject buttons)
     app.add_handler(CallbackQueryHandler(handlers.generate_callback, pattern=r"^gen_"))

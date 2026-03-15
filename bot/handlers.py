@@ -15,7 +15,7 @@ from PIL import Image as _PILImage
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import ContextTypes
 
-from agent import asset_gen, asset_library, auto_state, brain, chat, compositor, compositor_config, conversation_context, engine, feedback, generation_history, guidelines, hooks, image_gen, intent_router, onboarding, publisher, schedule_queue, scheduler, state, transcript, unified_brain
+from agent import asset_gen, asset_library, auto_state, brain, campaigns, chat, compositor, compositor_config, conversation_context, engine, feedback, generation_history, guidelines, hooks, image_gen, intent_router, onboarding, publisher, schedule_queue, scheduler, state, transcript, unified_brain
 from agent import compositor_config as _cc
 from config import settings
 
@@ -350,6 +350,11 @@ async def _do_post(update: Update, context: ContextTypes.DEFAULT_TYPE, source: s
         )
         logger.info("Auto-post slot '%s' recorded via post (%s)", auto_slot, source)
 
+        # Update campaign slot progress if this was a campaign post
+        if auto_slot.startswith("scheduled:"):
+            queue_id = auto_slot.removeprefix("scheduled:")
+            campaigns.update_slot_by_queue_id(queue_id, "posted", post_url=tweet_url or "")
+
     state.clear_approved(user_id=user_id)
 
     # Track context — draft posted, nothing pending
@@ -630,6 +635,8 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             "/schedule <i>time prompt</i> — Schedule a post for a specific time\n"
             "/scheduled — List upcoming scheduled posts\n"
             "/unschedule <i>id</i> — Cancel a scheduled post\n"
+            "/campaign — List campaigns or show status\n"
+            "/campaign_schedule <i>name</i> — Schedule all posts for a campaign\n"
             "/autostatus — Auto-posting scheduler status\n"
             "/autopause — Pause/resume auto-posting\n"
             "/autoforce <i>slot</i> — Force a specific auto-post slot\n"
@@ -4323,6 +4330,120 @@ async def unschedule_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
             f"Use /scheduled to see current posts.",
             parse_mode="HTML",
         )
+
+
+# ---------------------------------------------------------------------------
+# /campaign — multi-day campaign management
+# ---------------------------------------------------------------------------
+
+
+async def campaign_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /campaign — list campaigns or show status of a specific one.
+
+    Usage:
+        /campaign              — list all campaigns
+        /campaign <name>       — show status of named campaign
+        /campaign pause <name> — pause a campaign
+        /campaign resume <name> — resume a paused campaign
+        /campaign delete <name> — delete a campaign and cancel its posts
+    """
+    if not _authorized(update.effective_user.id):
+        return
+
+    text = (update.message.text or "").strip()
+    parts = text.split(maxsplit=2)
+
+    # /campaign — list all
+    if len(parts) <= 1:
+        msg = campaigns.format_campaign_list()
+        await update.message.reply_text(msg, parse_mode="HTML")
+        return
+
+    subcommand = parts[1].lower()
+
+    # /campaign pause <name>
+    if subcommand == "pause" and len(parts) > 2:
+        name = parts[2].strip()
+        if campaigns.pause_campaign(name):
+            await update.message.reply_text(
+                f"Campaign <b>{_esc(name)}</b> paused.", parse_mode="HTML",
+            )
+        else:
+            await update.message.reply_text(f"Campaign '{_esc(name)}' not found or not active.", parse_mode="HTML")
+        return
+
+    # /campaign resume <name>
+    if subcommand == "resume" and len(parts) > 2:
+        name = parts[2].strip()
+        if campaigns.resume_campaign(name):
+            await update.message.reply_text(
+                f"Campaign <b>{_esc(name)}</b> resumed.", parse_mode="HTML",
+            )
+        else:
+            await update.message.reply_text(f"Campaign '{_esc(name)}' not found or not paused.", parse_mode="HTML")
+        return
+
+    # /campaign delete <name>
+    if subcommand == "delete" and len(parts) > 2:
+        name = parts[2].strip()
+        if campaigns.delete_campaign(name):
+            await update.message.reply_text(
+                f"Campaign <b>{_esc(name)}</b> deleted. Scheduled posts cancelled.",
+                parse_mode="HTML",
+            )
+        else:
+            await update.message.reply_text(f"Campaign '{_esc(name)}' not found.", parse_mode="HTML")
+        return
+
+    # /campaign <name> — show status
+    name = " ".join(parts[1:]).strip()
+    campaign = campaigns.get_campaign(name)
+    if campaign:
+        msg = campaigns.format_campaign_status(name)
+        await update.message.reply_text(msg, parse_mode="HTML")
+    else:
+        # Maybe they meant to list — show list with hint
+        msg = campaigns.format_campaign_list()
+        msg += f"\n\nCampaign '{_esc(name)}' not found."
+        await update.message.reply_text(msg, parse_mode="HTML")
+
+
+async def campaign_schedule_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /campaign_schedule <name> — schedule all pending posts for a campaign."""
+    if not _authorized(update.effective_user.id):
+        return
+
+    text = (update.message.text or "").strip()
+    parts = text.split(maxsplit=1)
+
+    if len(parts) < 2:
+        await update.message.reply_text(
+            "Usage: /campaign_schedule <i>campaign_name</i>\n\n"
+            "Schedules all pending campaign posts into the post queue.",
+            parse_mode="HTML",
+        )
+        return
+
+    name = parts[1].strip()
+    campaign = campaigns.get_campaign(name)
+    if not campaign:
+        await update.message.reply_text(f"Campaign '{_esc(name)}' not found.", parse_mode="HTML")
+        return
+
+    result = campaigns.schedule_campaign_posts(name)
+    lines = [f"<b>Campaign '{_esc(name)}' scheduling:</b>", ""]
+    lines.append(f"Scheduled: {result['scheduled']} posts")
+    if result["skipped"]:
+        lines.append(f"Skipped: {result['skipped']}")
+    for err in result.get("errors", []):
+        lines.append(f"  ⚠ {_esc(err)}")
+
+    if result["scheduled"] > 0:
+        lines.append("")
+        lines.append("Posts will fire at their scheduled times.")
+        lines.append("Use /scheduled to see the queue.")
+
+    await update.message.reply_text("\n".join(lines), parse_mode="HTML")
 
 
 # ---------------------------------------------------------------------------

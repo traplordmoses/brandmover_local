@@ -416,6 +416,209 @@ _cancel_scheduled_post_def = {
     },
 }
 
+_create_campaign_def = {
+    "name": "create_campaign",
+    "description": (
+        "Create a multi-day content campaign and schedule all posts. "
+        "Use when the user describes a campaign plan with multiple posts across days. "
+        "Each slot can have pre-written copy (posted as-is) or a generation prompt. "
+        "After creation, all posts are automatically scheduled into the queue."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "name": {
+                "type": "string",
+                "description": "Short campaign name, e.g. 'welcome-to-foid'.",
+            },
+            "brief": {
+                "type": "string",
+                "description": "Campaign theme and objective.",
+            },
+            "start_date": {
+                "type": "string",
+                "description": "Start date in YYYY-MM-DD format. Defaults to today.",
+            },
+            "post_times": {
+                "type": "object",
+                "description": (
+                    "Mapping of slot labels to local times in HH:MM format. "
+                    "e.g. {\"morning\": \"09:00\", \"evening\": \"18:00\"}. "
+                    "Each slot's slot_label determines which time it uses."
+                ),
+            },
+            "slots": {
+                "type": "array",
+                "description": "List of post slots.",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "day": {"type": "integer", "description": "Day number (1-indexed)."},
+                        "slot_label": {
+                            "type": "string",
+                            "description": "Time slot label: 'morning', 'evening', etc.",
+                        },
+                        "copy": {
+                            "type": "string",
+                            "description": "Pre-written post copy. If provided, posted exactly as-is.",
+                        },
+                        "prompt": {
+                            "type": "string",
+                            "description": "Generation prompt (used if no copy provided).",
+                        },
+                        "angle": {
+                            "type": "string",
+                            "description": "Brief description of this post's angle/topic.",
+                        },
+                        "content_type": {
+                            "type": "string",
+                            "description": "Content type: engagement, announcement, educational, etc.",
+                        },
+                        "media_note": {
+                            "type": "string",
+                            "description": "Note about required media, e.g. '[screenshot of swipe UI]'.",
+                        },
+                    },
+                    "required": ["day"],
+                },
+            },
+        },
+        "required": ["name", "brief", "slots"],
+    },
+}
+
+_campaign_status_def = {
+    "name": "campaign_status",
+    "description": (
+        "Get the status of a campaign or list all campaigns. "
+        "Use when the user asks about campaign progress."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "name": {
+                "type": "string",
+                "description": "Campaign name. If omitted, lists all campaigns.",
+            },
+        },
+        "required": [],
+    },
+}
+
+_record_walkthrough_def = {
+    "name": "record_walkthrough",
+    "description": (
+        "Record a video walkthrough or screenshot sequence of a website. "
+        "Uses Playwright to automate browser actions (goto, click, scroll, wait) "
+        "and records the session as MP4 video with text overlays, or as a series "
+        "of screenshots. Use for: product demos, feature walkthroughs, onboarding "
+        "recordings, capturing UI states. Returns path to the output file(s)."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "url": {
+                "type": "string",
+                "description": "Base URL to record, e.g. 'https://foidfun.vercel.app'.",
+            },
+            "steps": {
+                "type": "array",
+                "description": "Sequence of browser actions to perform.",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "action": {
+                            "type": "string",
+                            "enum": ["goto", "click", "fill", "wait", "screenshot", "scroll"],
+                            "description": "Action type.",
+                        },
+                        "target": {
+                            "type": "string",
+                            "description": "URL path (for goto) or CSS selector (for click/fill).",
+                        },
+                        "value": {
+                            "type": "string",
+                            "description": "Text to type (for fill action).",
+                        },
+                        "narration": {
+                            "type": "string",
+                            "description": "Caption text overlay for this step.",
+                        },
+                        "wait": {
+                            "type": "number",
+                            "description": "Seconds to wait after action (default 2.0).",
+                        },
+                    },
+                    "required": ["action"],
+                },
+            },
+            "mode": {
+                "type": "string",
+                "enum": ["video", "screenshot"],
+                "description": "Recording mode. 'video' produces MP4, 'screenshot' produces PNGs. Default: video.",
+            },
+            "name": {
+                "type": "string",
+                "description": "Short name for the recording (used in filenames).",
+            },
+        },
+        "required": ["url", "steps"],
+    },
+}
+
+_style_video_def = {
+    "name": "style_video",
+    "description": (
+        "Apply polished social media styling to a raw screen recording or video. "
+        "Adds: iPhone device mockup frame, holographic gradient background, "
+        "Ken Burns zoom animation, and optional text overlays. "
+        "Outputs an H.264 MP4 optimized for X/Twitter. "
+        "Use after record_walkthrough to make the output look professional, "
+        "or on any raw video/recording that needs a polished look."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "input_video": {
+                "type": "string",
+                "description": "Path to the raw video file (WebM or MP4).",
+            },
+            "device_frame": {
+                "type": "string",
+                "enum": ["iphone", "none"],
+                "description": "Device frame to wrap the video in. Default: iphone.",
+            },
+            "bg_colors": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "Hex colors for gradient background. Default: holographic cyan/pink/purple.",
+            },
+            "zoom_enabled": {
+                "type": "boolean",
+                "description": "Enable Ken Burns zoom effect. Default: true.",
+            },
+            "square_output": {
+                "type": "boolean",
+                "description": "Output as 1080x1080 square (best for X engagement). Default: true.",
+            },
+            "narration_texts": {
+                "type": "array",
+                "description": "Text overlays with timing.",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "text": {"type": "string"},
+                        "start": {"type": "number", "description": "Start time in seconds."},
+                        "end": {"type": "number", "description": "End time in seconds."},
+                    },
+                    "required": ["text", "start", "end"],
+                },
+            },
+        },
+        "required": ["input_video"],
+    },
+}
+
 _register_draft_def = {
     "name": "register_draft",
     "description": (
@@ -699,6 +902,10 @@ UNIFIED_TOOL_DEFINITIONS = _BASE_TOOL_DEFINITIONS + [
     _save_snippet_def,
     _list_snippets_def,
     _use_snippet_def,
+    _create_campaign_def,
+    _campaign_status_def,
+    _record_walkthrough_def,
+    _style_video_def,
 ]
 
 
@@ -1848,6 +2055,157 @@ async def _handle_use_snippet(
     return json.dumps({"error": f"Snippet '{snippet_id}' not found"})
 
 
+async def _handle_create_campaign(
+    input_dict: dict, tracker: ResourceTracker, user_id: int | None = None,
+    tool_context: dict | None = None,
+) -> str:
+    from agent import campaigns
+
+    name = input_dict.get("name", "").strip()
+    brief = input_dict.get("brief", "").strip()
+    slots = input_dict.get("slots", [])
+    start_date = input_dict.get("start_date", "")
+    post_times = input_dict.get("post_times")
+    if not name or not brief or not slots:
+        return json.dumps({"error": "name, brief, and slots are required"})
+
+    result = campaigns.create_campaign(
+        name=name,
+        brief=brief,
+        slots=slots,
+        start_date=start_date,
+        post_times=post_times,
+    )
+    if not result["success"]:
+        return json.dumps(result)
+
+    # Auto-schedule all posts
+    sched_result = campaigns.schedule_campaign_posts(name)
+    result["scheduling"] = sched_result
+    return json.dumps(result)
+
+
+async def _handle_campaign_status(
+    input_dict: dict, tracker: ResourceTracker, user_id: int | None = None,
+    tool_context: dict | None = None,
+) -> str:
+    from agent import campaigns
+
+    name = input_dict.get("name", "").strip()
+    if name:
+        progress = campaigns.get_campaign_progress(name)
+        campaign = campaigns.get_campaign(name)
+        if campaign:
+            progress["slots"] = campaign.get("slots", [])
+        return json.dumps(progress)
+
+    all_campaigns = campaigns.list_campaigns()
+    summaries = []
+    for c in all_campaigns:
+        slots = c.get("slots", [])
+        posted = sum(1 for s in slots if s.get("status") == "posted")
+        summaries.append({
+            "name": c["name"],
+            "status": c.get("status"),
+            "progress": f"{posted}/{len(slots)}",
+            "brief": c.get("brief", "")[:100],
+        })
+    return json.dumps({"campaigns": summaries})
+
+
+async def _handle_record_walkthrough(
+    input_dict: dict, tracker: ResourceTracker, user_id: int | None = None,
+    tool_context: dict | None = None,
+) -> str:
+    """Record a video walkthrough or screenshot sequence using the demo recorder."""
+    url = input_dict.get("url", "")
+    steps = input_dict.get("steps", [])
+    mode = input_dict.get("mode", "video")
+    name = input_dict.get("name", "walkthrough")
+
+    if not url or not steps:
+        return json.dumps({"error": "url and steps are required"})
+
+    # Write a temporary demo script JSON and call the recorder
+    import tempfile
+    script_data = {
+        "name": name,
+        "url": url,
+        "mode": mode,
+        "viewport_width": 1280,
+        "viewport_height": 720,
+        "steps": steps,
+    }
+
+    tracker.log_api(f"record_walkthrough:{url[:40]}")
+
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".json", delete=False, prefix="demo_"
+        ) as f:
+            json.dump(script_data, f)
+            script_path = f.name
+
+        from agent.demo_recorder import record_demo
+        result = await record_demo(script_path, mode_override=mode)
+
+        # Clean up temp script
+        Path(script_path).unlink(missing_ok=True)
+
+        if result.error:
+            return json.dumps({"error": result.error})
+
+        output = {
+            "mode": result.mode,
+            "duration_seconds": result.duration_seconds,
+        }
+        if result.video_path:
+            output["video_path"] = result.video_path
+        if result.screenshot_paths:
+            output["screenshot_paths"] = result.screenshot_paths
+
+        return json.dumps(output)
+    except Exception as e:
+        logger.error("record_walkthrough failed: %s", e)
+        return json.dumps({"error": str(e)})
+
+
+async def _handle_style_video(
+    input_dict: dict, tracker: ResourceTracker, user_id: int | None = None,
+    tool_context: dict | None = None,
+) -> str:
+    """Apply polished styling to a raw video."""
+    input_video = input_dict.get("input_video", "")
+    if not input_video or not Path(input_video).exists():
+        return json.dumps({"error": f"Video not found: {input_video}"})
+
+    from agent.video_styler import VideoStyle, async_apply_style
+
+    style = VideoStyle()
+    if input_dict.get("device_frame") == "none":
+        style.device_frame = "none"
+    if input_dict.get("bg_colors"):
+        style.bg_colors = input_dict["bg_colors"]
+    if input_dict.get("zoom_enabled") is False:
+        style.zoom_enabled = False
+    if input_dict.get("square_output") is False:
+        style.output_width = 1280
+        style.output_height = 720
+
+    narration_texts = input_dict.get("narration_texts")
+
+    tracker.log_api("style_video")
+
+    try:
+        output = await async_apply_style(
+            input_video, style=style, narration_texts=narration_texts,
+        )
+        return json.dumps({"path": output, "style": style.device_frame})
+    except Exception as e:
+        logger.error("style_video failed: %s", e)
+        return json.dumps({"error": str(e)})
+
+
 _UNIFIED_HANDLERS = {
     "get_pending_draft": _handle_get_pending_draft,
     "revise_draft": _handle_revise_draft,
@@ -1877,6 +2235,10 @@ _UNIFIED_HANDLERS = {
     "save_snippet": _handle_save_snippet,
     "list_snippets": _handle_list_snippets,
     "use_snippet": _handle_use_snippet,
+    "create_campaign": _handle_create_campaign,
+    "campaign_status": _handle_campaign_status,
+    "record_walkthrough": _handle_record_walkthrough,
+    "style_video": _handle_style_video,
 }
 
 

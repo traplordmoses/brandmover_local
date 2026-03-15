@@ -1,0 +1,13 @@
+{
+  "name": "foid-pray-demo",
+  "url": "https://foidfun.vercel.app",
+  "mode": "video",
+  "viewport_width": 1280,
+  "viewport_height": 720,
+  "steps": [
+    {"action": "goto", "target": "/pray", "narration": "pray.exe — daily ritual", "wait": 4.0},
+    {"action": "screenshot", "narration": "FOID Mommy Terminal", "wait": 2.0},
+    {"action": "wait", "narration": "Connect wallet to pray", "wait": 3.0},
+    {"action": "screenshot", "narration": "Build your streak, boost your power", "wait": 2.0}
+  ]
+}

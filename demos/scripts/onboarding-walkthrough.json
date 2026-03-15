@@ -1,0 +1,23 @@
+{
+  "name": "foid-onboarding-walkthrough",
+  "url": "https://foidfun.vercel.app",
+  "mode": "video",
+  "viewport_width": 1280,
+  "viewport_height": 720,
+  "steps": [
+    {"action": "goto", "target": "/", "narration": "Welcome to FOID", "wait": 4.0},
+    {"action": "screenshot", "narration": "The gate — Windows-style launcher", "wait": 2.0},
+    {"action": "click", "target": ".home-tile:nth-child(3)", "narration": "Enter Swipe", "wait": 4.0},
+    {"action": "screenshot", "narration": "Swipe — vote on memes", "wait": 2.0},
+    {"action": "goto", "target": "/gallery", "narration": "The Gallery", "wait": 4.0},
+    {"action": "screenshot", "narration": "Canonized memes live here forever", "wait": 2.0},
+    {"action": "goto", "target": "/board", "narration": "The Loreboard", "wait": 4.0},
+    {"action": "screenshot", "narration": "Living memetic collage", "wait": 2.0},
+    {"action": "goto", "target": "/pray", "narration": "Pray with FOID Mommy", "wait": 4.0},
+    {"action": "screenshot", "narration": "Daily check-in — build your streak", "wait": 2.0},
+    {"action": "goto", "target": "/mifoid", "narration": "MiFOID — AI avatars", "wait": 4.0},
+    {"action": "screenshot", "narration": "Mint your on-chain identity", "wait": 2.0},
+    {"action": "goto", "target": "/", "narration": "Back to the gate", "wait": 3.0},
+    {"action": "screenshot", "narration": "foid.fun — enter the culture", "wait": 1.0}
+  ]
+}

@@ -1,0 +1,15 @@
+{
+  "name": "foid-swipe-demo",
+  "url": "https://foidfun.vercel.app",
+  "mode": "video",
+  "viewport_width": 1280,
+  "viewport_height": 720,
+  "steps": [
+    {"action": "goto", "target": "/swipe", "narration": "swipe.exe", "wait": 4.0},
+    {"action": "screenshot", "narration": "The swipe interface", "wait": 2.0},
+    {"action": "goto", "target": "/swipe/submit", "narration": "Submit a meme", "wait": 4.0},
+    {"action": "screenshot", "narration": "Upload → community votes → gallery", "wait": 2.0},
+    {"action": "goto", "target": "/gallery", "narration": "The Gallery — permanent canon", "wait": 4.0},
+    {"action": "screenshot", "narration": "Approved memes live here forever", "wait": 2.0}
+  ]
+}
