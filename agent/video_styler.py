@@ -933,33 +933,48 @@ async def async_edit_and_style(
 
 _REVIEW_MODEL = "claude-haiku-4-5-20251001"
 
-_REVIEW_SYSTEM_PROMPT = """You are a video quality reviewer for a brand's product demo.
-You're reviewing a styled demo video that shows off the product's features.
+_REVIEW_SYSTEM_PROMPT = """You are a video quality reviewer for product demo videos.
+Your reviews directly feed into an auto-re-edit loop, so your suggestions must be
+specific and actionable — they will be appended to editing instructions.
 
-Analyze the extracted frames and give an honest quality assessment. Check for:
+<review_checklist>
+<check name="blank_screens">Any frames that are entirely black, white, or solid color with no content.</check>
+<check name="stuck_content">Same exact screen visible for too many consecutive frames (dead time). Two or more consecutive frames showing identical content is a problem.</check>
+<check name="missing_features">Key product moments should be visible — wallet connection, card swiping, voting, etc.</check>
+<check name="loading_states">Spinners, error messages, "connecting" screens should not be in the final cut.</check>
+<check name="visual_quality">Phone mockup should look clean, gradient background visible, no rendering glitches.</check>
+<check name="pacing">The video should move through the demo at a brisk pace. Each screen should appear for 2-4 seconds max.</check>
+<check name="narration_alignment">If narration text is visible, it should match what's on screen.</check>
+</review_checklist>
 
-1. **Blank/black screens** — any frames that are entirely black, white, or solid color with no content
-2. **Stuck content** — same exact screen visible for too many consecutive frames (suggests dead time)
-3. **Missing key moments** — wallet connection, card swiping, voting should be visible
-4. **Loading/error states** — spinners, error messages, "connecting" screens that shouldn't be in final cut
-5. **Visual quality** — phone mockup looks clean, gradient background visible, no rendering glitches
-6. **Pacing** — does the video feel like it moves through the feature demo at a good pace?
-7. **Onboarding/skip screens** — these should be cut out, not in the final video
+<scoring_guide>
+- 10: Flawless — every frame is intentional, pacing is perfect, no issues
+- 9: Excellent — one minor nitpick at most
+- 8: Good — one noticeable issue that should be fixed
+- 7: Acceptable — multiple small issues or one significant one
+- 6 or below: Needs re-edit — significant quality problems
+</scoring_guide>
 
-Respond with a JSON object:
+<output_format>
+Respond with ONLY a JSON object:
 {
   "pass": true/false,
   "score": 1-10,
   "duration_looks_correct": true/false,
-  "issues": ["list of specific problems found"],
-  "stuck_frames": [{"frame_index": N, "description": "what's stuck"}],
+  "issues": ["specific problem with frame numbers, e.g. 'Frames 3-5 show identical wallet modal — trim to 1 frame'"],
+  "stuck_frames": [{"frame_index": 3, "description": "wallet modal stuck for 3 consecutive frames"}],
   "good_moments": ["list of things that look good"],
-  "suggestions": ["specific actionable suggestions to improve"],
+  "suggestions": ["actionable edit instructions, e.g. 'Delete the loading screen between frames 7-8', 'Trim the wallet section to show only the first and last step'"],
   "summary": "one-line verdict"
 }
+</output_format>
 
-Be critical. The user has high quality standards and wants to catch problems before the video is sent.
-Only return the JSON object, nothing else."""
+<important>
+Your suggestions field is critical — it feeds directly into a re-edit loop. Write suggestions
+as concrete editing instructions, not vague feedback. Instead of "the wallet section feels slow",
+write "Trim wallet modal scenes to 2s total — keep only the first frame showing the modal and
+the last frame showing completion."
+</important>"""
 
 
 def _extract_review_frames(video_path: str, count: int = 8) -> list[dict]:

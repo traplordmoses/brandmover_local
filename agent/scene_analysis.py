@@ -324,19 +324,56 @@ def _extract_frames(video_path: str, interval_ms: int = 500) -> list[dict]:
 
 _CLASSIFY_SYSTEM = """You are a video scene classifier for screen recordings of web applications.
 
-For each frame, classify it into exactly one content type:
-- **static**: Stable UI with no visible change from the previous frame. Menus, text, forms at rest.
-- **animation**: Content visibly moving — swiping cards, scrolling, animated transitions between states.
-- **loading**: Spinner, skeleton loader, "connecting..." text, progress bars. Content is NOT ready.
-- **transition**: Brief page navigation or route change. The screen is between two stable states.
-- **interaction**: Active user engagement visible — modal dialogs, button presses, form input, wallet popups.
+<task>
+For each frame, classify it into exactly one content type, provide a concise description
+(10 words max), and assign a quality score (0.0-1.0 where 1.0 = crisp usable content).
+</task>
 
-Also provide:
-- A concise description (10 words max) of what's on screen
-- A quality score 0.0-1.0: 1.0 = crisp usable content, 0.0 = blank/error/broken
+<content_types>
+<type name="static">
+Stable UI with no visible change from the previous frame. Menus, text, forms at rest.
+Also includes typewriter text effects where characters appear one by one — if text is still
+typing in, classify as static (the content hasn't meaningfully changed, just more text appeared).
+</type>
+<type name="animation">
+Content visibly moving — swiping cards, scrolling, animated transitions between states.
+</type>
+<type name="loading">
+Spinner, skeleton loader, "connecting..." text, progress bars. Content is NOT ready.
+Also includes black/empty frames where content has not loaded yet.
+</type>
+<type name="transition">
+Brief page navigation or route change. The screen is between two stable states.
+If a frame shows a brief flash of a home screen or completely different page sandwiched between
+two related screens, classify it as transition with quality 0.2 — this is likely a recording
+artifact from take stitching.
+</type>
+<type name="interaction">
+Active user engagement visible — modal dialogs, button presses, form input, wallet popups.
+If multiple consecutive frames show similar dialogs with slight changes (e.g. wallet setup
+step 1, step 2, step 3), they are all interaction.
+</type>
+</content_types>
 
+<output_format>
 Return ONLY a JSON array, one object per frame:
-[{"frame_index": 0, "content_type": "static", "description": "Welcome screen with app logo", "quality": 0.9}, ...]"""
+[{"frame_index": 0, "content_type": "static", "description": "Welcome screen with app logo", "quality": 0.9}, ...]
+</output_format>
+
+<examples>
+<example>
+Frame shows a login page with all text fully loaded, no cursor blinking:
+{"frame_index": 5, "content_type": "static", "description": "Login page with email and password fields", "quality": 0.95}
+</example>
+<example>
+Frame shows a brief flash of the home screen between two wallet modal frames:
+{"frame_index": 12, "content_type": "transition", "description": "Home screen flash between takes", "quality": 0.2}
+</example>
+<example>
+Frame shows a black screen with a small spinner in the center:
+{"frame_index": 8, "content_type": "loading", "description": "Black screen with loading spinner", "quality": 0.1}
+</example>
+</examples>"""
 
 
 def _classify_frame_batch(frames: list[dict]) -> list[dict]:
@@ -466,6 +503,188 @@ def _merge_into_scenes(
 
 
 # ---------------------------------------------------------------------------
+# Smart compression passes (run after merging, before returning AlignmentMap)
+# ---------------------------------------------------------------------------
+
+
+def _compress_static_scenes(
+    scenes: list[SceneToken], max_static_ms: int = 2500,
+) -> list[SceneToken]:
+    """Trim long static scenes to keep only the tail (full-text state).
+
+    Typewriter text animations create long static scenes where the only change
+    is more text appearing. We keep the last max_static_ms where text is fully
+    rendered, trimming the slow buildup.
+    """
+    result = []
+    for s in scenes:
+        if s.content_type == "static" and s.duration_ms > max_static_ms:
+            trimmed = SceneToken(
+                scene_id=s.scene_id,
+                start_ms=s.end_ms - max_static_ms,
+                end_ms=s.end_ms,
+                content_type=s.content_type,
+                description=s.description,
+                quality_score=s.quality_score,
+                frame_indices=s.frame_indices,
+            )
+            logger.info(
+                "Compressed static scene %s: %dms → %dms",
+                s.scene_id, s.duration_ms, trimmed.duration_ms,
+            )
+            result.append(trimmed)
+        else:
+            result.append(s)
+    return result
+
+
+def _detect_seam_artifacts(
+    scenes: list[SceneToken], flash_threshold_ms: int = 1200,
+) -> list[SceneToken]:
+    """Remove short low-quality scenes that are likely take-stitching artifacts.
+
+    When two takes are stitched together, there's often a brief flash of the
+    home screen or a loading frame at the seam. These are short (< 1.2s),
+    low quality, and sandwiched between longer content scenes.
+    """
+    if len(scenes) < 3:
+        return scenes
+
+    result = []
+    for i, s in enumerate(scenes):
+        is_short = s.duration_ms < flash_threshold_ms
+        is_low_quality = s.quality_score < 0.4
+        is_artifact_type = s.content_type in ("transition", "loading")
+
+        # Check if sandwiched between two longer scenes
+        has_neighbors = (i > 0 and i < len(scenes) - 1)
+        neighbors_longer = False
+        if has_neighbors:
+            prev_long = scenes[i - 1].duration_ms > flash_threshold_ms
+            next_long = scenes[i + 1].duration_ms > flash_threshold_ms
+            neighbors_longer = prev_long and next_long
+
+        if is_short and (is_low_quality or is_artifact_type) and neighbors_longer:
+            logger.info(
+                "Removing seam artifact %s: %dms %s (quality=%.1f)",
+                s.scene_id, s.duration_ms, s.content_type, s.quality_score,
+            )
+            continue
+
+        result.append(s)
+
+    # Re-number scene IDs
+    for i, s in enumerate(result):
+        s.scene_id = f"sc_{i + 1:03d}"
+
+    return result
+
+
+def _compress_repetitive_ui(
+    scenes: list[SceneToken],
+    max_repetitive_ms: int = 4000,
+    min_group_size: int = 3,
+) -> list[SceneToken]:
+    """Compress consecutive interaction scenes with similar descriptions.
+
+    Wallet connection flows, modal sequences, and multi-step dialogs often
+    produce 4-6 consecutive interaction scenes that are nearly identical.
+    Keep the first and last of each group, trim total duration to max_repetitive_ms.
+    """
+    def _word_overlap(a: str, b: str) -> float:
+        """Simple word-overlap similarity between two descriptions."""
+        words_a = set(a.lower().split())
+        words_b = set(b.lower().split())
+        if not words_a or not words_b:
+            return 0.0
+        intersection = words_a & words_b
+        union = words_a | words_b
+        return len(intersection) / len(union) if union else 0.0
+
+    result = []
+    i = 0
+    while i < len(scenes):
+        s = scenes[i]
+        if s.content_type != "interaction":
+            result.append(s)
+            i += 1
+            continue
+
+        # Find run of consecutive interaction scenes
+        group = [s]
+        j = i + 1
+        while j < len(scenes) and scenes[j].content_type == "interaction":
+            group.append(scenes[j])
+            j += 1
+
+        if len(group) < min_group_size:
+            result.extend(group)
+            i = j
+            continue
+
+        # Check if descriptions are similar (repetitive UI flow)
+        similarities = []
+        for k in range(1, len(group)):
+            similarities.append(_word_overlap(group[0].description, group[k].description))
+        avg_sim = sum(similarities) / len(similarities) if similarities else 0
+
+        if avg_sim < 0.3:
+            # Not actually repetitive — keep all
+            result.extend(group)
+            i = j
+            continue
+
+        # Compress: keep first and last, trim durations
+        total_ms = sum(g.duration_ms for g in group)
+        if total_ms <= max_repetitive_ms:
+            result.extend(group)
+            i = j
+            continue
+
+        first = group[0]
+        last = group[-1]
+        # Split budget: 40% first, 60% last (entry context + completion state)
+        first_budget = int(max_repetitive_ms * 0.4)
+        last_budget = max_repetitive_ms - first_budget
+
+        if first.duration_ms > first_budget:
+            first = SceneToken(
+                scene_id=first.scene_id,
+                start_ms=first.start_ms,
+                end_ms=first.start_ms + first_budget,
+                content_type=first.content_type,
+                description=first.description,
+                quality_score=first.quality_score,
+                frame_indices=first.frame_indices,
+            )
+        if last.duration_ms > last_budget:
+            last = SceneToken(
+                scene_id=last.scene_id,
+                start_ms=last.end_ms - last_budget,
+                end_ms=last.end_ms,
+                content_type=last.content_type,
+                description=last.description,
+                quality_score=last.quality_score,
+                frame_indices=last.frame_indices,
+            )
+
+        logger.info(
+            "Compressed %d repetitive UI scenes (%dms → %dms): %s...%s",
+            len(group), total_ms, first.duration_ms + last.duration_ms,
+            first.description[:30], last.description[:30],
+        )
+        result.append(first)
+        result.append(last)
+        i = j
+
+    # Re-number scene IDs
+    for idx, s in enumerate(result):
+        s.scene_id = f"sc_{idx + 1:03d}"
+
+    return result
+
+
+# ---------------------------------------------------------------------------
 # Main analysis function
 # ---------------------------------------------------------------------------
 
@@ -510,6 +729,17 @@ def analyze_video(video_path: str, interval_ms: int = 500) -> AlignmentMap:
     # Merge into scenes
     scenes = _merge_into_scenes(all_classifications, frames, interval_ms, duration_ms)
 
+    # Smart compression passes
+    pre_count = len(scenes)
+    scenes = _compress_static_scenes(scenes)
+    scenes = _detect_seam_artifacts(scenes)
+    scenes = _compress_repetitive_ui(scenes)
+    if len(scenes) != pre_count:
+        logger.info(
+            "Smart compression: %d scenes → %d scenes",
+            pre_count, len(scenes),
+        )
+
     alignment_map = AlignmentMap(
         video_path=video_path,
         duration_ms=duration_ms,
@@ -532,38 +762,53 @@ async def async_analyze_video(video_path: str, interval_ms: int = 500) -> Alignm
 # Intent-to-EditOps translation (Sonnet)
 # ---------------------------------------------------------------------------
 
-_EDIT_INTENT_SYSTEM = """You are a video editor AI. You receive a scene-by-scene breakdown of a screen recording
-and a natural language editing instruction from the user.
+_EDIT_INTENT_SYSTEM = """You are a video editor AI that translates natural language editing instructions
+into structured edit operations against a scene-by-scene breakdown.
 
-Your job: translate the instruction into a list of structured edit operations.
+<available_operations>
+<op name="DELETE_SEGMENT">
+Remove scenes entirely. Use for loading screens, errors, dead time.
+Example: {"op_type": "DELETE_SEGMENT", "target_scenes": ["sc_003", "sc_004"], "params": {}}
+</op>
+<op name="TRIM">
+Trim milliseconds from the start/end of a scene. Use for cutting partial dead time.
+Example: {"op_type": "TRIM", "target_scenes": ["sc_002"], "params": {"trim_start_ms": 500, "trim_end_ms": 0}}
+</op>
+<op name="REORDER">
+Move scenes to a new position (0-indexed). Use for rearranging flow.
+Example: {"op_type": "REORDER", "target_scenes": ["sc_007"], "params": {"new_position": 2}}
+</op>
+<op name="ADD_NARRATION">
+Add text overlay on a scene. Use for explanatory captions.
+Example: {"op_type": "ADD_NARRATION", "target_scenes": ["sc_001"], "params": {"text": "Welcome to the app", "position": "overlay"}}
+</op>
+</available_operations>
 
-Available operations:
-- DELETE_SEGMENT: Remove scenes. Use for loading screens, errors, dead time.
-  {"op_type": "DELETE_SEGMENT", "target_scenes": ["sc_003", "sc_004"], "params": {}}
+<rules>
+- Delete ALL loading scenes unless the user specifically says to keep them.
+- Static scenes have already been auto-trimmed to 2.5s max. Do NOT trim them further
+  unless the user explicitly asks — they need at least 2s to be readable.
+- Short seam artifacts and repetitive UI sequences have already been auto-compressed.
+- Keep interaction and animation scenes — these are the interesting parts.
+- Preserve chronological order unless explicitly asked to reorder.
+- If the video still feels too long, prefer deleting entire scenes over trimming partial seconds.
+- Add narration to key moments when the user asks for captions or narration.
+</rules>
 
-- TRIM: Trim milliseconds from the start/end of a scene. Use for cutting partial dead time.
-  {"op_type": "TRIM", "target_scenes": ["sc_002"], "params": {"trim_start_ms": 500, "trim_end_ms": 0}}
-
-- REORDER: Move scenes to a new position (0-indexed). Use for rearranging flow.
-  {"op_type": "REORDER", "target_scenes": ["sc_007"], "params": {"new_position": 2}}
-
-- ADD_NARRATION: Add text overlay on a scene. Use for explanatory captions.
-  {"op_type": "ADD_NARRATION", "target_scenes": ["sc_001"], "params": {"text": "Welcome to the app", "position": "overlay"}}
-
-- INSERT_PAUSE: Add a pause after a scene (not yet implemented, use TRIM to extend instead).
-
-Rules:
-1. Delete ALL loading scenes unless the user specifically says to keep them.
-2. Trim static scenes longer than 3s down to 2-3s unless they're important context.
-3. Keep interaction and animation scenes — these are the interesting parts.
-4. Add narration to key moments if the user asks for it.
-5. Preserve chronological order unless explicitly asked to reorder.
-
+<output_format>
 Return ONLY a JSON object:
-{
-  "ops": [list of EditOp objects],
-  "rationale": "Brief explanation of what you did and why"
-}"""
+{"ops": [list of EditOp objects], "rationale": "Brief explanation of what you did and why"}
+</output_format>
+
+<example>
+User says: "Remove loading screens and add narration to the wallet section"
+Scene breakdown shows sc_003 is loading, sc_007 is wallet interaction.
+Response:
+{"ops": [
+  {"op_type": "DELETE_SEGMENT", "target_scenes": ["sc_003"], "params": {}},
+  {"op_type": "ADD_NARRATION", "target_scenes": ["sc_007"], "params": {"text": "Connect your wallet to get started", "position": "overlay"}}
+], "rationale": "Removed loading screen and added wallet narration per user request"}
+</example>"""
 
 
 def translate_intent(alignment_map: AlignmentMap, intent: str) -> EditPlan:

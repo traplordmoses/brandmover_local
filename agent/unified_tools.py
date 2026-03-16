@@ -1120,6 +1120,13 @@ UNIFIED_TOOL_DEFINITIONS = _BASE_TOOL_DEFINITIONS + [
                     "type": "boolean",
                     "description": "Apply phone mockup + gradient. Default true.",
                 },
+                "auto_review": {
+                    "type": "boolean",
+                    "description": (
+                        "Automatically review the output and re-edit if score < 9/10. "
+                        "Appends reviewer feedback to intent and retries once. Default true."
+                    ),
+                },
             },
             "required": ["video_path", "alignment_map", "intent"],
         },
@@ -2691,24 +2698,94 @@ async def _handle_edit_by_intent(
     input_dict: dict, tracker: ResourceTracker, user_id: int | None = None,
     tool_context: dict | None = None,
 ) -> str:
-    """Handle edit_by_intent tool call."""
+    """Handle edit_by_intent tool call with auto review-then-re-edit loop.
+
+    If auto_review is true (default), the handler will:
+    1. Execute the edit
+    2. Review the output video
+    3. If score < 9, re-edit with review feedback appended to intent
+    4. Max 1 retry to avoid infinite loops
+    """
     from agent.scene_analysis import AlignmentMap, async_execute_edit
+    from agent.video_styler import async_review_video
 
     video_path = input_dict.get("video_path", "")
     alignment_map_dict = input_dict.get("alignment_map", {})
     intent = input_dict.get("intent", "")
     do_style = input_dict.get("apply_style", True)
+    auto_review = input_dict.get("auto_review", True)
 
     if not video_path or not alignment_map_dict or not intent:
         return json.dumps({"error": "video_path, alignment_map, and intent are all required"})
 
     try:
         alignment_map = AlignmentMap.from_dict(alignment_map_dict)
+
+        # First edit pass
         result = await async_execute_edit(
             video_path, alignment_map, intent,
             apply_style=do_style,
         )
-        return json.dumps(result)
+
+        if not auto_review or result.get("error") or not result.get("output_path"):
+            return json.dumps(result)
+
+        # Auto-review the output
+        output_path = result["output_path"]
+        tracker.log_api("auto_review_video")
+        report = await async_review_video(output_path)
+        result["review"] = report
+
+        score = report.get("score", 0)
+        if score >= 9 or report.get("pass", False):
+            logger.info("Auto-review passed: score=%s", score)
+            result["auto_review_status"] = "passed"
+            return json.dumps(result)
+
+        # Score < 9 — build enhanced intent from review feedback and retry
+        issues = report.get("issues", [])
+        suggestions = report.get("suggestions", [])
+        feedback_parts = issues + suggestions
+        if not feedback_parts:
+            result["auto_review_status"] = "low_score_but_no_actionable_feedback"
+            return json.dumps(result)
+
+        enhanced_intent = (
+            f"{intent}\n\n"
+            f"ALSO FIX THESE ISSUES FROM SELF-REVIEW (score was {score}/10):\n"
+            f"{'; '.join(feedback_parts)}"
+        )
+        logger.info(
+            "Auto-review scored %s/10 — retrying with enhanced intent: %s",
+            score, enhanced_intent[:200],
+        )
+
+        # Re-edit with enhanced intent
+        tracker.log_api("edit_by_intent_retry")
+        result2 = await async_execute_edit(
+            video_path, alignment_map, enhanced_intent,
+            apply_style=do_style,
+        )
+
+        if result2.get("error") or not result2.get("output_path"):
+            result["retry_error"] = result2.get("error", "retry produced no output")
+            result["auto_review_status"] = "retry_failed"
+            return json.dumps(result)
+
+        # Review the retry output
+        report2 = await async_review_video(result2["output_path"])
+        result2["review"] = report2
+        result2["auto_review_status"] = "retried"
+        result2["original_score"] = score
+        result2["retry_score"] = report2.get("score", 0)
+
+        logger.info(
+            "Auto-review retry: %s/10 → %s/10",
+            score, report2.get("score", 0),
+        )
+
+        return json.dumps(result2)
+
     except Exception as e:
         return json.dumps({"error": str(e)})
 
