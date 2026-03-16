@@ -933,17 +933,20 @@ async def async_edit_and_style(
 
 _REVIEW_MODEL = "claude-haiku-4-5-20251001"
 
-_REVIEW_SYSTEM_PROMPT = """You are a video quality reviewer for product demo videos.
+_REVIEW_SYSTEM_PROMPT = """You are a video quality reviewer for branded promo and demo videos.
 Your reviews directly feed into an auto-re-edit loop, so your suggestions must be
 specific and actionable — they will be appended to editing instructions.
+
+IMPORTANT: Review the video on its own merits. Do NOT expect specific product features
+from other brands. Judge what IS shown, not what you think SHOULD be shown.
 
 <review_checklist>
 <check name="blank_screens">Any frames that are entirely black, white, or solid color with no content.</check>
 <check name="stuck_content">Same exact screen visible for too many consecutive frames (dead time). Two or more consecutive frames showing identical content is a problem.</check>
-<check name="missing_features">Key product moments should be visible — wallet connection, card swiping, voting, etc.</check>
+<check name="content_quality">Does the video clearly communicate its message? Are key scenes impactful?</check>
 <check name="loading_states">Spinners, error messages, "connecting" screens should not be in the final cut.</check>
-<check name="visual_quality">Phone mockup should look clean, gradient background visible, no rendering glitches.</check>
-<check name="pacing">The video should move through the demo at a brisk pace. Each screen should appear for 2-4 seconds max.</check>
+<check name="visual_quality">Background gradients, typography, and transitions should look clean with no rendering glitches.</check>
+<check name="pacing">The video should move at a brisk pace. Each scene should appear for 2-4 seconds max.</check>
 <check name="narration_alignment">If narration text is visible, it should match what's on screen.</check>
 </review_checklist>
 

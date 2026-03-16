@@ -1,6 +1,6 @@
 import React from 'react';
 import { AbsoluteFill } from 'remotion';
-import { AnimatedText } from '../components/AnimatedText';
+import { KineticText } from '../components/KineticText';
 import { BrandTheme } from '../lib/types';
 import { renderBackground } from '../lib/backgrounds';
 
@@ -37,12 +37,14 @@ export const TextOnlyScene: React.FC<Props> = ({
           padding: 60,
         }}
       >
-        <AnimatedText
+        <KineticText
           text={text}
           fontSize={fontSize}
           color={brand.textColor}
           fontWeight={700}
           delay={0}
+          wordStagger={3}
+          entrance="rise"
           style={{ textAlign: 'center', maxWidth: 900 }}
         />
       </AbsoluteFill>

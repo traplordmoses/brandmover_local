@@ -1,6 +1,7 @@
 import React from 'react';
 import { AbsoluteFill } from 'remotion';
 import { AnimatedText } from '../components/AnimatedText';
+import { KineticText } from '../components/KineticText';
 import { GradientBg } from '../components/GradientBg';
 import { BrandTheme } from '../lib/types';
 
@@ -34,12 +35,14 @@ export const TitleScene: React.FC<Props> = ({ label, headline, subheadline, disc
             style={{ letterSpacing: 6, textTransform: 'uppercase' }}
           />
         )}
-        <AnimatedText
+        <KineticText
           text={headline}
           fontSize={80}
           color={brand.textColor || '#ffffff'}
           fontWeight={800}
           delay={label ? 4 : 0}
+          wordStagger={3}
+          entrance="rise"
         />
         {subheadline && (
           <AnimatedText
@@ -47,7 +50,7 @@ export const TitleScene: React.FC<Props> = ({ label, headline, subheadline, disc
             fontSize={32}
             color="rgba(255,255,255,0.6)"
             fontWeight={400}
-            delay={label ? 10 : 4}
+            delay={label ? 12 : 6}
           />
         )}
         {disclaimer && (
@@ -63,7 +66,7 @@ export const TitleScene: React.FC<Props> = ({ label, headline, subheadline, disc
               fontSize={14}
               color="rgba(255,255,255,0.3)"
               fontWeight={400}
-              delay={label ? 24 : 16}
+              delay={label ? 20 : 14}
             />
           </div>
         )}
