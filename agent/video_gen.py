@@ -60,6 +60,8 @@ and brand config, create a Storyboard JSON for a branded promo/explainer video.
 
 <rules>
 - Title scene first, CTA scene last — always
+- Title scene MUST have a label (e.g. "INTRODUCING", "MEET", "WELCOME TO")
+- CTA scene MUST have buttonText AND url fields — always include a call-to-action button
 - Keep ALL text SHORT — this is video, not a document:
   * tagline lines: max 5 words each
   * text_only: max 6 words
@@ -71,17 +73,25 @@ and brand config, create a Storyboard JSON for a branded promo/explainer video.
 - For medium videos (30-45s): 10-14 scenes, mix scene types
 - For long videos (45-90s): 15-25 scenes, use varied scene types including
   stat, icon_grid, data_viz, stock_footage, icon_reveal for visual richness
-- Don't repeat the same scene type back-to-back
-- NEVER repeat the same scene type twice in a row
-- EVERY video MUST include at least 2 of: stat, chat_demo, feature_count, steps, icon_grid
-  Plain text scenes (tagline, text_only) are boring alone — mix with visual/data scenes
-- Short videos especially: skip text_only, prefer stat/feature_count/chat_demo for impact
+
+CRITICAL SCENE VARIETY RULES:
+- NEVER use more than 1 tagline scene per video
+- NEVER use more than 1 text_only scene per video
+- NEVER repeat the same scene type back-to-back
+- Max 2 text-only scenes (tagline + text_only combined) per video. The rest MUST be visual.
+- EVERY video MUST include at least 2 of: feature_count, stat, chat_demo, steps
+  These are the high-impact visual scenes that make videos look premium.
+- The ideal flow for a 20s video is:
+  title → tagline → feature_count → chat_demo OR steps → feature_list → stat → cta
+  Follow this pattern. Study the examples below carefully.
+
 - stat scenes: use animate 'countUp' for large numbers
 - If the brief describes a visual (bracket, grid, coins), use data_viz or icon_grid
 - narration field: 1-2 sentences of what a voiceover would say (helps pacing)
 - For dark-themed brands: use background 'gradient'
 - For light-themed brands: use background 'clean' or 'dots'
 - Total duration should match the brief. Default ~20 seconds if unspecified.
+- durationFrames per scene: 50-90 frames (1.5-3 seconds). Keep it snappy.
 </rules>
 
 <scene_types>
@@ -743,6 +753,47 @@ def generate_scene_json(
                 words = step.get("detail", "").split()
                 if len(words) > 8:
                     step["detail"] = " ".join(words[:7])
+
+    # Enforce scene diversity — deduplicate consecutive same-type scenes
+    deduped = []
+    for scene in scene_data["scenes"]:
+        if deduped and scene.get("type") == deduped[-1].get("type"):
+            logger.warning("Removing consecutive duplicate scene type: %s", scene.get("type"))
+            continue
+        deduped.append(scene)
+    scene_data["scenes"] = deduped
+
+    # Enforce: title must have label, CTA must have button
+    for scene in scene_data["scenes"]:
+        if scene.get("type") == "title":
+            scene.setdefault("label", "INTRODUCING")
+        if scene.get("type") == "cta":
+            scene.setdefault("buttonText", "Learn More")
+            scene.setdefault("url", brand_theme.get("name", "").lower().replace(" ", "") + ".com")
+
+    # Cap tagline/text_only to max 1 each — convert extras to feature_count
+    tagline_count = 0
+    text_only_count = 0
+    for scene in scene_data["scenes"]:
+        if scene.get("type") == "tagline":
+            tagline_count += 1
+            if tagline_count > 1:
+                # Convert to feature_count as a visual alternative
+                scene["type"] = "feature_count"
+                lines = scene.pop("lines", [])
+                scene["count"] = len(lines)
+                scene["subtitle"] = lines[0].get("text", "features") if lines else "features"
+                scene.pop("supertext", None)
+                logger.info("Converted excess tagline to feature_count")
+        elif scene.get("type") == "text_only":
+            text_only_count += 1
+            if text_only_count > 1:
+                scene["type"] = "stat"
+                scene["value"] = "100%"
+                scene["suffix"] = scene.pop("text", "committed")
+                scene["animate"] = "fadeIn"
+                scene.pop("size", None)
+                logger.info("Converted excess text_only to stat")
 
     # Calculate duration from scenes
     total_frames = sum(s.get("durationFrames", 90) for s in scene_data["scenes"])
