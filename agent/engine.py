@@ -104,6 +104,23 @@ def _sanitize_draft(draft: dict) -> dict:
             cleaned = re.sub(r"  +", " ", cleaned).strip()
             draft[field] = cleaned
 
+    # ── Enforce title/subtitle word limits ──
+    # Title: max 4 words (prevent overflow in compositor)
+    title = draft.get("title")
+    if title and isinstance(title, str):
+        words = title.strip().split()
+        if len(words) > 5:
+            draft["title"] = " ".join(words[:4])
+            logger.warning("Truncated title from %d to 4 words: %r → %r", len(words), title, draft["title"])
+
+    # Subtitle: max 10 words
+    subtitle = draft.get("subtitle")
+    if subtitle and isinstance(subtitle, str):
+        words = subtitle.strip().split()
+        if len(words) > 12:
+            draft["subtitle"] = " ".join(words[:10])
+            logger.warning("Truncated subtitle from %d to 10 words: %r → %r", len(words), subtitle, draft["subtitle"])
+
     return draft
 
 

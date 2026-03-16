@@ -216,6 +216,46 @@ def _fit_font_to_width(text: str, style: str, start_size: int, max_w: int, track
     return _load_font(style, 28)
 
 
+def _split_title(title: str, style: str, start_size: int, max_w: int,
+                 tracking: int = 1, min_size: int = 36) -> list[tuple[str, "ImageFont.FreeTypeFont"]]:
+    """Split title into lines that fit within max_w at a reasonable font size.
+
+    Returns list of (text, font) tuples. Prefers single line if it fits at >= min_size,
+    otherwise splits at the midpoint word boundary and fits each line.
+    """
+    if not title:
+        return []
+
+    # Try single line first
+    font = _fit_font_to_width(title, style, start_size, max_w, tracking)
+    bb = font.getbbox(title)
+    font_size = font.size if hasattr(font, 'size') else start_size
+    total_w = (bb[2] - bb[0]) + (len(title) * tracking)
+    if total_w <= max_w and font_size >= min_size:
+        return [(title, font)]
+
+    # Split at midpoint word boundary
+    words = title.split()
+    if len(words) < 2:
+        return [(title, font)]
+
+    mid = len(words) // 2
+    line1 = " ".join(words[:mid])
+    line2 = " ".join(words[mid:])
+
+    # Fit each line — use smaller of the two needed sizes for consistency
+    f1 = _fit_font_to_width(line1, style, start_size, max_w, tracking)
+    f2 = _fit_font_to_width(line2, style, start_size, max_w, tracking)
+
+    # Use the smaller font for both lines so they match
+    s1 = f1.size if hasattr(f1, 'size') else start_size
+    s2 = f2.size if hasattr(f2, 'size') else start_size
+    use_size = min(s1, s2)
+    shared_font = _load_font(style, use_size)
+
+    return [(line1, shared_font), (line2, shared_font)]
+
+
 # ---------------------------------------------------------------------------
 # Logo — load brand logo PNG
 # ---------------------------------------------------------------------------
@@ -496,17 +536,31 @@ def _render_split(
     text_x    = ix + iw + 48
     text_max_w = cw - text_x - 44
     t  = title.upper() if profile.title_uppercase else title
-    tf = _fit_font_to_width(t, "black", profile.title_size, text_max_w) if t \
-         else _load_font("black", profile.title_size)
     sf = _load_font("semibold", profile.subtitle_size)
 
-    bh     = _block_h(t, subtitle, profile, text_max_w)
+    # Split title into lines that fit — prevents overflow
+    title_lines = _split_title(t, "black", profile.title_size, text_max_w) if t else []
+
+    # Calculate block height for vertical centering
+    bh = 0
+    for _, tf in title_lines:
+        bb = tf.getbbox("Xg")
+        bh += (bb[3] - bb[1]) + 12
+    if title_lines:
+        bh += 18  # gap before subtitle
+    if subtitle:
+        for line in _wrap(subtitle, sf, text_max_w):
+            bb = sf.getbbox(line)
+            bh += (bb[3] - bb[1]) + 8
+
     text_y = iy + (ih - bh) // 2
 
-    if t:
-        bb = tf.getbbox(t)
-        _draw_tracked(draw, (text_x, text_y - bb[1]), t, tf, profile.title_color, tracking=1)
-        text_y += (bb[3] - bb[1]) + 30
+    for line_text, tf in title_lines:
+        bb = tf.getbbox(line_text)
+        _draw_tracked(draw, (text_x, text_y - bb[1]), line_text, tf, profile.title_color, tracking=1)
+        text_y += (bb[3] - bb[1]) + 12
+    if title_lines:
+        text_y += 18
 
     if subtitle:
         for line in _wrap(subtitle, sf, text_max_w):
@@ -542,17 +596,29 @@ def _render_full_bleed(
     text_x    = 56
     text_max_w = int(cw * 0.52)
     t  = title.upper() if profile.title_uppercase else title
-    tf = _fit_font_to_width(t, "black", profile.title_size, text_max_w) if t \
-         else _load_font("black", profile.title_size)
     sf = _load_font("semibold", profile.subtitle_size)
 
-    bh     = _block_h(t, subtitle, profile, text_max_w)
+    title_lines = _split_title(t, "black", profile.title_size, text_max_w) if t else []
+
+    bh = 0
+    for _, tf in title_lines:
+        bb = tf.getbbox("Xg")
+        bh += (bb[3] - bb[1]) + 12
+    if title_lines:
+        bh += 18
+    if subtitle:
+        for line in _wrap(subtitle, sf, text_max_w):
+            bb = sf.getbbox(line)
+            bh += (bb[3] - bb[1]) + 8
+
     text_y = (ch - bh) // 2
 
-    if t:
-        bb = tf.getbbox(t)
-        _draw_tracked(draw, (text_x, text_y - bb[1]), t, tf, profile.title_color, tracking=1)
-        text_y += (bb[3] - bb[1]) + 30
+    for line_text, tf in title_lines:
+        bb = tf.getbbox(line_text)
+        _draw_tracked(draw, (text_x, text_y - bb[1]), line_text, tf, profile.title_color, tracking=1)
+        text_y += (bb[3] - bb[1]) + 12
+    if title_lines:
+        text_y += 18
 
     if subtitle:
         for line in _wrap(subtitle, sf, text_max_w):
@@ -584,15 +650,17 @@ def _render_centered(
     text_y    = iy + ih + 28
     text_max_w = cw - 120
     t  = title.upper() if profile.title_uppercase else title
-    tf = _fit_font_to_width(t, "black", profile.title_size, text_max_w) if t \
-         else _load_font("black", profile.title_size)
     sf = _load_font("semibold", profile.subtitle_size)
 
-    if t:
-        bb = tf.getbbox(t)
-        lw = bb[2] - bb[0]
-        _draw_tracked(draw, ((cw - lw) // 2, text_y - bb[1]), t, tf, profile.title_color, tracking=1)
-        text_y += (bb[3] - bb[1]) + 24
+    title_lines = _split_title(t, "black", profile.title_size, text_max_w) if t else []
+
+    for line_text, tf in title_lines:
+        bb = tf.getbbox(line_text)
+        lw = (bb[2] - bb[0]) + (len(line_text) * 1)
+        _draw_tracked(draw, ((cw - lw) // 2, text_y - bb[1]), line_text, tf, profile.title_color, tracking=1)
+        text_y += (bb[3] - bb[1]) + 12
+    if title_lines:
+        text_y += 12
 
     if subtitle:
         for line in _wrap(subtitle, sf, text_max_w):

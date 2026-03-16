@@ -184,10 +184,11 @@ Follow these steps in order. Use your tools at each step.
    - alt_text: Accessible image description
    - image_prompt: The prompt used for image generation
    - content_type: The content type (e.g. "announcement")
-   - title: UPPERCASE HEADLINE for the template
-   - subtitle: Brief explanation for the template{platform_field}
+   - title: UPPERCASE HEADLINE for the template (MAX 4 WORDS — e.g. "INTRODUCING FOID", "SWAP LIVE NOW", "WEEKLY ALPHA DROP")
+   - subtitle: Brief explanation for the template (MAX 8 WORDS — e.g. "The future of decentralized identity", "Your gateway to on-chain culture"){platform_field}
 
-The `title` and `subtitle` fields are used for the branded post template (text overlay on the image card). {platform_block}
+The `title` and `subtitle` fields are used for the branded post template (text overlay on the image card).
+CRITICAL: Title must be 1-4 words. Subtitle must be 1-8 words. Longer text WILL overflow and look broken. Shorter is always better. {platform_block}
 **Do NOT include hashtags in ANY field.** Zero hashtags, zero exceptions. The system will strip them automatically if you add them.
 {image_mode_block}
 CONTENT_TYPE values (pick the best fit for the request):
