@@ -14,13 +14,14 @@ from pathlib import Path
 import httpx
 
 from agent.paths import PROJECT_ROOT
+from config import settings
 
 logger = logging.getLogger(__name__)
 
 OUTPUT_DIR = PROJECT_ROOT / "state" / "outputs"
 
-ELEVENLABS_API_KEY = os.getenv("ELEVENLABS_API_KEY", "")
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
+ELEVENLABS_API_KEY = settings.ELEVENLABS_API_KEY
+OPENAI_API_KEY = settings.OPENAI_API_KEY
 
 
 def _collect_narrations(scenes: list[dict]) -> list[dict]:
@@ -47,13 +48,14 @@ def _collect_narrations(scenes: list[dict]) -> list[dict]:
 
 async def generate_voiceover_elevenlabs(
     text: str,
-    voice_id: str = "21m00Tcm4TlvDq8ikWAM",  # Rachel default
+    voice_id: str = "",
     output_path: str | None = None,
 ) -> str:
     """Generate TTS audio via ElevenLabs API."""
     if not ELEVENLABS_API_KEY:
         raise RuntimeError("ELEVENLABS_API_KEY not set")
 
+    voice_id = voice_id or settings.ELEVENLABS_VOICE_ID
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     if not output_path:
         output_path = str(OUTPUT_DIR / f"vo_{uuid.uuid4().hex[:8]}.mp3")
@@ -135,7 +137,7 @@ async def generate_voiceover(
     try:
         if ELEVENLABS_API_KEY:
             return await generate_voiceover_elevenlabs(
-                full_text, voice_id or "21m00Tcm4TlvDq8ikWAM"
+                full_text, voice_id or settings.ELEVENLABS_VOICE_ID
             )
     except Exception as e:
         logger.warning("ElevenLabs TTS failed, trying OpenAI: %s", e)

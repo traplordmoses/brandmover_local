@@ -1,9 +1,10 @@
 """
-Channel registry — manages available publishing channels.
+Channel registry — manages available publishing channels and multi-channel dispatch.
 """
 
+import asyncio
 import logging
-from agent.channels.base import Channel
+from agent.channels.base import Channel, MessageEnvelope, PublishResult
 
 logger = logging.getLogger(__name__)
 
@@ -38,10 +39,57 @@ def get_configured_channels() -> list[Channel]:
     return [ch for ch in _channels.values() if ch.is_configured()]
 
 
+async def publish_to_all(
+    envelope: MessageEnvelope,
+    channels: list[str] | None = None,
+) -> list[PublishResult]:
+    """Publish to all configured channels (or specific ones).
+
+    Args:
+        envelope: The message to publish.
+        channels: Optional list of channel names to publish to.
+                  If None, publishes to all configured channels.
+
+    Returns:
+        List of PublishResult, one per channel attempted.
+    """
+    if channels:
+        targets = [_channels[name] for name in channels if name in _channels and _channels[name].is_configured()]
+    else:
+        targets = get_configured_channels()
+
+    if not targets:
+        logger.warning("No configured channels to publish to")
+        return []
+
+    # Publish to all channels concurrently
+    tasks = [ch.publish(envelope) for ch in targets]
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+
+    publish_results = []
+    for i, result in enumerate(results):
+        if isinstance(result, Exception):
+            logger.error("Channel %s failed: %s", targets[i].name, result)
+            publish_results.append(PublishResult(
+                success=False,
+                platform=targets[i].name,
+                error=str(result),
+            ))
+        else:
+            publish_results.append(result)
+
+    succeeded = sum(1 for r in publish_results if r.success)
+    logger.info("Published to %d/%d channels", succeeded, len(publish_results))
+
+    return publish_results
+
+
 def _auto_register() -> None:
     """Auto-register built-in channels."""
     from agent.channels.twitter import TwitterChannel
+    from agent.channels.discord import DiscordChannel
     register_channel(TwitterChannel())
+    register_channel(DiscordChannel())
 
 
 # Auto-register on import

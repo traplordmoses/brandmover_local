@@ -130,6 +130,11 @@ OPENCLAW_SCRIPTS_DIR: str = os.getenv(
 # calls for simple commands like "yes" or "looks good".
 INTENT_ROUTER_ENABLED: bool = os.getenv("INTENT_ROUTER_ENABLED", "true").lower() in ("true", "1", "yes")
 
+# ── ElevenLabs TTS ──
+# Used for video voiceover. Falls back to OpenAI TTS if not set.
+ELEVENLABS_API_KEY: str = os.getenv("ELEVENLABS_API_KEY", "")
+ELEVENLABS_VOICE_ID: str = os.getenv("ELEVENLABS_VOICE_ID", "21m00Tcm4TlvDq8ikWAM")  # Rachel
+
 # ── Whisper (voice transcription) ──
 # Uses OpenAI's Whisper API to transcribe voice messages into text.
 # Auto-enabled if OPENAI_API_KEY is set.
