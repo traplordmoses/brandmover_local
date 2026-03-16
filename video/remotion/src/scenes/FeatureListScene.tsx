@@ -70,13 +70,13 @@ export const FeatureListScene: React.FC<Props> = ({
           const opacity = interpolate(progress, [0, 1], [0, 1]);
           const translateY = interpolate(progress, [0, 1], [24, 0]);
 
-          const displayText = isCentered ? item.text : `- ${item.text}`;
+          const displayText = isCentered ? item.text : `— ${item.text}`;
 
           return (
             <div
               key={i}
               style={{
-                fontSize: 36,
+                fontSize: items.length > 4 ? 28 : 36,
                 fontWeight: item.accent ? 700 : 500,
                 color: item.accent ? brand.accentColor : brand.textColor,
                 opacity,

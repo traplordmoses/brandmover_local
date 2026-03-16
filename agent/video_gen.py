@@ -60,13 +60,19 @@ and brand config, create a Storyboard JSON for a branded promo/explainer video.
 
 <rules>
 - Title scene first, CTA scene last — always
-- Keep text SHORT: max 8 words per line, max 3 lines per scene
+- Keep ALL text SHORT — this is video, not a document:
+  * tagline lines: max 5 words each
+  * text_only: max 6 words
+  * feature_list items: max 4 words each (just the name, NO descriptions)
+  * steps headings: max 4 words, details: max 6 words
+  * CTA lines: max 4 words each
 - Use the brand's colors and fonts from the config
 - For short videos (15-20s): 5-7 scenes, fast pace (2-3s per scene)
 - For medium videos (30-45s): 8-12 scenes, mix scene types
 - For long videos (45-90s): 12-20 scenes, use varied scene types including
   stat, icon_grid, data_viz, stock_footage, icon_reveal for visual richness
 - Don't repeat the same scene type back-to-back
+- NEVER repeat the same scene type twice in a row
 - stat scenes: use animate 'countUp' for large numbers
 - If the brief describes a visual (bracket, grid, coins), use data_viz or icon_grid
 - narration field: 1-2 sentences of what a voiceover would say (helps pacing)
@@ -591,6 +597,16 @@ def generate_scene_json(
     if theme is None:
         theme = _detect_theme(brand_theme["backgroundColor"])
 
+    # Force appropriate background/text colors for the requested theme.
+    # Brand configs often have mid-tone backgrounds that look terrible in video.
+    # Video needs HIGH CONTRAST: deep darks or clean whites.
+    if theme == "dark":
+        brand_theme["backgroundColor"] = "#0a0f1a"
+        brand_theme["textColor"] = "#ffffff"
+    elif theme == "light":
+        brand_theme["backgroundColor"] = "#f5f5f5"
+        brand_theme["textColor"] = "#1a1a1a"
+
     # Build user message with all hints
     duration_hint = f"Target duration: {duration} seconds" if duration else "Target duration: ~20 seconds"
     format_hint = f"Format: {format} ({width}x{height})"
@@ -664,6 +680,32 @@ def generate_scene_json(
                 "Stripping invalid scene type: %s", scene.get("type")
             )
     scene_data["scenes"] = valid_scenes
+
+    # Truncate text that's too long (safety net for LLM verbosity)
+    for scene in scene_data["scenes"]:
+        stype = scene.get("type")
+        if stype == "feature_list":
+            for item in scene.get("items", []):
+                words = item.get("text", "").split()
+                if len(words) > 5:
+                    item["text"] = " ".join(words[:4])
+        elif stype == "text_only":
+            words = scene.get("text", "").split()
+            if len(words) > 8:
+                scene["text"] = " ".join(words[:7])
+        elif stype == "tagline":
+            for line in scene.get("lines", []):
+                words = line.get("text", "").split()
+                if len(words) > 6:
+                    line["text"] = " ".join(words[:5])
+        elif stype == "steps":
+            for step in scene.get("steps", []):
+                words = step.get("heading", "").split()
+                if len(words) > 5:
+                    step["heading"] = " ".join(words[:4])
+                words = step.get("detail", "").split()
+                if len(words) > 8:
+                    step["detail"] = " ".join(words[:7])
 
     # Calculate duration from scenes
     total_frames = sum(s.get("durationFrames", 90) for s in scene_data["scenes"])
