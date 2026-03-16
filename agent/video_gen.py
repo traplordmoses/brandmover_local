@@ -517,6 +517,16 @@ def _hex_brightness(hex_color: str) -> float:
     return 0.299 * r + 0.587 * g + 0.114 * b
 
 
+def _darken_hex(hex_color: str, factor: float = 0.25) -> str:
+    """Darken a hex color while preserving its hue. factor=0.25 keeps 25% brightness."""
+    hex_color = hex_color.lstrip("#")
+    if len(hex_color) != 6:
+        return "#0a0f1a"
+    r, g, b = int(hex_color[:2], 16), int(hex_color[2:4], 16), int(hex_color[4:6], 16)
+    r, g, b = int(r * factor), int(g * factor), int(b * factor)
+    return f"#{r:02x}{g:02x}{b:02x}"
+
+
 def _brand_config_to_theme() -> dict:
     """Convert BrandConfig to the theme dict expected by Remotion.
 
@@ -582,8 +592,12 @@ def _brand_config_to_theme() -> dict:
 
 
 def _detect_theme(bg_hex: str) -> str:
-    """Detect 'dark' or 'light' theme from background color."""
-    return "dark" if _hex_brightness(bg_hex) < 128 else "light"
+    """Detect 'dark' or 'light' theme from background color.
+
+    Default to dark — most video content looks better on dark backgrounds.
+    Only use light if the brand bg is clearly light (brightness > 200).
+    """
+    return "light" if _hex_brightness(bg_hex) > 200 else "dark"
 
 
 def generate_scene_json(
@@ -611,10 +625,11 @@ def generate_scene_json(
         theme = _detect_theme(brand_theme["backgroundColor"])
 
     # Force appropriate colors for the requested theme.
-    # Brand configs often have mid-tone backgrounds that look terrible in video.
-    # Video needs HIGH CONTRAST: deep darks or clean whites.
+    # Instead of generic black/white, darken/lighten the BRAND's actual color
+    # to preserve the brand's color identity (blue stays blue, green stays green).
     if theme == "dark":
-        brand_theme["backgroundColor"] = "#0a0f1a"
+        # Darken the brand's actual bg to ~25% brightness — cinematic but on-brand
+        brand_theme["backgroundColor"] = _darken_hex(brand_theme["backgroundColor"], 0.25)
         brand_theme["textColor"] = "#ffffff"
         # If primary color has poor contrast on dark bg, force to white
         if _hex_brightness(brand_theme["primaryColor"]) < 180:
