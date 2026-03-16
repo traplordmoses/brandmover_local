@@ -637,6 +637,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             "/unschedule <i>id</i> — Cancel a scheduled post\n"
             "/campaign — List campaigns or show status\n"
             "/campaign_schedule <i>name</i> — Schedule all posts for a campaign\n"
+            "/campaign_preview [<i>name</i>] — Get HTML preview of campaign posts\n"
             "/autostatus — Auto-posting scheduler status\n"
             "/autopause — Pause/resume auto-posting\n"
             "/autoforce <i>slot</i> — Force a specific auto-post slot\n"
@@ -1627,12 +1628,62 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             await update.message.reply_text("Font upload failed. Check logs for details.")
         return
 
+    # Video file handling — save as reference and pass to agent
+    is_video = file_name.lower().endswith((".mp4", ".mov", ".webm", ".avi", ".mkv"))
+    if is_video:
+        try:
+            import tempfile as _tmpmod
+            _fsize = getattr(document, "file_size", None)
+            if isinstance(_fsize, int) and _fsize > 100 * 1024 * 1024:
+                await update.message.reply_text("Video too large (max 100 MB).")
+                return
+            refs_dir = Path(settings.BRAND_FOLDER) / "references"
+            refs_dir.mkdir(parents=True, exist_ok=True)
+            import os as _os
+            safe_name = _os.path.basename(file_name)
+            save_path = refs_dir / safe_name
+            tg_file = await document.get_file()
+            await tg_file.download_to_drive(str(save_path))
+            # Also save to state/outputs for agent tool access
+            outputs_dir = Path(settings.STATE_FOLDER) / "outputs"
+            outputs_dir.mkdir(parents=True, exist_ok=True)
+            import shutil
+            agent_path = outputs_dir / safe_name
+            shutil.copy2(str(save_path), str(agent_path))
+
+            caption = update.message.caption or ""
+            user_id = update.effective_user.id
+
+            await update.message.reply_text(
+                f"Video <b>{_esc(safe_name)}</b> received and saved.\n"
+                f"Path: <code>{_esc(str(agent_path))}</code>\n\n"
+                "I'll use this as a reference. Send me instructions on what to do with it.",
+                parse_mode="HTML",
+            )
+
+            # If there's a caption, treat it as a message with the video context
+            if caption:
+                # Inject the video path into context for the agent
+                context.user_data["last_video_path"] = str(agent_path)
+                # Process the caption as a message — call unified brain directly
+                # (Message.text is read-only in python-telegram-bot v20+)
+                synthetic_text = f"[Video reference uploaded: {agent_path}]\n\n{caption}"
+                transcript.log_user_message(user_id, synthetic_text)
+                if settings.UNIFIED_BRAIN_ENABLED:
+                    await _handle_unified(update, context, synthetic_text, user_id=user_id)
+                else:
+                    await _handle_agent_mode(update, synthetic_text, user_id=user_id)
+        except Exception as e:
+            logger.error("Video upload failed: %s", e)
+            await update.message.reply_text("Video upload failed. Check logs.")
+        return
+
     is_pdf = file_name.lower().endswith(".pdf")
 
     if not is_pdf:
         await update.message.reply_text(
-            "I can accept PDFs, image files, and font files (.ttf/.otf). "
-            "Send a PDF or image to add to your brand."
+            "I can accept PDFs, images, fonts (.ttf/.otf), and videos (.mp4/.mov). "
+            "Send a file to add to your brand references."
         )
         return
 
@@ -4406,6 +4457,59 @@ async def campaign_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         msg = campaigns.format_campaign_list()
         msg += f"\n\nCampaign '{_esc(name)}' not found."
         await update.message.reply_text(msg, parse_mode="HTML")
+
+
+async def campaign_preview_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /campaign_preview [name] — generate an HTML preview of a campaign.
+
+    Usage:
+        /campaign_preview              — preview the first active campaign
+        /campaign_preview <name>       — preview a specific campaign
+    """
+    if not _authorized(update.effective_user.id):
+        return
+
+    from agent import campaign_preview
+
+    text = (update.message.text or "").strip()
+    parts = text.split(maxsplit=1)
+
+    # Find the campaign
+    if len(parts) > 1:
+        name = parts[1].strip()
+    else:
+        # Default to first active campaign
+        active = campaigns.list_campaigns(status_filter="active")
+        if not active:
+            all_c = campaigns.list_campaigns()
+            if all_c:
+                name = all_c[0].get("name", "")
+            else:
+                await update.message.reply_text("No campaigns found.")
+                return
+        else:
+            name = active[0].get("name", "")
+
+    campaign = campaigns.get_campaign(name)
+    if not campaign:
+        await update.message.reply_text(f"Campaign '{_esc(name)}' not found.", parse_mode="HTML")
+        return
+
+    await update.message.chat.send_action("typing")
+
+    path = campaign_preview.generate_preview_html(name)
+    if not path:
+        await update.message.reply_text("Failed to generate preview.")
+        return
+
+    # Send as HTML file
+    with open(path, "rb") as f:
+        await update.message.reply_document(
+            document=f,
+            filename=f"{name}_preview.html",
+            caption=f"Campaign preview for <b>{_esc(name)}</b> — open in your browser",
+            parse_mode="HTML",
+        )
 
 
 async def campaign_schedule_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

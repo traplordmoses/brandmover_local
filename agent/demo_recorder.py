@@ -43,10 +43,10 @@ class DemoStep:
 @dataclass
 class DemoScript:
     name: str
-    url: str             # Base URL (https://foidfun.vercel.app)
+    url: str             # Base URL for the site to record
     steps: list[DemoStep]
-    viewport_width: int = 1280
-    viewport_height: int = 720
+    viewport_width: int = 390       # mobile default — best for social video
+    viewport_height: int = 844      # iPhone 14/15 viewport
     mode: str = "video"  # "video" | "screenshot"
 
 
@@ -351,28 +351,19 @@ async def record_demo(
     if script.mode == "video":
         result = await asyncio.to_thread(_run_recording_sync, script, output_dir)
 
-        # Post-process with ffmpeg narration overlay if video succeeded
+        # Convert WebM → MP4 (no narration text — let video_styler handle overlays
+        # to avoid double captions when both narrator and styler add text)
         if result.video_path and not result.error:
             try:
-                from agent.demo_narrator import add_narration_overlay, build_narration_timeline
-                timeline = build_narration_timeline(script.steps)
-                if timeline:
-                    mp4_path = str(DEMOS_DIR / f"{run_name}.mp4")
-                    mp4_path = await asyncio.to_thread(
-                        add_narration_overlay, result.video_path, mp4_path, timeline
-                    )
-                    result.video_path = mp4_path
-                    logger.info("Narrated MP4: %s", mp4_path)
-                else:
-                    # No narration — just convert to MP4
-                    from agent.demo_narrator import convert_webm_to_mp4
-                    mp4_path = str(DEMOS_DIR / f"{run_name}.mp4")
-                    mp4_path = await asyncio.to_thread(
-                        convert_webm_to_mp4, result.video_path, mp4_path
-                    )
-                    result.video_path = mp4_path
+                from agent.demo_narrator import convert_webm_to_mp4
+                mp4_path = str(DEMOS_DIR / f"{run_name}.mp4")
+                mp4_path = await asyncio.to_thread(
+                    convert_webm_to_mp4, result.video_path, mp4_path
+                )
+                result.video_path = mp4_path
+                logger.info("Converted to MP4: %s", mp4_path)
             except Exception as e:
-                logger.warning("ffmpeg post-processing failed, keeping raw WebM: %s", e)
+                logger.warning("ffmpeg conversion failed, keeping raw WebM: %s", e)
 
         # Fallback to screenshot mode if video failed
         if result.error:

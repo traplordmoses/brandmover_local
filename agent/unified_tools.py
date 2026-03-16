@@ -519,7 +519,7 @@ _record_walkthrough_def = {
         "properties": {
             "url": {
                 "type": "string",
-                "description": "Base URL to record, e.g. 'https://foidfun.vercel.app'.",
+                "description": "Base URL to record, e.g. 'https://example.com'.",
             },
             "steps": {
                 "type": "array",
@@ -557,6 +557,11 @@ _record_walkthrough_def = {
                 "enum": ["video", "screenshot"],
                 "description": "Recording mode. 'video' produces MP4, 'screenshot' produces PNGs. Default: video.",
             },
+            "viewport": {
+                "type": "string",
+                "enum": ["mobile", "desktop"],
+                "description": "Viewport size. 'mobile' = 390x844 (iPhone, best for social video). 'desktop' = 1280x720. Default: mobile.",
+            },
             "name": {
                 "type": "string",
                 "description": "Short name for the recording (used in filenames).",
@@ -566,15 +571,66 @@ _record_walkthrough_def = {
     },
 }
 
+_smart_record_def = {
+    "name": "smart_record",
+    "description": (
+        "Record an autonomous video walkthrough using a vision-guided browser agent. "
+        "Unlike record_walkthrough (which blindly executes steps), this agent SEES the "
+        "screen after each action and decides what to do next using Claude Vision. "
+        "It can adapt to loading states, modals, unexpected UI, and actually interact "
+        "with the app (click buttons, fill forms, navigate). "
+        "Give it HIGH-LEVEL GOALS, not CSS selectors. "
+        "Example goals: 'show the swipe feature', 'navigate to gallery and show approved memes'. "
+        "The agent builds its own narration from what it actually does. "
+        "Costs ~$0.30-0.50 per recording (vision API calls). Max 20 steps."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "url": {
+                "type": "string",
+                "description": "Base URL to record, e.g. 'https://example.com'.",
+            },
+            "goals": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "High-level goals for the demo. e.g. ['show the swipe feature', 'upload a meme', 'show the gallery'].",
+            },
+            "name": {
+                "type": "string",
+                "description": "Short name for the recording (used in filenames).",
+            },
+            "viewport": {
+                "type": "string",
+                "enum": ["mobile", "desktop"],
+                "description": "Viewport size. 'mobile' = 390x844 (default). 'desktop' = 1280x720.",
+            },
+            "max_steps": {
+                "type": "integer",
+                "description": "Maximum reasoning steps. Default 20. More steps = higher cost.",
+            },
+            "prepare_assets": {
+                "type": "object",
+                "description": "Dict of asset_key → file_path for uploads. e.g. {'meme': '/path/to/meme.jpg'}",
+            },
+        },
+        "required": ["url", "goals"],
+    },
+}
+
 _style_video_def = {
     "name": "style_video",
     "description": (
-        "Apply polished social media styling to a raw screen recording or video. "
-        "Adds: iPhone device mockup frame, holographic gradient background, "
-        "Ken Burns zoom animation, and optional text overlays. "
-        "Outputs an H.264 MP4 optimized for X/Twitter. "
-        "Use after record_walkthrough to make the output look professional, "
-        "or on any raw video/recording that needs a polished look."
+        "Apply intelligent social media styling to a raw screen recording or video. "
+        "Auto-detects input aspect ratio and chooses the best framing: "
+        "- Mobile (portrait) input → phone mockup with gradient background. "
+        "- Desktop (landscape) input → clean framing, no fake phone, content fills 88% of frame. "
+        "Adds: holographic gradient background, subtle Ken Burns zoom, "
+        "narration text overlays with Poppins font and pill-style background. "
+        "Outputs 9:16 vertical H.264 MP4 (best engagement on X/Twitter). "
+        "IMPORTANT: Record at mobile viewport (390x844) for phone mockup look, "
+        "or desktop viewport for clean desktop framing. Do NOT put desktop "
+        "content in a phone frame."
     ),
     "input_schema": {
         "type": "object",
@@ -583,10 +639,15 @@ _style_video_def = {
                 "type": "string",
                 "description": "Path to the raw video file (WebM or MP4).",
             },
-            "device_frame": {
+            "frame_mode": {
                 "type": "string",
-                "enum": ["iphone", "none"],
-                "description": "Device frame to wrap the video in. Default: iphone.",
+                "enum": ["auto", "phone", "desktop", "none"],
+                "description": "Framing strategy. 'auto' picks based on input aspect ratio. Default: auto.",
+            },
+            "aspect": {
+                "type": "string",
+                "enum": ["9:16", "1:1", "16:9"],
+                "description": "Output aspect ratio. 9:16 vertical gets best X engagement. Default: 9:16.",
             },
             "bg_colors": {
                 "type": "array",
@@ -595,15 +656,11 @@ _style_video_def = {
             },
             "zoom_enabled": {
                 "type": "boolean",
-                "description": "Enable Ken Burns zoom effect. Default: true.",
-            },
-            "square_output": {
-                "type": "boolean",
-                "description": "Output as 1080x1080 square (best for X engagement). Default: true.",
+                "description": "Enable subtle Ken Burns zoom on background. Default: true.",
             },
             "narration_texts": {
                 "type": "array",
-                "description": "Text overlays with timing.",
+                "description": "Text overlays with timing. Rendered with Poppins font and pill background.",
                 "items": {
                     "type": "object",
                     "properties": {
@@ -616,6 +673,113 @@ _style_video_def = {
             },
         },
         "required": ["input_video"],
+    },
+}
+
+_edit_video_def = {
+    "name": "edit_video",
+    "description": (
+        "Video editor — cut segments from a raw recording and stitch them into a "
+        "tight highlight reel, then optionally style with phone mockup + gradient. "
+        "Use this to trim dead time, white screens, loading, and onboarding slides "
+        "from raw smart_record output. Provide segments as time ranges to keep. "
+        "Adds crossfade transitions between segments. "
+        "If style=true, applies the full styling pipeline (phone frame, holographic "
+        "gradient, narration overlays) to the edited result."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "input_video": {
+                "type": "string",
+                "description": "Path to the raw video file.",
+            },
+            "segments": {
+                "type": "array",
+                "description": "Time ranges to keep, in order. Each is {start, end, label}.",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "start": {"type": "number", "description": "Start time in seconds."},
+                        "end": {"type": "number", "description": "End time in seconds."},
+                        "label": {"type": "string", "description": "Optional label for this segment."},
+                    },
+                    "required": ["start", "end"],
+                },
+            },
+            "apply_style": {
+                "type": "boolean",
+                "description": "Apply phone mockup + gradient styling after editing. Default: true.",
+            },
+            "aspect": {
+                "type": "string",
+                "enum": ["9:16", "1:1", "16:9"],
+                "description": "Output aspect ratio. Default: 9:16.",
+            },
+            "crossfade": {
+                "type": "number",
+                "description": "Crossfade duration between segments in seconds. Default: 0.3.",
+            },
+            "narration_texts": {
+                "type": "array",
+                "description": "Narration overlays with timing (relative to edited output).",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "text": {"type": "string"},
+                        "start": {"type": "number"},
+                        "end": {"type": "number"},
+                    },
+                    "required": ["text", "start", "end"],
+                },
+            },
+        },
+        "required": ["input_video", "segments"],
+    },
+}
+
+_review_video_def = {
+    "name": "review_video",
+    "description": (
+        "Self-review a video before sending it to the user. Extracts frames at "
+        "even intervals, analyzes them with Claude Vision, and returns a quality "
+        "report (score 1-10, pass/fail, issues, suggestions). "
+        "ALWAYS call this after editing/styling a video and BEFORE sending. "
+        "If the review fails (pass=false or score<7), re-edit or re-record. "
+        "This is your quality gate — never send a video you haven't reviewed."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "video_path": {
+                "type": "string",
+                "description": "Path to the styled video to review.",
+            },
+            "expected_duration": {
+                "type": "number",
+                "description": "How long the video should be, in seconds. If actual duration differs by >3s, it's flagged.",
+            },
+        },
+        "required": ["video_path"],
+    },
+}
+
+_campaign_preview_def = {
+    "name": "campaign_preview",
+    "description": (
+        "Generate an HTML preview page for a campaign showing all posts "
+        "organized by day with copy, media notes, and status. "
+        "Returns the file path to the HTML — send it to the user with send_file."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "name": {
+                "type": "string",
+                "description": "Campaign name to preview.",
+            },
+        },
+        "required": ["name"],
     },
 }
 
@@ -905,7 +1069,11 @@ UNIFIED_TOOL_DEFINITIONS = _BASE_TOOL_DEFINITIONS + [
     _create_campaign_def,
     _campaign_status_def,
     _record_walkthrough_def,
+    _smart_record_def,
     _style_video_def,
+    _edit_video_def,
+    _review_video_def,
+    _campaign_preview_def,
 ]
 
 
@@ -2113,6 +2281,134 @@ async def _handle_campaign_status(
     return json.dumps({"campaigns": summaries})
 
 
+async def _handle_smart_record(
+    input_dict: dict, tracker: ResourceTracker, user_id: int | None = None,
+    tool_context: dict | None = None,
+) -> str:
+    """Record an autonomous demo using the vision-guided browser agent."""
+    url = input_dict.get("url", "")
+    goals = input_dict.get("goals", [])
+    name = input_dict.get("name", "smart-demo")
+    viewport = input_dict.get("viewport", "mobile")
+    max_steps = input_dict.get("max_steps", 20)
+    prepare_assets = input_dict.get("prepare_assets", {})
+
+    if not url or not goals:
+        return json.dumps({"error": "url and goals are required"})
+
+    tracker.log_api(f"smart_record:{url[:40]}")
+
+    try:
+        from agent.smart_recorder import smart_record_demo
+        result = await smart_record_demo(
+            goals=goals, url=url, name=name,
+            viewport=viewport, max_steps=max_steps,
+            prepare_assets=prepare_assets,
+        )
+        # Build rich step timeline so the bot can make intelligent edit decisions.
+        # Each step includes timestamp, action, target, narration, duration, and
+        # whether it errored — giving the bot everything it needs to identify
+        # dead time (stuck frames, loading, same page repeated) vs. good content.
+        step_timeline = []
+        for i, step in enumerate(result.steps_taken):
+            # Calculate how long this step lasted (until the next step started)
+            if i + 1 < len(result.steps_taken):
+                step_duration = round(result.steps_taken[i + 1].timestamp - step.timestamp, 2)
+            else:
+                step_duration = 3.0  # last step — assume 3s
+            step_timeline.append({
+                "step": i + 1,
+                "timestamp": round(step.timestamp, 2),
+                "duration": step_duration,
+                "action": step.action,
+                "target": step.target,
+                "narration": step.narration,
+                "error": step.error,
+            })
+
+        # Detect potential dead-time clusters: consecutive steps on the same
+        # target with the same action (e.g., repeated waits, same-page scrolls).
+        dead_time_hints = []
+        i = 0
+        while i < len(step_timeline):
+            j = i + 1
+            # Group consecutive steps with identical action+target
+            while (j < len(step_timeline)
+                   and step_timeline[j]["action"] == step_timeline[i]["action"]
+                   and step_timeline[j]["target"] == step_timeline[i]["target"]
+                   and step_timeline[i]["action"] not in ("finish", "swipe")):
+                j += 1
+            cluster_len = j - i
+            if cluster_len >= 2:
+                cluster_duration = round(
+                    sum(step_timeline[k]["duration"] for k in range(i, j)), 2
+                )
+                if cluster_duration > 4.0:
+                    dead_time_hints.append({
+                        "steps": [i + 1, j],  # 1-indexed range
+                        "action": step_timeline[i]["action"],
+                        "target": step_timeline[i]["target"],
+                        "total_duration": cluster_duration,
+                        "hint": f"Steps {i+1}-{j} are {cluster_len} repeated "
+                                f"'{step_timeline[i]['action']}' on same target "
+                                f"({cluster_duration}s) — likely dead time, keep "
+                                f"only first+last second",
+                    })
+            i = j
+
+        # Also flag long waits and errors as dead time
+        for s in step_timeline:
+            if s["action"] == "wait" and s["duration"] > 3.0:
+                dead_time_hints.append({
+                    "steps": [s["step"], s["step"]],
+                    "action": "wait",
+                    "target": "",
+                    "total_duration": s["duration"],
+                    "hint": f"Step {s['step']} is a {s['duration']}s wait — cut entirely",
+                })
+            if s["error"] and s["duration"] > 2.0:
+                dead_time_hints.append({
+                    "steps": [s["step"], s["step"]],
+                    "action": s["action"],
+                    "target": s["target"],
+                    "total_duration": s["duration"],
+                    "hint": f"Step {s['step']} errored ({s['error'][:60]}) — cut this segment",
+                })
+
+        return json.dumps({
+            "video_path": result.video_path,
+            "screenshot_paths": result.screenshot_paths[:5],  # first 5 for context
+            "duration_seconds": result.duration_seconds,
+            "steps_taken": len(result.steps_taken),
+            "reasoning_steps": result.reasoning_steps,
+            "total_tokens": result.total_tokens,
+            "narration_timeline": result.narration_timeline,
+            "step_timeline": step_timeline,
+            "dead_time_hints": dead_time_hints,
+            "error": result.error,
+        })
+    except Exception as e:
+        logger.error("smart_record failed: %s", e)
+        return json.dumps({"error": str(e)})
+
+
+async def _handle_campaign_preview(
+    input_dict: dict, tracker: ResourceTracker, user_id: int | None = None,
+    tool_context: dict | None = None,
+) -> str:
+    from agent.campaign_preview import generate_preview_html
+
+    name = input_dict.get("name", "").strip()
+    if not name:
+        return json.dumps({"error": "Campaign name is required."})
+
+    path = generate_preview_html(name)
+    if not path:
+        return json.dumps({"error": f"Campaign '{name}' not found."})
+
+    return json.dumps({"success": True, "path": path, "message": f"Preview generated at {path}. Use send_file to deliver it."})
+
+
 async def _handle_record_walkthrough(
     input_dict: dict, tracker: ResourceTracker, user_id: int | None = None,
     tool_context: dict | None = None,
@@ -2128,12 +2424,18 @@ async def _handle_record_walkthrough(
 
     # Write a temporary demo script JSON and call the recorder
     import tempfile
+    viewport = input_dict.get("viewport", "mobile")
+    if viewport == "desktop":
+        vp_w, vp_h = 1280, 720
+    else:
+        vp_w, vp_h = 390, 844  # iPhone 14/15 mobile viewport
+
     script_data = {
         "name": name,
         "url": url,
         "mode": mode,
-        "viewport_width": 1280,
-        "viewport_height": 720,
+        "viewport_width": vp_w,
+        "viewport_height": vp_h,
         "steps": steps,
     }
 
@@ -2174,7 +2476,7 @@ async def _handle_style_video(
     input_dict: dict, tracker: ResourceTracker, user_id: int | None = None,
     tool_context: dict | None = None,
 ) -> str:
-    """Apply polished styling to a raw video."""
+    """Apply intelligent styling to a raw video."""
     input_video = input_dict.get("input_video", "")
     if not input_video or not Path(input_video).exists():
         return json.dumps({"error": f"Video not found: {input_video}"})
@@ -2182,15 +2484,14 @@ async def _handle_style_video(
     from agent.video_styler import VideoStyle, async_apply_style
 
     style = VideoStyle()
-    if input_dict.get("device_frame") == "none":
-        style.device_frame = "none"
+    if input_dict.get("frame_mode"):
+        style.frame_mode = input_dict["frame_mode"]
+    if input_dict.get("aspect"):
+        style.aspect = input_dict["aspect"]
     if input_dict.get("bg_colors"):
         style.bg_colors = input_dict["bg_colors"]
     if input_dict.get("zoom_enabled") is False:
         style.zoom_enabled = False
-    if input_dict.get("square_output") is False:
-        style.output_width = 1280
-        style.output_height = 720
 
     narration_texts = input_dict.get("narration_texts")
 
@@ -2200,10 +2501,78 @@ async def _handle_style_video(
         output = await async_apply_style(
             input_video, style=style, narration_texts=narration_texts,
         )
-        return json.dumps({"path": output, "style": style.device_frame})
+        return json.dumps({"path": output, "frame_mode": style.frame_mode, "aspect": style.aspect})
     except Exception as e:
         logger.error("style_video failed: %s", e)
         return json.dumps({"error": str(e)})
+
+
+async def _handle_edit_video(
+    input_dict: dict, tracker: ResourceTracker, user_id: int | None = None,
+    tool_context: dict | None = None,
+) -> str:
+    """Cut, stitch, and optionally style a raw recording."""
+    input_video = input_dict.get("input_video", "")
+    if not input_video or not Path(input_video).exists():
+        return json.dumps({"error": f"Video not found: {input_video}"})
+
+    segments = input_dict.get("segments", [])
+    if not segments:
+        return json.dumps({"error": "No segments provided. Provide at least one {start, end} time range."})
+
+    do_style = input_dict.get("apply_style", True)
+    crossfade = input_dict.get("crossfade", 0.3)
+    narration_texts = input_dict.get("narration_texts")
+
+    tracker.log_api("edit_video")
+
+    try:
+        if do_style:
+            from agent.video_styler import VideoStyle, async_edit_and_style
+
+            style = VideoStyle()
+            if input_dict.get("aspect"):
+                style.aspect = input_dict["aspect"]
+
+            output = await async_edit_and_style(
+                input_video, segments, style=style,
+                narration_texts=narration_texts,
+                crossfade_duration=crossfade,
+            )
+        else:
+            from agent.video_styler import cut_and_stitch
+            import asyncio
+            output = await asyncio.to_thread(
+                cut_and_stitch, input_video, segments,
+                crossfade_duration=crossfade,
+            )
+
+        return json.dumps({"path": output, "segments": len(segments), "styled": do_style})
+    except Exception as e:
+        logger.error("edit_video failed: %s", e)
+        return json.dumps({"error": str(e)})
+
+
+async def _handle_review_video(
+    input_dict: dict, tracker: ResourceTracker, user_id: int | None = None,
+    tool_context: dict | None = None,
+) -> str:
+    """Self-review a video — extract frames, analyze with Vision, return quality report."""
+    video_path = input_dict.get("video_path", "")
+    if not video_path or not Path(video_path).exists():
+        return json.dumps({"error": f"Video not found: {video_path}"})
+
+    expected = input_dict.get("expected_duration")
+
+    tracker.log_api("review_video")
+
+    try:
+        from agent.video_styler import async_review_video
+        report = await async_review_video(video_path, expected_duration=expected)
+        return json.dumps(report, indent=2)
+    except Exception as e:
+        logger.error("review_video failed: %s", e)
+        return json.dumps({"error": str(e), "pass": False, "score": 0})
 
 
 _UNIFIED_HANDLERS = {
@@ -2237,8 +2606,12 @@ _UNIFIED_HANDLERS = {
     "use_snippet": _handle_use_snippet,
     "create_campaign": _handle_create_campaign,
     "campaign_status": _handle_campaign_status,
+    "campaign_preview": _handle_campaign_preview,
     "record_walkthrough": _handle_record_walkthrough,
+    "smart_record": _handle_smart_record,
     "style_video": _handle_style_video,
+    "edit_video": _handle_edit_video,
+    "review_video": _handle_review_video,
 }
 
 
