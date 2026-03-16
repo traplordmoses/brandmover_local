@@ -1134,10 +1134,12 @@ UNIFIED_TOOL_DEFINITIONS = _BASE_TOOL_DEFINITIONS + [
     {
         "name": "generate_video",
         "description": (
-            "Generate a branded promo/explainer video from a text brief. "
-            "Uses Remotion to create programmatic motion graphics — dark backgrounds, "
-            "animated text, chat UI mockups, setup steps, CTAs. No AI imagery — pure design. "
-            "Returns an MP4 file path. Typical output: 12-20 seconds, 1080x1080."
+            "Generate a branded promo/explainer video from a text brief using Remotion. "
+            "Creates programmatic motion graphics with 13 scene types: titles, taglines, "
+            "stats with animated counters, chat UI mockups, icon grids, data visualizations "
+            "(brackets, charts), stock footage, step-by-step instructions, and CTAs. "
+            "Supports dark/light themes, square/landscape/portrait, 15-90 second durations, "
+            "and optional voiceover (ElevenLabs/OpenAI TTS). Returns an MP4 file path."
         ),
         "input_schema": {
             "type": "object",
@@ -1145,10 +1147,29 @@ UNIFIED_TOOL_DEFINITIONS = _BASE_TOOL_DEFINITIONS + [
                 "brief": {
                     "type": "string",
                     "description": (
-                        "Text brief describing the video to create. Be specific about "
-                        "the product, key features, and target audience. "
-                        "Example: '15 second promo video for our MCP launch'"
+                        "Text brief describing the video. Be specific about the product, "
+                        "key features, numbers/stats, and tone. Include target duration. "
+                        "Example: '60 second explainer about our bracket contest — 63 games, "
+                        "6 rounds, 1 in 9.2 quintillion odds, light theme, landscape'"
                     ),
+                },
+                "duration": {
+                    "type": "integer",
+                    "description": "Target video duration in seconds. Default 20. Range 15-90.",
+                },
+                "format": {
+                    "type": "string",
+                    "enum": ["square", "landscape", "portrait"],
+                    "description": "Video format. square=1080x1080, landscape=1920x1080, portrait=1080x1920. Default square.",
+                },
+                "theme": {
+                    "type": "string",
+                    "enum": ["dark", "light"],
+                    "description": "Visual theme. Auto-detected from brand if not specified.",
+                },
+                "voiceover": {
+                    "type": "boolean",
+                    "description": "Generate TTS voiceover from scene narrations. Default false.",
                 },
             },
             "required": ["brief"],
@@ -2849,7 +2870,13 @@ async def _handle_generate_video(
     tracker.log_api("generate_video")
 
     try:
-        result = await generate_video(brief)
+        result = await generate_video(
+            brief=brief,
+            duration=input_dict.get("duration"),
+            format=input_dict.get("format", "square"),
+            theme=input_dict.get("theme"),
+            voiceover=input_dict.get("voiceover", False),
+        )
         return json.dumps({
             "video_path": result.video_path,
             "duration_seconds": result.duration_seconds,

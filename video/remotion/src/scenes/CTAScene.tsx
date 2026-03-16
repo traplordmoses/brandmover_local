@@ -6,15 +6,13 @@ import { GradientBg } from '../components/GradientBg';
 import { BrandTheme } from '../lib/types';
 
 interface Props {
-  line1: string;
-  line2: string;
-  accentLine: 1 | 2;
-  url: string;
-  buttonText: string;
+  lines: Array<{ text: string; accent?: boolean }>;
+  url?: string;
+  buttonText?: string;
   brand: BrandTheme;
 }
 
-export const CTAScene: React.FC<Props> = ({ line1, line2, accentLine, url, buttonText, brand }) => {
+export const CTAScene: React.FC<Props> = ({ lines, url, buttonText, brand }) => {
   return (
     <AbsoluteFill>
       <GradientBg backgroundColor={brand.backgroundColor} accentColor={brand.accentColor} />
@@ -26,31 +24,31 @@ export const CTAScene: React.FC<Props> = ({ line1, line2, accentLine, url, butto
         fontFamily: brand.fontFamily,
         gap: 16,
       }}>
-        <AnimatedText
-          text={line1}
-          fontSize={48}
-          color={accentLine === 1 ? brand.accentColor : '#ffffff'}
-          fontWeight={700}
-          delay={0}
-        />
-        <AnimatedText
-          text={line2}
-          fontSize={48}
-          color={accentLine === 2 ? brand.accentColor : '#ffffff'}
-          fontWeight={700}
-          delay={8}
-        />
-        <div style={{ marginTop: 32 }}>
-          <BrandButton text={buttonText} color={brand.accentColor} delay={20} />
-        </div>
-        <AnimatedText
-          text={url}
-          fontSize={18}
-          color="rgba(255,255,255,0.4)"
-          fontWeight={400}
-          delay={28}
-          style={{ marginTop: 16 }}
-        />
+        {lines.map((line, i) => (
+          <AnimatedText
+            key={i}
+            text={line.text}
+            fontSize={48}
+            color={line.accent ? brand.accentColor : (brand.textColor || '#ffffff')}
+            fontWeight={700}
+            delay={i * 8}
+          />
+        ))}
+        {buttonText && (
+          <div style={{ marginTop: 32 }}>
+            <BrandButton text={buttonText} color={brand.accentColor} delay={lines.length * 8 + 12} />
+          </div>
+        )}
+        {url && (
+          <AnimatedText
+            text={url}
+            fontSize={18}
+            color="rgba(255,255,255,0.4)"
+            fontWeight={400}
+            delay={lines.length * 8 + 20}
+            style={{ marginTop: 16 }}
+          />
+        )}
       </AbsoluteFill>
     </AbsoluteFill>
   );

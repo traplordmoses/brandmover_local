@@ -388,7 +388,7 @@ def _build_capabilities_section() -> str:
         "Video: `smart_record` (vision-guided browser recording), `edit_video` (cut/stitch/style), "
         "`style_video` (phone mockup + gradient), `review_video` (self-review quality gate), "
         "`analyze_video_scenes` (scene classification), `edit_by_intent` (natural language editing), "
-        "`generate_video` (Remotion motion graphics from brief)\n"
+        "`generate_video` (Remotion motion graphics — 13 scene types, dark/light themes, square/landscape/portrait, optional voiceover, stock footage)\n"
         "Analytics: `check_post_performance` (engagement metrics for posted content)\n"
         "</tool_reference>\n\n"
 

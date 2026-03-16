@@ -10,17 +10,20 @@ const defaultProps: SceneData = {
     height: 1080,
     fps: 30,
     durationInSeconds: 16.5,
+    format: 'square',
+    theme: 'dark',
     brand: {
       name: 'BrandMover',
       primaryColor: '#72e1ff',
       accentColor: '#72e1ff',
       backgroundColor: '#0a0f1a',
+      textColor: '#ffffff',
       fontFamily: 'Inter',
     },
   },
   scenes: [
     { type: 'title', label: 'INTRODUCING', headline: 'BrandMover', durationFrames: 75 },
-    { type: 'tagline', supertext: 'AI MARKETING AGENT', line1: 'Your brand,', line2: 'on autopilot.', accentLine: 2, durationFrames: 90 },
+    { type: 'tagline', supertext: 'AI MARKETING AGENT', lines: [{ text: 'Your brand,' }, { text: 'on autopilot.', accent: true }], durationFrames: 90 },
     { type: 'feature_count', count: 5, subtitle: 'tools. One brain.', durationFrames: 60 },
     { type: 'chat_demo', messages: [
       { text: 'Make a post about our launch', isUser: true },
@@ -30,7 +33,7 @@ const defaultProps: SceneData = {
       { number: '01', heading: 'Connect your brand', detail: 'Upload guidelines → AI learns your voice' },
       { number: '02', heading: 'Start chatting', detail: 'Tell it what to post. It handles the rest.' },
     ], durationFrames: 90 },
-    { type: 'cta', line1: 'Post smarter.', line2: 'Build faster.', accentLine: 2, url: 'brandmover.ai', buttonText: 'Try Free', durationFrames: 60 },
+    { type: 'cta', lines: [{ text: 'Post smarter.' }, { text: 'Build faster.', accent: true }], url: 'brandmover.ai', buttonText: 'Try Free', durationFrames: 60 },
   ],
 };
 

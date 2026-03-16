@@ -11,7 +11,7 @@ interface Step {
 }
 
 interface Props {
-  title: string;
+  title?: string;
   steps: Step[];
   brand: BrandTheme;
 }
@@ -30,14 +30,16 @@ export const StepsScene: React.FC<Props> = ({ title, steps, brand }) => {
         fontFamily: brand.fontFamily,
         gap: 32,
       }}>
-        <AnimatedText
-          text={title}
-          fontSize={28}
-          color="rgba(255,255,255,0.5)"
-          fontWeight={600}
-          delay={0}
-          style={{ letterSpacing: 4, textTransform: 'uppercase' }}
-        />
+        {title && (
+          <AnimatedText
+            text={title}
+            fontSize={28}
+            color="rgba(255,255,255,0.5)"
+            fontWeight={600}
+            delay={0}
+            style={{ letterSpacing: 4, textTransform: 'uppercase' }}
+          />
+        )}
         <div style={{ display: 'flex', flexDirection: 'column', gap: 24 }}>
           {steps.map((step, i) => {
             const delay = i * 18 + 12;

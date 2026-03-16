@@ -4,8 +4,12 @@ Remotion Video Generator — programmatic motion graphics from text briefs.
 Uses Claude to generate scene JSON from a brief + BrandConfig, then renders
 via Remotion CLI (npx remotion render) to produce branded promo/explainer videos.
 
+Supports 13 scene types, stock footage asset resolution, TTS voiceover,
+and ffmpeg audio mixing.
+
 Pipeline:
-  brief + BrandConfig → Claude → SceneData JSON → Remotion → MP4
+  brief + BrandConfig → Claude → SceneData JSON → asset resolution →
+  Remotion render → (optional) voiceover + audio mix → MP4
 
 Public API:
     result = await generate_video("15 second promo for our launch")
@@ -14,14 +18,17 @@ Public API:
 import asyncio
 import json
 import logging
+import re
 import subprocess
 import time
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import anthropic
 
+from agent.asset_pipeline import resolve_storyboard_assets
+from agent.audio_pipeline import generate_voiceover, mix_audio
 from agent.compositor_config import get_config as get_brand_config
 from agent.paths import PROJECT_ROOT
 from config import settings
@@ -34,104 +41,469 @@ OUTPUT_DIR = PROJECT_ROOT / "state" / "outputs"
 # Use Sonnet for scene generation — good balance of quality and speed
 _SCENE_GEN_MODEL = settings.SONNET_MODEL
 
+# Format presets: (width, height)
+_FORMAT_DIMENSIONS = {
+    "square": (1080, 1080),
+    "landscape": (1920, 1080),
+    "portrait": (1080, 1920),
+}
 
 # ---------------------------------------------------------------------------
-# Scene generation prompt
+# Scene generation prompt — full 13-scene storyboard schema
 # ---------------------------------------------------------------------------
 
-_SCENE_GEN_SYSTEM = """You are a motion graphics director. Given a brief and brand config,
-output a SceneData JSON that creates a punchy branded promo video.
+_SCENE_GEN_SYSTEM = """\
+<task>
+You are a motion graphics director and video scriptwriter. Given a brief
+and brand config, create a Storyboard JSON for a branded promo/explainer video.
+</task>
 
 <rules>
-- 5-7 scenes total
-- Title scene first, CTA scene last
-- Keep text SHORT — max 8 words per line
-- Use the brand's primary and accent colors from the provided config
-- Chat demo scenes should feel like a real product interaction
-- Steps scenes should have 2-3 steps max
-- Total duration 12-20 seconds (360-600 frames at 30fps)
-- Each scene gets 60-120 frames (2-4 seconds)
+- Title scene first, CTA scene last — always
+- Keep text SHORT: max 8 words per line, max 3 lines per scene
+- Use the brand's colors and fonts from the config
+- For short videos (15-20s): 5-7 scenes, fast pace (2-3s per scene)
+- For medium videos (30-45s): 8-12 scenes, mix scene types
+- For long videos (45-90s): 12-20 scenes, use varied scene types including
+  stat, icon_grid, data_viz, stock_footage, icon_reveal for visual richness
+- Don't repeat the same scene type back-to-back
+- stat scenes: use animate 'countUp' for large numbers
+- If the brief describes a visual (bracket, grid, coins), use data_viz or icon_grid
+- narration field: 1-2 sentences of what a voiceover would say (helps pacing)
+- For dark-themed brands: use background 'gradient'
+- For light-themed brands: use background 'clean' or 'dots'
+- Total duration should match the brief. Default ~20 seconds if unspecified.
 </rules>
+
+<scene_types>
+13 scene types available:
+- title: Brand logo + headline + optional subheadline/disclaimer
+- tagline: Big text with accent-colored keywords. Uses lines array.
+- text_only: Bold statement on clean background. Sizes: medium/large/xlarge.
+- stat: Animated number/counter + label. Can count up, show raw number, handwritten suffix.
+- feature_list: Staggered list. Layouts: centered-stack, left-aligned.
+- chat_demo: Chat bubble mockup (user <-> bot).
+- steps: Numbered instruction steps (2-3 max).
+- icon_grid: Grid of repeated icons with staggered reveal + optional checkmarks.
+- data_viz: bracket, dot_matrix_number, dot_grid, bar_chart.
+- stock_footage: Full-bleed or inset video/image. Specify query for Pexels search.
+- icon_reveal: Centered icon(s) with caption. Icon names: atom, globe, file-text, zap, shield, rocket, wallet, lock, users, chart-bar, trophy, star, coin, layers, credit-card.
+- feature_count: Large number + subtitle side by side.
+- cta: Closing CTA with lines array + optional url + button.
+</scene_types>
 
 <schema>
 The output must be valid JSON matching this TypeScript interface:
 
 interface SceneData {
   config: {
-    width: 1080;
-    height: 1080;
+    width: number;       // 1080 for square/portrait, 1920 for landscape
+    height: number;      // 1080 for square/landscape, 1920 for portrait
     fps: 30;
     durationInSeconds: number;
     brand: {
       name: string;
-      primaryColor: string;
-      accentColor: string;
-      backgroundColor: string;
+      primaryColor: string;    // hex
+      accentColor: string;     // hex
+      backgroundColor: string; // hex
+      textColor: string;       // hex — auto from bg brightness
       fontFamily: string;
+      accentFontFamily?: string;
     };
   };
-  scenes: Array<
-    | { type: "title"; label: string; headline: string; durationFrames: number }
-    | { type: "tagline"; supertext: string; line1: string; line2: string; accentLine: 1 | 2; durationFrames: number }
-    | { type: "feature_count"; count: number; subtitle: string; durationFrames: number }
-    | { type: "chat_demo"; messages: Array<{ text: string; isUser: boolean; label?: string }>; durationFrames: number }
-    | { type: "steps"; title: string; steps: Array<{ number: string; heading: string; detail: string }>; durationFrames: number }
-    | { type: "cta"; line1: string; line2: string; accentLine: 1 | 2; url: string; buttonText: string; durationFrames: number }
-  >;
+  audio?: {
+    voiceover?: boolean;
+    musicUrl?: string;
+  };
+  scenes: Array<Scene>;
 }
+
+type Scene =
+  | {
+      type: "title";
+      label?: string;          // e.g. "INTRODUCING"
+      headline: string;
+      subheadline?: string;
+      disclaimer?: string;
+      background?: "gradient" | "clean" | "dots";
+      narration?: string;
+      durationFrames: number;
+    }
+  | {
+      type: "tagline";
+      supertext?: string;
+      lines: Array<{ text: string; accent?: boolean }>;
+      background?: "gradient" | "clean" | "dots";
+      narration?: string;
+      durationFrames: number;
+    }
+  | {
+      type: "text_only";
+      text: string;
+      size?: "medium" | "large" | "xlarge";
+      background?: "gradient" | "clean" | "dots";
+      narration?: string;
+      durationFrames: number;
+    }
+  | {
+      type: "stat";
+      value: string;            // "3" or "$2.4B"
+      label: string;
+      suffix?: string;          // "%" or "+"
+      animate?: "countUp" | "none";
+      narration?: string;
+      durationFrames: number;
+    }
+  | {
+      type: "feature_list";
+      title?: string;
+      items: Array<{ icon?: string; text: string }>;
+      layout?: "centered-stack" | "left-aligned";
+      narration?: string;
+      durationFrames: number;
+    }
+  | {
+      type: "chat_demo";
+      messages: Array<{ text: string; isUser: boolean; label?: string }>;
+      narration?: string;
+      durationFrames: number;
+    }
+  | {
+      type: "steps";
+      title?: string;
+      steps: Array<{ number: string; heading: string; detail: string }>;
+      narration?: string;
+      durationFrames: number;
+    }
+  | {
+      type: "icon_grid";
+      icons: Array<{ name: string; label?: string; checked?: boolean }>;
+      columns?: number;
+      narration?: string;
+      durationFrames: number;
+    }
+  | {
+      type: "data_viz";
+      vizType: "bracket" | "dot_matrix_number" | "dot_grid" | "bar_chart";
+      data: any;               // shape depends on vizType
+      caption?: string;
+      narration?: string;
+      durationFrames: number;
+    }
+  | {
+      type: "stock_footage";
+      query: string;            // Pexels search query
+      layout?: "full-bleed" | "inset";
+      caption?: string;
+      narration?: string;
+      durationFrames: number;
+    }
+  | {
+      type: "icon_reveal";
+      icons: Array<{ name: string; caption?: string }>;
+      narration?: string;
+      durationFrames: number;
+    }
+  | {
+      type: "feature_count";
+      count: number | string;
+      subtitle: string;
+      narration?: string;
+      durationFrames: number;
+    }
+  | {
+      type: "cta";
+      lines: Array<{ text: string; accent?: boolean }>;
+      url?: string;
+      buttonText?: string;
+      background?: "gradient" | "clean" | "dots";
+      narration?: string;
+      durationFrames: number;
+    };
 </schema>
 
-<example>
+<example_1>
 Brief: "15 second promo for BloFin MCP launch"
-Brand: BloFin, primary=#00D26A, accent=#00D26A
+Brand: BloFin, primary=#00D26A, accent=#00D26A, bg=#0a0f0a (dark), font=Inter
+Format: square (1080x1080), Theme: dark
 
 Output:
 {
   "config": {
-    "width": 1080, "height": 1080, "fps": 30, "durationInSeconds": 16.5,
+    "width": 1080,
+    "height": 1080,
+    "fps": 30,
+    "durationInSeconds": 16,
     "brand": {
       "name": "BloFin",
       "primaryColor": "#00D26A",
       "accentColor": "#00D26A",
       "backgroundColor": "#0a0f0a",
+      "textColor": "#FFFFFF",
       "fontFamily": "Inter"
     }
   },
   "scenes": [
-    { "type": "title", "label": "INTRODUCING", "headline": "BloFin", "durationFrames": 75 },
-    { "type": "tagline", "supertext": "MODEL CONTEXT PROTOCOL", "line1": "Your AI now speaks", "line2": "fluent trading.", "accentLine": 2, "durationFrames": 90 },
-    { "type": "feature_count", "count": 3, "subtitle": "tools. One connection.", "durationFrames": 60 },
-    { "type": "chat_demo", "messages": [
-      { "text": "What's the BTC funding rate?", "isUser": true },
-      { "text": "BTC funding rate: +0.0082%\\n4h interval · Next in 1h 23m", "isUser": false, "label": "BLOFIN MCP" },
-      { "text": "Open a 2x long on BTC", "isUser": true },
-      { "text": "✓ Order placed\\nBTC-USDT · Long · 2x · Market", "isUser": false, "label": "BLOFIN MCP" }
-    ], "durationFrames": 120 },
-    { "type": "steps", "title": "SETUP IN MINUTES", "steps": [
-      { "number": "01", "heading": "Get your API key", "detail": "blofin.com → APIs → Create Key → Select MCP" },
-      { "number": "02", "heading": "Connect to Claude", "detail": "Paste config into Claude Desktop → restart" },
-      { "number": "03", "heading": "Start trading", "detail": "Ask anything. Your AI handles the rest." }
-    ], "durationFrames": 90 },
-    { "type": "cta", "line1": "Trade smarter.", "line2": "Talk to your exchange.", "accentLine": 2, "url": "blofin.com/en/blofin-mcp", "buttonText": "Get Started Free", "durationFrames": 60 }
+    {
+      "type": "title",
+      "label": "INTRODUCING",
+      "headline": "BloFin MCP",
+      "background": "gradient",
+      "narration": "Introducing BloFin MCP.",
+      "durationFrames": 75
+    },
+    {
+      "type": "tagline",
+      "supertext": "MODEL CONTEXT PROTOCOL",
+      "lines": [
+        { "text": "Your AI now speaks", "accent": false },
+        { "text": "fluent trading.", "accent": true }
+      ],
+      "background": "gradient",
+      "narration": "Your AI now speaks fluent trading.",
+      "durationFrames": 90
+    },
+    {
+      "type": "feature_count",
+      "count": 3,
+      "subtitle": "tools. One connection.",
+      "narration": "Three powerful tools through a single connection.",
+      "durationFrames": 60
+    },
+    {
+      "type": "chat_demo",
+      "messages": [
+        { "text": "What's the BTC funding rate?", "isUser": true },
+        { "text": "BTC funding rate: +0.0082%\\n4h interval - Next in 1h 23m", "isUser": false, "label": "BLOFIN MCP" },
+        { "text": "Open a 2x long on BTC", "isUser": true },
+        { "text": "Order placed\\nBTC-USDT - Long - 2x - Market", "isUser": false, "label": "BLOFIN MCP" }
+      ],
+      "narration": "Ask about funding rates. Place trades. All through natural conversation.",
+      "durationFrames": 120
+    },
+    {
+      "type": "steps",
+      "title": "SETUP IN MINUTES",
+      "steps": [
+        { "number": "01", "heading": "Get your API key", "detail": "blofin.com - APIs - Create Key - Select MCP" },
+        { "number": "02", "heading": "Connect to Claude", "detail": "Paste config into Claude Desktop - restart" },
+        { "number": "03", "heading": "Start trading", "detail": "Ask anything. Your AI handles the rest." }
+      ],
+      "narration": "Set up in minutes. Get your key, connect to Claude, and start trading.",
+      "durationFrames": 90
+    },
+    {
+      "type": "cta",
+      "lines": [
+        { "text": "Trade smarter.", "accent": false },
+        { "text": "Talk to your exchange.", "accent": true }
+      ],
+      "url": "blofin.com/en/blofin-mcp",
+      "buttonText": "Get Started Free",
+      "background": "gradient",
+      "narration": "Trade smarter. Talk to your exchange.",
+      "durationFrames": 60
+    }
   ]
 }
-</example>
+</example_1>
+
+<example_2>
+Brief: "60 second explainer showing Kalshi bracket trading for March Madness"
+Brand: Kalshi, primary=#4F46E5, accent=#F59E0B, bg=#FFFFFF (light), font=Plus Jakarta Sans
+Format: square (1080x1080), Theme: light
+
+Output:
+{
+  "config": {
+    "width": 1080,
+    "height": 1080,
+    "fps": 30,
+    "durationInSeconds": 62,
+    "brand": {
+      "name": "Kalshi",
+      "primaryColor": "#4F46E5",
+      "accentColor": "#F59E0B",
+      "backgroundColor": "#FFFFFF",
+      "textColor": "#1A1A1A",
+      "fontFamily": "Plus Jakarta Sans"
+    }
+  },
+  "scenes": [
+    {
+      "type": "title",
+      "label": "KALSHI PRESENTS",
+      "headline": "Bracket Trading",
+      "subheadline": "March Madness Edition",
+      "background": "clean",
+      "narration": "Kalshi presents Bracket Trading for March Madness.",
+      "durationFrames": 90
+    },
+    {
+      "type": "tagline",
+      "lines": [
+        { "text": "Your bracket.", "accent": false },
+        { "text": "Real stakes.", "accent": true }
+      ],
+      "background": "dots",
+      "narration": "Your bracket, with real stakes on the line.",
+      "durationFrames": 75
+    },
+    {
+      "type": "text_only",
+      "text": "Predict game outcomes and earn real money.",
+      "size": "large",
+      "background": "clean",
+      "narration": "Predict game outcomes and earn real money on every matchup.",
+      "durationFrames": 90
+    },
+    {
+      "type": "data_viz",
+      "vizType": "bracket",
+      "data": {
+        "rounds": [
+          { "label": "Sweet 16", "matchups": ["Duke vs UNC", "Kansas vs Baylor"] },
+          { "label": "Elite 8", "matchups": ["Winner vs Winner"] },
+          { "label": "Final Four", "matchups": ["TBD"] }
+        ]
+      },
+      "caption": "Full tournament bracket trading",
+      "narration": "Trade the full bracket from Sweet 16 through the Final Four.",
+      "durationFrames": 150
+    },
+    {
+      "type": "stat",
+      "value": "67",
+      "label": "games available to trade",
+      "animate": "countUp",
+      "narration": "Sixty-seven games available to trade this tournament.",
+      "durationFrames": 90
+    },
+    {
+      "type": "icon_grid",
+      "icons": [
+        { "name": "trophy", "label": "Winner", "checked": true },
+        { "name": "chart-bar", "label": "Spread", "checked": true },
+        { "name": "users", "label": "Matchup", "checked": true },
+        { "name": "star", "label": "MVP", "checked": false },
+        { "name": "layers", "label": "Parlay", "checked": false },
+        { "name": "zap", "label": "Live", "checked": true }
+      ],
+      "columns": 3,
+      "narration": "Trade winners, spreads, matchups, and live in-game events.",
+      "durationFrames": 120
+    },
+    {
+      "type": "stock_footage",
+      "query": "basketball tournament crowd cheering",
+      "layout": "full-bleed",
+      "caption": "Feel the energy",
+      "narration": "Feel the energy of every game with real skin in the bracket.",
+      "durationFrames": 90
+    },
+    {
+      "type": "feature_list",
+      "title": "WHY KALSHI",
+      "items": [
+        { "icon": "shield", "text": "CFTC regulated exchange" },
+        { "icon": "zap", "text": "Instant deposits & withdrawals" },
+        { "icon": "wallet", "text": "Start with as little as $1" }
+      ],
+      "layout": "left-aligned",
+      "narration": "Kalshi is a CFTC regulated exchange with instant deposits. Start with just one dollar.",
+      "durationFrames": 120
+    },
+    {
+      "type": "steps",
+      "title": "GET STARTED",
+      "steps": [
+        { "number": "01", "heading": "Sign up free", "detail": "kalshi.com - 2 minute signup" },
+        { "number": "02", "heading": "Fund your account", "detail": "Instant deposit via bank or card" },
+        { "number": "03", "heading": "Pick your games", "detail": "Browse brackets and place trades" }
+      ],
+      "narration": "Sign up free, fund your account, and start picking games.",
+      "durationFrames": 120
+    },
+    {
+      "type": "icon_reveal",
+      "icons": [
+        { "name": "trophy", "caption": "Win big this March" }
+      ],
+      "narration": "Win big this March.",
+      "durationFrames": 75
+    },
+    {
+      "type": "stat",
+      "value": "$2.4B",
+      "label": "traded on Kalshi to date",
+      "animate": "none",
+      "narration": "Over 2.4 billion dollars traded on Kalshi to date.",
+      "durationFrames": 90
+    },
+    {
+      "type": "feature_count",
+      "count": "1M+",
+      "subtitle": "traders and counting",
+      "narration": "Over one million traders and counting.",
+      "durationFrames": 75
+    },
+    {
+      "type": "cta",
+      "lines": [
+        { "text": "Your bracket.", "accent": false },
+        { "text": "Your edge.", "accent": true }
+      ],
+      "url": "kalshi.com/march-madness",
+      "buttonText": "Trade Now",
+      "background": "dots",
+      "narration": "Your bracket. Your edge. Trade now on Kalshi.",
+      "durationFrames": 75
+    }
+  ]
+}
+</example_2>
 
 Return ONLY the JSON object — no markdown, no explanation."""
+
+
+# ---------------------------------------------------------------------------
+# Valid scene types for post-processing validation
+# ---------------------------------------------------------------------------
+
+_VALID_SCENE_TYPES = {
+    "title", "tagline", "text_only", "stat", "feature_list", "chat_demo",
+    "steps", "icon_grid", "data_viz", "stock_footage", "icon_reveal",
+    "feature_count", "cta",
+}
 
 
 @dataclass
 class VideoResult:
     """Result of a video generation."""
     video_path: str = ""
-    scene_data: dict = None
+    scene_data: dict | None = None
     duration_seconds: float = 0.0
     render_time_seconds: float = 0.0
+    format: str = "square"
     error: str = ""
 
 
+def _hex_brightness(hex_color: str) -> float:
+    """Return perceived brightness of a hex color (0-255 scale)."""
+    hex_color = hex_color.lstrip("#")
+    if len(hex_color) != 6:
+        return 128.0  # assume mid-range if unparseable
+    r, g, b = int(hex_color[:2], 16), int(hex_color[2:4], 16), int(hex_color[4:6], 16)
+    # Perceived brightness formula (ITU-R BT.601)
+    return 0.299 * r + 0.587 * g + 0.114 * b
+
+
 def _brand_config_to_theme() -> dict:
-    """Convert BrandConfig to the theme dict expected by Remotion."""
+    """Convert BrandConfig to the theme dict expected by Remotion.
+
+    Auto-detects textColor from background brightness and extracts
+    accentFontFamily if available.
+    """
     config = get_brand_config()
 
     # Extract primary and accent colors
@@ -142,7 +514,6 @@ def _brand_config_to_theme() -> dict:
     if "primary" in config.colors:
         primary_hex = config.colors["primary"].hex
     elif config.colors:
-        # Use first color as primary
         first = next(iter(config.colors.values()))
         primary_hex = first.hex
 
@@ -156,27 +527,74 @@ def _brand_config_to_theme() -> dict:
     if "background" in config.colors:
         bg_hex = config.colors["background"].hex
 
-    # Extract font
+    # Auto-detect text color from background brightness
+    brightness = _hex_brightness(bg_hex)
+    text_color = "#FFFFFF" if brightness < 128 else "#1A1A1A"
+
+    # Extract fonts
     font_family = "Inter"
+    accent_font_family = None
+
     if "display" in config.fonts:
         font_family = config.fonts["display"].family
     elif config.fonts:
         first_font = next(iter(config.fonts.values()))
         font_family = first_font.family
 
-    return {
+    # Look for a secondary/accent font
+    for key in ("accent", "body", "secondary"):
+        if key in config.fonts and config.fonts[key].family != font_family:
+            accent_font_family = config.fonts[key].family
+            break
+
+    theme = {
         "name": config.brand_name or settings.BRAND_NAME,
         "primaryColor": primary_hex,
         "accentColor": accent_hex,
         "backgroundColor": bg_hex,
+        "textColor": text_color,
         "fontFamily": font_family,
     }
 
+    if accent_font_family:
+        theme["accentFontFamily"] = accent_font_family
 
-def generate_scene_json(brief: str) -> dict:
-    """Use Claude to generate SceneData JSON from a brief + brand config."""
+    return theme
+
+
+def _detect_theme(bg_hex: str) -> str:
+    """Detect 'dark' or 'light' theme from background color."""
+    return "dark" if _hex_brightness(bg_hex) < 128 else "light"
+
+
+def generate_scene_json(
+    brief: str,
+    duration: int | None = None,
+    format: str = "square",
+    theme: str | None = None,
+) -> dict:
+    """Use Claude to generate SceneData JSON from a brief + brand config.
+
+    Args:
+        brief: The video brief/description.
+        duration: Target duration in seconds. None for auto (~20s).
+        format: 'square', 'landscape', or 'portrait'.
+        theme: 'dark' or 'light'. Auto-detected from brand bg if None.
+    """
     client = anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
     brand_theme = _brand_config_to_theme()
+
+    # Resolve format dimensions
+    width, height = _FORMAT_DIMENSIONS.get(format, (1080, 1080))
+
+    # Auto-detect theme if not specified
+    if theme is None:
+        theme = _detect_theme(brand_theme["backgroundColor"])
+
+    # Build user message with all hints
+    duration_hint = f"Target duration: {duration} seconds" if duration else "Target duration: ~20 seconds"
+    format_hint = f"Format: {format} ({width}x{height})"
+    theme_hint = f"Theme: {theme}"
 
     user_message = (
         f"Brief: {brief}\n\n"
@@ -185,12 +603,21 @@ def generate_scene_json(brief: str) -> dict:
         f"- Primary color: {brand_theme['primaryColor']}\n"
         f"- Accent color: {brand_theme['accentColor']}\n"
         f"- Background: {brand_theme['backgroundColor']}\n"
+        f"- Text color: {brand_theme['textColor']}\n"
         f"- Font: {brand_theme['fontFamily']}\n"
+    )
+    if brand_theme.get("accentFontFamily"):
+        user_message += f"- Accent font: {brand_theme['accentFontFamily']}\n"
+
+    user_message += (
+        f"\n{duration_hint}\n"
+        f"{format_hint}\n"
+        f"{theme_hint}\n"
     )
 
     response = client.messages.create(
         model=_SCENE_GEN_MODEL,
-        max_tokens=2048,
+        max_tokens=4096,
         system=_SCENE_GEN_SYSTEM,
         messages=[{"role": "user", "content": user_message}],
     )
@@ -198,7 +625,6 @@ def generate_scene_json(brief: str) -> dict:
     text = response.content[0].text.strip()
 
     # Parse JSON — handle markdown code blocks
-    import re
     if text.startswith("```"):
         match = re.search(r'```(?:json)?\s*([\s\S]*?)```', text)
         if match:
@@ -212,26 +638,44 @@ def generate_scene_json(brief: str) -> dict:
         if match:
             scene_data = json.loads(match.group())
         else:
-            raise ValueError(f"Failed to parse scene JSON from LLM response: {text[:200]}")
+            raise ValueError(
+                f"Failed to parse scene JSON from LLM response: {text[:200]}"
+            )
 
     # Validate required fields
     if "config" not in scene_data or "scenes" not in scene_data:
         raise ValueError("Scene JSON missing 'config' or 'scenes' fields")
 
-    # Ensure brand theme is set (override with actual config in case LLM deviated)
+    # --- Post-processing ---
+
+    # Override brand theme with actual config (in case LLM deviated)
     scene_data["config"]["brand"] = brand_theme
-    scene_data["config"]["width"] = 1080
-    scene_data["config"]["height"] = 1080
+    scene_data["config"]["width"] = width
+    scene_data["config"]["height"] = height
     scene_data["config"]["fps"] = 30
+
+    # Validate scene types — strip invalid ones
+    valid_scenes = []
+    for scene in scene_data["scenes"]:
+        if scene.get("type") in _VALID_SCENE_TYPES:
+            valid_scenes.append(scene)
+        else:
+            logger.warning(
+                "Stripping invalid scene type: %s", scene.get("type")
+            )
+    scene_data["scenes"] = valid_scenes
 
     # Calculate duration from scenes
     total_frames = sum(s.get("durationFrames", 90) for s in scene_data["scenes"])
     scene_data["config"]["durationInSeconds"] = round(total_frames / 30, 1)
 
     logger.info(
-        "Generated scene JSON: %d scenes, %.1fs",
+        "Generated scene JSON: %d scenes, %.1fs, %s (%dx%d)",
         len(scene_data["scenes"]),
         scene_data["config"]["durationInSeconds"],
+        format,
+        width,
+        height,
     )
     return scene_data
 
@@ -271,18 +715,28 @@ def render_video(scene_data: dict, output_path: str | None = None) -> str:
     props_path = REMOTION_DIR / "props.json"
     props_path.write_text(json.dumps(scene_data, indent=2), encoding="utf-8")
 
+    # Extract dimensions from scene config
+    width = scene_data.get("config", {}).get("width", 1080)
+    height = scene_data.get("config", {}).get("height", 1080)
+
+    # Dynamic timeout: proportional to video duration, capped at 300s
+    duration_seconds = scene_data.get("config", {}).get("durationInSeconds", 20)
+    render_timeout = min(max(int(duration_seconds * 10), 60), 300)
+
     # Render via Remotion CLI
     cmd = [
         "npx", "remotion", "render",
         "PromoVideo",
         output_path,
         f"--props={props_path}",
+        f"--width={width}",
+        f"--height={height}",
         "--codec=h264",
         "--image-format=jpeg",
         "--overwrite",
     ]
 
-    logger.info("Rendering video: %s", " ".join(cmd))
+    logger.info("Rendering video: %s (timeout=%ds)", " ".join(cmd), render_timeout)
 
     try:
         result = subprocess.run(
@@ -290,11 +744,13 @@ def render_video(scene_data: dict, output_path: str | None = None) -> str:
             cwd=str(REMOTION_DIR),
             capture_output=True,
             text=True,
-            timeout=120,
+            timeout=render_timeout,
         )
 
         if result.returncode != 0:
-            error_msg = result.stderr[-500:] if result.stderr else "Unknown render error"
+            error_msg = (
+                result.stderr[-500:] if result.stderr else "Unknown render error"
+            )
             raise RuntimeError(f"Remotion render failed: {error_msg}")
 
     finally:
@@ -302,7 +758,9 @@ def render_video(scene_data: dict, output_path: str | None = None) -> str:
         props_path.unlink(missing_ok=True)
 
     if not Path(output_path).exists():
-        raise RuntimeError(f"Render completed but output file not found: {output_path}")
+        raise RuntimeError(
+            f"Render completed but output file not found: {output_path}"
+        )
 
     logger.info("Video rendered: %s", output_path)
     return output_path
@@ -310,24 +768,61 @@ def render_video(scene_data: dict, output_path: str | None = None) -> str:
 
 async def generate_video(
     brief: str,
+    duration: int | None = None,
+    format: str = "square",
+    theme: str | None = None,
+    voiceover: bool = False,
     output_path: str | None = None,
 ) -> VideoResult:
-    """Full pipeline: brief → scene JSON → Remotion render → MP4.
+    """Full pipeline: brief -> scene JSON -> assets -> render -> audio -> MP4.
 
-    This is the main entry point called by the tool handler.
+    Args:
+        brief: The video brief/description.
+        duration: Target duration in seconds. None for auto (~20s).
+        format: 'square', 'landscape', or 'portrait'.
+        theme: 'dark' or 'light'. Auto-detected from brand bg if None.
+        voiceover: Whether to generate TTS voiceover from narrations.
+        output_path: Optional output path. Auto-generated if None.
+
+    Returns:
+        VideoResult with video_path, scene_data, duration, timing, and format.
     """
-    result = VideoResult()
+    result = VideoResult(format=format)
     t0 = time.monotonic()
 
     try:
-        # Step 1: Generate scene JSON
-        scene_data = await asyncio.to_thread(generate_scene_json, brief)
+        # Step 1: Generate scene JSON via LLM
+        scene_data = await asyncio.to_thread(
+            generate_scene_json, brief, duration, format, theme
+        )
         result.scene_data = scene_data
-
-        # Step 2: Render via Remotion
-        video_path = await asyncio.to_thread(render_video, scene_data, output_path)
-        result.video_path = video_path
         result.duration_seconds = scene_data["config"]["durationInSeconds"]
+
+        # Step 2: Resolve assets (download stock footage for stock_footage scenes)
+        scene_data = await resolve_storyboard_assets(scene_data)
+
+        # Step 3: Render via Remotion CLI
+        video_path = await asyncio.to_thread(
+            render_video, scene_data, output_path
+        )
+        result.video_path = video_path
+
+        # Step 4: If voiceover requested, generate TTS and mix audio
+        if voiceover:
+            vo_path = await generate_voiceover(scene_data.get("scenes", []))
+            if vo_path:
+                # Check for background music URL in scene config
+                music_path = None
+                audio_config = scene_data.get("audio", {})
+                if audio_config.get("musicUrl"):
+                    # Future: download music_url to local file
+                    pass
+
+                final_path = await asyncio.to_thread(
+                    mix_audio, video_path, vo_path, music_path
+                )
+                result.video_path = final_path
+                logger.info("Voiceover applied: %s", final_path)
 
     except Exception as e:
         logger.error("Video generation failed: %s", e)
