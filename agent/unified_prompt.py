@@ -387,7 +387,9 @@ def _build_capabilities_section() -> str:
         "Dev tools: `git_info` (log/diff/show/status), `read_telegram_channel` (community messages)\n"
         "Video: `smart_record` (vision-guided browser recording), `edit_video` (cut/stitch/style), "
         "`style_video` (phone mockup + gradient), `review_video` (self-review quality gate), "
-        "`analyze_video_scenes` (scene classification), `edit_by_intent` (natural language editing)\n"
+        "`analyze_video_scenes` (scene classification), `edit_by_intent` (natural language editing), "
+        "`generate_video` (Remotion motion graphics from brief)\n"
+        "Analytics: `check_post_performance` (engagement metrics for posted content)\n"
         "</tool_reference>\n\n"
 
         "You can chain tools freely. Read a URL, then use what you learned in a draft. "

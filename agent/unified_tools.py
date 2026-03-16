@@ -1131,6 +1131,47 @@ UNIFIED_TOOL_DEFINITIONS = _BASE_TOOL_DEFINITIONS + [
             "required": ["video_path", "alignment_map", "intent"],
         },
     },
+    {
+        "name": "generate_video",
+        "description": (
+            "Generate a branded promo/explainer video from a text brief. "
+            "Uses Remotion to create programmatic motion graphics — dark backgrounds, "
+            "animated text, chat UI mockups, setup steps, CTAs. No AI imagery — pure design. "
+            "Returns an MP4 file path. Typical output: 12-20 seconds, 1080x1080."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "brief": {
+                    "type": "string",
+                    "description": (
+                        "Text brief describing the video to create. Be specific about "
+                        "the product, key features, and target audience. "
+                        "Example: '15 second promo video for our MCP launch'"
+                    ),
+                },
+            },
+            "required": ["brief"],
+        },
+    },
+    {
+        "name": "check_post_performance",
+        "description": (
+            "Check engagement metrics (likes, retweets, impressions) for posted content. "
+            "Can check a specific tweet or get a summary of recent performance. "
+            "Use this to understand what content resonates with the audience."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "tweet_id": {
+                    "type": "string",
+                    "description": "Specific tweet ID to check. If empty, returns a summary of all tracked posts.",
+                },
+            },
+            "required": [],
+        },
+    },
 ]
 
 
@@ -2792,6 +2833,57 @@ async def _handle_edit_by_intent(
 
 _UNIFIED_HANDLERS["analyze_video_scenes"] = _handle_analyze_video_scenes
 _UNIFIED_HANDLERS["edit_by_intent"] = _handle_edit_by_intent
+
+
+async def _handle_generate_video(
+    input_dict: dict, tracker: ResourceTracker, user_id: int | None = None,
+    tool_context: dict | None = None,
+) -> str:
+    """Handle generate_video tool call."""
+    from agent.video_gen import generate_video
+
+    brief = input_dict.get("brief", "")
+    if not brief:
+        return json.dumps({"error": "brief is required"})
+
+    tracker.log_api("generate_video")
+
+    try:
+        result = await generate_video(brief)
+        return json.dumps({
+            "video_path": result.video_path,
+            "duration_seconds": result.duration_seconds,
+            "render_time_seconds": result.render_time_seconds,
+            "scenes": len(result.scene_data.get("scenes", [])) if result.scene_data else 0,
+            "error": result.error,
+        })
+    except Exception as e:
+        logger.error("generate_video failed: %s", e)
+        return json.dumps({"error": str(e)})
+
+
+async def _handle_check_post_performance(
+    input_dict: dict, tracker: ResourceTracker, user_id: int | None = None,
+    tool_context: dict | None = None,
+) -> str:
+    """Handle check_post_performance tool call."""
+    from agent.performance import track_post_performance, get_performance_summary
+
+    tweet_id = input_dict.get("tweet_id", "")
+
+    if tweet_id:
+        tracker.log_api("check_post_performance")
+        result = await track_post_performance(tweet_id)
+        if result:
+            return json.dumps(result.to_dict(), indent=2)
+        return json.dumps({"error": f"Could not fetch metrics for tweet {tweet_id}"})
+    else:
+        summary = get_performance_summary()
+        return json.dumps(summary, indent=2)
+
+
+_UNIFIED_HANDLERS["generate_video"] = _handle_generate_video
+_UNIFIED_HANDLERS["check_post_performance"] = _handle_check_post_performance
 
 
 async def execute_tool(

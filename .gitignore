@@ -58,5 +58,8 @@ eval/baselines/*.json
 brand_*/
 state_*/
 
+# Node.js
+node_modules/
+
 # Runtime cache
 .cache/
