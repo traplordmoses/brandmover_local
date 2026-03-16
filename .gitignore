@@ -63,3 +63,7 @@ node_modules/
 
 # Runtime cache
 .cache/
+
+# Demo recordings (large binary files)
+demos/*.mp4
+demos/*/
