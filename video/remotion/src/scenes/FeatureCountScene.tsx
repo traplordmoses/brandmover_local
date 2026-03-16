@@ -14,7 +14,7 @@ export const FeatureCountScene: React.FC<Props> = ({ count, subtitle, brand }) =
   const { fps } = useVideoConfig();
 
   const numProgress = spring({ frame, fps, config: { damping: 15, stiffness: 80, mass: 1 } });
-  const textProgress = spring({ frame: frame - 15, fps, config: { damping: 15, stiffness: 100, mass: 0.8 } });
+  const textProgress = spring({ frame: frame - 6, fps, config: { damping: 15, stiffness: 100, mass: 0.8 } });
 
   const numOpacity = interpolate(numProgress, [0, 1], [0, 1]);
   const numScale = interpolate(numProgress, [0, 1], [0.5, 1]);

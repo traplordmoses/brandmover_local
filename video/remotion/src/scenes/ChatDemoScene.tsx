@@ -36,7 +36,7 @@ export const ChatDemoScene: React.FC<Props> = ({ messages, brand }) => {
             isUser={msg.isUser}
             label={msg.label}
             accentColor={brand.accentColor}
-            delay={i * staggerDelay + 10}
+            delay={i * staggerDelay + 3}
           />
         ))}
       </AbsoluteFill>

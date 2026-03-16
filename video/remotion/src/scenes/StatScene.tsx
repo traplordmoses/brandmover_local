@@ -47,7 +47,7 @@ export const StatScene: React.FC<Props> = ({
 
   // Suffix animation (delayed)
   const suffixProgress = spring({
-    frame: frame - 20,
+    frame: frame - 8,
     fps,
     config: { damping: 14, stiffness: 100, mass: 0.7 },
   });

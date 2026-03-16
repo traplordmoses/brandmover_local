@@ -12,7 +12,7 @@ interface Props {
   brand: BrandTheme;
 }
 
-const STAGGER_FRAMES = 12;
+const STAGGER_FRAMES = 8;
 
 export const FeatureListScene: React.FC<Props> = ({
   title,
@@ -26,7 +26,7 @@ export const FeatureListScene: React.FC<Props> = ({
 
   const isCentered = layout === 'centered-stack';
   const titleDelay = 0;
-  const firstItemDelay = title ? 15 : 0;
+  const firstItemDelay = title ? 6 : 0;
 
   return (
     <AbsoluteFill>

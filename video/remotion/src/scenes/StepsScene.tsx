@@ -42,7 +42,7 @@ export const StepsScene: React.FC<Props> = ({ title, steps, brand }) => {
         )}
         <div style={{ display: 'flex', flexDirection: 'column', gap: 24 }}>
           {steps.map((step, i) => {
-            const delay = i * 18 + 12;
+            const delay = i * 12 + 3;
             const progress = spring({
               frame: frame - delay,
               fps,

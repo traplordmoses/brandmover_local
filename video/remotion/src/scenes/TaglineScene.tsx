@@ -39,7 +39,7 @@ export const TaglineScene: React.FC<Props> = ({ supertext, lines, brand }) => {
             fontSize={52}
             color={line.accent ? brand.accentColor : (brand.textColor || '#ffffff')}
             fontWeight={line.style === 'bold' ? 900 : 700}
-            delay={(supertext ? 10 : 0) + i * 8}
+            delay={(supertext ? 5 : 0) + i * 5}
             style={line.style === 'handwritten' ? { fontStyle: 'italic' } : undefined}
           />
         ))}
