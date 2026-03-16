@@ -30,12 +30,13 @@ const ICON_EMOJI_MAP: Record<string, string> = {
   users: '\u{1F465}',
 };
 
-function resolveIcon(icon: string): string | undefined {
+function resolveIcon(icon: string | undefined): string | undefined {
+  if (!icon) return ICON_EMOJI_MAP['star']; // fallback
   // If the icon is already an emoji, return it directly
   if (/\p{Emoji}/u.test(icon) && icon.length <= 4) {
     return icon;
   }
-  return ICON_EMOJI_MAP[icon.toLowerCase()];
+  return ICON_EMOJI_MAP[icon.toLowerCase()] ?? ICON_EMOJI_MAP['star'];
 }
 
 export const IconGridScene: React.FC<Props> = ({

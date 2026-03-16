@@ -67,12 +67,15 @@ and brand config, create a Storyboard JSON for a branded promo/explainer video.
   * steps headings: max 4 words, details: max 6 words
   * CTA lines: max 4 words each
 - Use the brand's colors and fonts from the config
-- For short videos (15-20s): 5-7 scenes, fast pace (2-3s per scene)
-- For medium videos (30-45s): 8-12 scenes, mix scene types
-- For long videos (45-90s): 12-20 scenes, use varied scene types including
+- For short videos (15-20s): 7-8 scenes, fast pace (2-2.5s per scene). PACK IT.
+- For medium videos (30-45s): 10-14 scenes, mix scene types
+- For long videos (45-90s): 15-25 scenes, use varied scene types including
   stat, icon_grid, data_viz, stock_footage, icon_reveal for visual richness
 - Don't repeat the same scene type back-to-back
 - NEVER repeat the same scene type twice in a row
+- EVERY video MUST include at least 2 of: stat, chat_demo, feature_count, steps, icon_grid
+  Plain text scenes (tagline, text_only) are boring alone — mix with visual/data scenes
+- Short videos especially: skip text_only, prefer stat/feature_count/chat_demo for impact
 - stat scenes: use animate 'countUp' for large numbers
 - If the brief describes a visual (bracket, grid, coins), use data_viz or icon_grid
 - narration field: 1-2 sentences of what a voiceover would say (helps pacing)
@@ -597,15 +600,26 @@ def generate_scene_json(
     if theme is None:
         theme = _detect_theme(brand_theme["backgroundColor"])
 
-    # Force appropriate background/text colors for the requested theme.
+    # Force appropriate colors for the requested theme.
     # Brand configs often have mid-tone backgrounds that look terrible in video.
     # Video needs HIGH CONTRAST: deep darks or clean whites.
     if theme == "dark":
         brand_theme["backgroundColor"] = "#0a0f1a"
         brand_theme["textColor"] = "#ffffff"
+        # If primary color has poor contrast on dark bg, force to white
+        if _hex_brightness(brand_theme["primaryColor"]) < 180:
+            brand_theme["primaryColor"] = "#ffffff"
     elif theme == "light":
         brand_theme["backgroundColor"] = "#f5f5f5"
         brand_theme["textColor"] = "#1a1a1a"
+        # If primary color has poor contrast on light bg, force to dark
+        if _hex_brightness(brand_theme["primaryColor"]) > 180:
+            brand_theme["primaryColor"] = "#1a1a1a"
+
+    # Force reliable sans-serif font for video rendering.
+    # Brand fonts (Orbitron, etc.) may not be available in all render
+    # environments. Inter is always loaded via Google Fonts in Remotion.
+    brand_theme["fontFamily"] = "Inter"
 
     # Build user message with all hints
     duration_hint = f"Target duration: {duration} seconds" if duration else "Target duration: ~20 seconds"
@@ -680,6 +694,29 @@ def generate_scene_json(
                 "Stripping invalid scene type: %s", scene.get("type")
             )
     scene_data["scenes"] = valid_scenes
+
+    # Fix common LLM confusions between scene types
+    for scene in scene_data["scenes"]:
+        # LLM often generates icon_grid with an icons array — that's icon_reveal
+        if scene.get("type") == "icon_grid" and "icons" in scene and "icon" not in scene:
+            scene["type"] = "icon_reveal"
+            # Ensure icons have the right shape for icon_reveal
+            if isinstance(scene.get("icons"), list):
+                for ic in scene["icons"]:
+                    if "name" not in ic and "icon" in ic:
+                        ic["name"] = ic.pop("icon")
+        # icon_grid requires icon, rows, cols — add defaults if missing
+        if scene.get("type") == "icon_grid":
+            scene.setdefault("icon", "star")
+            scene.setdefault("rows", 4)
+            scene.setdefault("cols", 5)
+            scene.setdefault("revealPattern", "staggered-ltr")
+        # stat scene: LLM often uses "label" instead of "suffix"
+        if scene.get("type") == "stat" and "label" in scene and "suffix" not in scene:
+            scene["suffix"] = scene.pop("label")
+        # feature_list: ensure layout defaults
+        if scene.get("type") == "feature_list":
+            scene.setdefault("layout", "centered-stack")
 
     # Truncate text that's too long (safety net for LLM verbosity)
     for scene in scene_data["scenes"]:

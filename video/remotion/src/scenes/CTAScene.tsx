@@ -28,7 +28,7 @@ export const CTAScene: React.FC<Props> = ({ lines, url, buttonText, brand }) => 
           <AnimatedText
             key={i}
             text={line.text}
-            fontSize={48}
+            fontSize={56}
             color={line.accent ? brand.accentColor : (brand.textColor || '#ffffff')}
             fontWeight={700}
             delay={i * 8}

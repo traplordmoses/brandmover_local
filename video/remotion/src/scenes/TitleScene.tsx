@@ -37,7 +37,7 @@ export const TitleScene: React.FC<Props> = ({ label, headline, subheadline, disc
         <AnimatedText
           text={headline}
           fontSize={80}
-          color={brand.primaryColor}
+          color={brand.textColor || '#ffffff'}
           fontWeight={800}
           delay={label ? 8 : 0}
         />
