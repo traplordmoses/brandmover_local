@@ -1074,6 +1074,56 @@ UNIFIED_TOOL_DEFINITIONS = _BASE_TOOL_DEFINITIONS + [
     _edit_video_def,
     _review_video_def,
     _campaign_preview_def,
+    {
+        "name": "analyze_video_scenes",
+        "description": (
+            "Analyze a video recording into a structured scene map. Extracts frames at 0.5s intervals, "
+            "classifies each into content types (static/animation/loading/transition/interaction), "
+            "and builds an alignment map of scene tokens. Use this after recording to understand "
+            "the video structure before editing. Returns scene-level data instead of raw timestamps."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "video_path": {"type": "string", "description": "Path to the video file."},
+                "interval_ms": {
+                    "type": "integer",
+                    "description": "Frame sampling interval in ms. Default 500.",
+                },
+            },
+            "required": ["video_path"],
+        },
+    },
+    {
+        "name": "edit_by_intent",
+        "description": (
+            "Edit a video using natural language intent. Takes an alignment map (from analyze_video_scenes) "
+            "and a natural language instruction, translates the intent into structured edit operations "
+            "(delete loading screens, trim dead time, reorder sections, add narration), "
+            "and produces the edited+styled video. "
+            "Examples: 'Remove all loading screens and trim static scenes to 2s max', "
+            "'Keep only the swipe and wallet sections, add narration captions'."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "video_path": {"type": "string", "description": "Path to the source video."},
+                "alignment_map": {
+                    "type": "object",
+                    "description": "AlignmentMap dict from analyze_video_scenes.",
+                },
+                "intent": {
+                    "type": "string",
+                    "description": "Natural language editing instruction.",
+                },
+                "apply_style": {
+                    "type": "boolean",
+                    "description": "Apply phone mockup + gradient. Default true.",
+                },
+            },
+            "required": ["video_path", "alignment_map", "intent"],
+        },
+    },
 ]
 
 
@@ -2613,6 +2663,58 @@ _UNIFIED_HANDLERS = {
     "edit_video": _handle_edit_video,
     "review_video": _handle_review_video,
 }
+
+
+async def _handle_analyze_video_scenes(
+    input_dict: dict, tracker: ResourceTracker, user_id: int | None = None,
+    tool_context: dict | None = None,
+) -> str:
+    """Handle analyze_video_scenes tool call."""
+    from agent.scene_analysis import async_analyze_video
+
+    video_path = input_dict.get("video_path", "")
+    interval_ms = input_dict.get("interval_ms", 500)
+
+    if not video_path:
+        return json.dumps({"error": "video_path is required"})
+
+    try:
+        alignment_map = await async_analyze_video(video_path, interval_ms)
+        result = alignment_map.to_dict()
+        result["summary"] = alignment_map.summary()
+        return json.dumps(result)
+    except Exception as e:
+        return json.dumps({"error": str(e)})
+
+
+async def _handle_edit_by_intent(
+    input_dict: dict, tracker: ResourceTracker, user_id: int | None = None,
+    tool_context: dict | None = None,
+) -> str:
+    """Handle edit_by_intent tool call."""
+    from agent.scene_analysis import AlignmentMap, async_execute_edit
+
+    video_path = input_dict.get("video_path", "")
+    alignment_map_dict = input_dict.get("alignment_map", {})
+    intent = input_dict.get("intent", "")
+    do_style = input_dict.get("apply_style", True)
+
+    if not video_path or not alignment_map_dict or not intent:
+        return json.dumps({"error": "video_path, alignment_map, and intent are all required"})
+
+    try:
+        alignment_map = AlignmentMap.from_dict(alignment_map_dict)
+        result = await async_execute_edit(
+            video_path, alignment_map, intent,
+            apply_style=do_style,
+        )
+        return json.dumps(result)
+    except Exception as e:
+        return json.dumps({"error": str(e)})
+
+
+_UNIFIED_HANDLERS["analyze_video_scenes"] = _handle_analyze_video_scenes
+_UNIFIED_HANDLERS["edit_by_intent"] = _handle_edit_by_intent
 
 
 async def execute_tool(
