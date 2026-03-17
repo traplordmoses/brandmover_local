@@ -83,7 +83,7 @@ def _read_state(user_id: int | None = None) -> dict:
 def _write_state(data: dict, user_id: int | None = None) -> None:
     """Write state dict to user's state file and update in-memory cache."""
     uid = _resolve_uid(user_id)
-    _state_caches[uid] = data
+    _state_caches[uid] = copy.deepcopy(data)
     state_file = _user_state_file(user_id)
     state_file.parent.mkdir(parents=True, exist_ok=True)
     tmp_path = state_file.with_suffix(f".tmp_{os.getpid()}_{threading.get_ident()}")
@@ -349,7 +349,7 @@ def _read_styles() -> dict:
     try:
         mtime = _STYLES_FILE.stat().st_mtime
         if _cached_styles is not None and mtime == _styles_cache_mtime:
-            return _cached_styles
+            return copy.deepcopy(_cached_styles)
         data = json.loads(_STYLES_FILE.read_text(encoding="utf-8"))
         data.setdefault("profiles", {})
         data.setdefault("active", {})
@@ -369,7 +369,7 @@ def _write_styles(data: dict) -> None:
         json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8"
     )
     os.replace(str(tmp_path), str(_STYLES_FILE))
-    _cached_styles = data
+    _cached_styles = copy.deepcopy(data)
     _styles_cache_mtime = _STYLES_FILE.stat().st_mtime
 
 

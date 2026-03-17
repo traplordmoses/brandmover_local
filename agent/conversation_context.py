@@ -4,6 +4,7 @@ Per-user conversation context tracking for intent routing.
 Persists to state/conversation.json. Auto-prunes entries older than 24 hours.
 """
 
+import copy
 import json
 import logging
 import os
@@ -53,7 +54,7 @@ def _load_all() -> dict[str, dict]:
     try:
         mtime = os.stat(_CONTEXT_FILE).st_mtime
         if _cached_contexts is not None and mtime == _ctx_cache_mtime:
-            return _cached_contexts
+            return copy.deepcopy(_cached_contexts)
         raw = json.loads(_CONTEXT_FILE.read_text(encoding="utf-8"))
         _cached_contexts = raw
         _ctx_cache_mtime = mtime
@@ -134,11 +135,12 @@ def update_context(user_id: int, **fields) -> ConversationContext:
 
 def clear_context(user_id: int) -> None:
     """Remove a user's context entirely."""
-    all_ctx = _load_all()
-    key = str(user_id)
-    if key in all_ctx:
-        del all_ctx[key]
-        _save_all(all_ctx)
+    with _ctx_lock:
+        all_ctx = _load_all()
+        key = str(user_id)
+        if key in all_ctx:
+            del all_ctx[key]
+            _save_all(all_ctx)
 
 
 # JSON fence pattern for stripping draft blocks from history

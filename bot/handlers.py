@@ -146,7 +146,7 @@ def _rate_limited(user_id: int) -> bool:
 async def _do_approve(update: Update, context: ContextTypes.DEFAULT_TYPE, option_num: int = 1, source: str = "command") -> None:
     """Core approve logic shared by /approve, NL router, and inline buttons."""
     user_id = update.effective_user.id if update.effective_user else None
-    pending = state.get_pending(user_id=user_id)
+    pending = await state.async_get_pending(user_id=user_id)
     if not pending:
         await update.message.reply_text("Nothing to approve. Send me a content request first.")
         return
@@ -262,7 +262,7 @@ async def _do_approve(update: Update, context: ContextTypes.DEFAULT_TYPE, option
             logger.warning("Failed to add LoRA training image: %s", e)
 
     # Move from pending → approved (no posting yet)
-    state.approve_pending(user_id=user_id)
+    await _aio.to_thread(state.approve_pending, user_id=user_id)
     state.clear_draft_history(user_id=user_id)
 
     # Update session plan if active
@@ -304,7 +304,7 @@ async def _do_approve(update: Update, context: ContextTypes.DEFAULT_TYPE, option
 async def _do_post(update: Update, context: ContextTypes.DEFAULT_TYPE, source: str = "command") -> None:
     """Core post logic — publishes the approved draft to X/Discord."""
     user_id = update.effective_user.id if update.effective_user else None
-    approved = state.get_approved(user_id=user_id)
+    approved = await _aio.to_thread(state.get_approved, user_id=user_id)
     if not approved:
         await update.message.reply_text("Nothing to post. Approve a draft first.")
         return
@@ -809,7 +809,9 @@ async def approve_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         except ValueError:
             pass
 
-    await _do_approve(update, context, option_num=option_num, source="command")
+    user_id = update.effective_user.id
+    async with _get_approve_lock(user_id):
+        await _do_approve(update, context, option_num=option_num, source="command")
 
 
 async def edit_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -2361,8 +2363,8 @@ async def _fast_path(update: Update, context: ContextTypes.DEFAULT_TYPE, message
     if not action:
         return False
 
-    has_draft = state.has_pending(user_id=user_id)
-    has_approved = state.has_approved(user_id=user_id)
+    has_draft = await state.async_has_pending(user_id=user_id)
+    has_approved = await _aio.to_thread(state.has_approved, user_id=user_id)
 
     # Post action — guarded by per-user lock to prevent double-post race
     if action == "post":

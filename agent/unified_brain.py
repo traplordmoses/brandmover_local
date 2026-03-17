@@ -224,7 +224,7 @@ async def run_unified(
             )
         except anthropic.APIError as e:
             logger.error("Unified brain API error on turn %d: %s", turn + 1, e)
-            result.response_text = f"API error: {e}"
+            result.response_text = "LLM service error — please try again shortly."
             break
 
         # Track token usage for cost attribution.

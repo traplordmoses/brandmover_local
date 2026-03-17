@@ -53,6 +53,9 @@ async def search_pexels_video(query: str) -> str | None:
 
 async def download_asset(url: str, filename: str) -> str:
     """Download a URL to the assets directory, return local path."""
+    from agent.net_guard import validate_url
+    validate_url(url)
+
     ASSETS_DIR.mkdir(parents=True, exist_ok=True)
     output_path = ASSETS_DIR / filename
 

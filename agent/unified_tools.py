@@ -1374,6 +1374,11 @@ def _validate_code_ast(code: str) -> str | None:
                 if top not in _ALLOWED_MODULES:
                     return f"Blocked import: from {node.module}"
 
+        # Block bare references to blocked names (prevents fn = eval; fn(...))
+        if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load):
+            if node.id in _BLOCKED_NAMES:
+                return f"Blocked name reference: {node.id}"
+
         # Block dangerous attribute access
         if isinstance(node, ast.Attribute):
             if node.attr in _BLOCKED_ATTRS:
@@ -1583,7 +1588,7 @@ async def _handle_read_state_file(
         resolved = path.resolve()
         state_dir = (_PROJECT_ROOT / "state").resolve()
         brand_dir = (_PROJECT_ROOT / "brand").resolve()
-        if not (str(resolved).startswith(str(state_dir)) or str(resolved).startswith(str(brand_dir))):
+        if not (resolved.is_relative_to(state_dir) or resolved.is_relative_to(brand_dir)):
             return json.dumps({"error": "Access denied — only state/ and brand/ files are readable"})
     except (OSError, ValueError):
         return json.dumps({"error": "Invalid path"})

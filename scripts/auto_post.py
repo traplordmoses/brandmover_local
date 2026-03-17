@@ -70,9 +70,9 @@ async def _notify_telegram(message: str) -> None:
         async with httpx.AsyncClient(timeout=15) as client:
             resp = await client.post(url, json=payload)
             if resp.status_code != 200:
-                logger.warning("Telegram notification failed: %s", resp.text[:200])
+                logger.warning("Telegram notification failed: HTTP %s", resp.status_code)
     except Exception as e:
-        logger.warning("Telegram notification error: %s", e)
+        logger.error("Telegram notification failed: %s", type(e).__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -202,7 +202,7 @@ async def process_slot(
 
     # Save last generated for /edit support
     if image_url:
-        state.save_last_generated(image_url, result.draft.get("content_type", "default"))
+        await asyncio.to_thread(state.save_last_generated, image_url, result.draft.get("content_type", "default"))
 
     # --- Send draft to Telegram for review ---
     if bot:
@@ -376,7 +376,7 @@ async def process_scheduled_item(
     )
 
     if image_url:
-        state.save_last_generated(image_url, result.draft.get("content_type", "default"))
+        await asyncio.to_thread(state.save_last_generated, image_url, result.draft.get("content_type", "default"))
 
     # Mark as done (recurrence handled inside mark_done)
     schedule_queue.mark_done(item_id)

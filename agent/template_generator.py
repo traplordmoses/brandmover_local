@@ -363,6 +363,12 @@ async def generate_template_image(design: TemplateDesign) -> str | None:
 async def download_image(url: str) -> Image.Image | None:
     """Download an image from URL and return as PIL Image."""
     try:
+        from agent.net_guard import validate_url
+        validate_url(url)
+    except ValueError as e:
+        logger.warning("Blocked URL in download_image: %s", e)
+        return None
+    try:
         async with httpx.AsyncClient(timeout=30) as client:
             resp = await client.get(url)
             resp.raise_for_status()
