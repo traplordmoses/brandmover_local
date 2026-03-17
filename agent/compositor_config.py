@@ -5,8 +5,8 @@ Provides typed color/font/identity lookups with fallbacks so the compositor
 works even if the guidelines file is missing or malformed.
 """
 
-import hashlib
 import logging
+import os
 import re
 import time
 from dataclasses import dataclass, field
@@ -443,11 +443,16 @@ def _load_config_json(path: Path | None = None) -> dict | None:
 # ---------------------------------------------------------------------------
 
 _cached_config: BrandConfig | None = None
+_cached_mtime: float = 0.0
 
 
 def get_config(path: Path | None = None) -> BrandConfig:
-    """Return the current BrandConfig, re-parsing only when the file changes."""
-    global _cached_config
+    """Return the current BrandConfig, re-parsing only when the file changes.
+
+    Uses os.stat().st_mtime for cheap cache validation instead of reading
+    the entire file to compute MD5.
+    """
+    global _cached_config, _cached_mtime
     src = path or _GUIDELINES_PATH
 
     if not src.exists():
@@ -456,11 +461,11 @@ def get_config(path: Path | None = None) -> BrandConfig:
             _cached_config = BrandConfig(source_path=str(src))
         return _cached_config
 
-    raw = src.read_text(encoding="utf-8")
-    md5 = hashlib.md5(raw.encode()).hexdigest()
-
-    if _cached_config is not None and _cached_config.raw_hash == md5:
+    mtime = os.stat(src).st_mtime
+    if _cached_config is not None and mtime == _cached_mtime:
         return _cached_config
+
+    raw = src.read_text(encoding="utf-8")
 
     colors = _parse_colors(raw)
     fonts = _parse_fonts(raw)
@@ -492,13 +497,14 @@ def get_config(path: Path | None = None) -> BrandConfig:
         brand_phrases=phrases,
         content_themes=themes,
         layout_mappings=layout_map,
-        raw_hash=md5,
+        raw_hash="",
         parsed_at=time.time(),
         source_path=str(src),
         **layout,
         **effects,
         **compositor,
     )
+    _cached_mtime = mtime
     # config.json overrides (v8) — takes precedence over ## COMPOSITOR in guidelines.md
     config_json = _load_config_json()
     if config_json:
@@ -522,8 +528,9 @@ def get_config(path: Path | None = None) -> BrandConfig:
 
 def invalidate_cache() -> None:
     """Force re-parse on next get_config() call."""
-    global _cached_config
+    global _cached_config, _cached_mtime
     _cached_config = None
+    _cached_mtime = 0.0
 
 
 # ---------------------------------------------------------------------------

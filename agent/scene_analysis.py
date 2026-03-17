@@ -242,7 +242,7 @@ class EditPlan:
 # ---------------------------------------------------------------------------
 
 
-def _extract_frames(video_path: str, interval_ms: int = 500) -> list[dict]:
+async def _extract_frames(video_path: str, interval_ms: int = 500) -> list[dict]:
     """Extract frames at fixed intervals, return as base64 JPEG with timestamps.
 
     Returns list of {"timestamp_ms": int, "index": int, "image_block": {...}}
@@ -254,7 +254,7 @@ def _extract_frames(video_path: str, interval_ms: int = 500) -> list[dict]:
         "ffprobe", "-v", "error", "-print_format", "json",
         "-show_format", "-show_streams", video_path,
     ]
-    result = subprocess.run(cmd, capture_output=True, text=True)
+    result = await asyncio.to_thread(subprocess.run, cmd, capture_output=True, text=True)
     if not result.stdout:
         return []
     data = json.loads(result.stdout)
@@ -279,7 +279,7 @@ def _extract_frames(video_path: str, interval_ms: int = 500) -> list[dict]:
             "-q:v", "2",
             frame_path,
         ]
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
+        result = await asyncio.to_thread(subprocess.run, cmd, capture_output=True, text=True, timeout=15)
         if result.returncode != 0:
             Path(frame_path).unlink(missing_ok=True)
             ts_ms += interval_ms
@@ -689,7 +689,7 @@ def _compress_repetitive_ui(
 # ---------------------------------------------------------------------------
 
 
-def analyze_video(video_path: str, interval_ms: int = 500) -> AlignmentMap:
+async def analyze_video(video_path: str, interval_ms: int = 500) -> AlignmentMap:
     """Analyze a video into a structured alignment map of scene tokens.
 
     Extracts frames at interval_ms, classifies each via Claude Vision,
@@ -703,14 +703,14 @@ def analyze_video(video_path: str, interval_ms: int = 500) -> AlignmentMap:
         "ffprobe", "-v", "error", "-print_format", "json",
         "-show_format", video_path,
     ]
-    result = subprocess.run(cmd, capture_output=True, text=True)
+    result = await asyncio.to_thread(subprocess.run, cmd, capture_output=True, text=True)
     duration_s = float(json.loads(result.stdout).get("format", {}).get("duration", 10))
     duration_ms = int(duration_s * 1000)
 
     logger.info("Analyzing %s (%.1fs, interval=%dms)", video_path, duration_s, interval_ms)
 
     # Extract frames
-    frames = _extract_frames(video_path, interval_ms)
+    frames = await _extract_frames(video_path, interval_ms)
     if not frames:
         raise RuntimeError(f"Could not extract frames from {video_path}")
 
@@ -754,8 +754,8 @@ def analyze_video(video_path: str, interval_ms: int = 500) -> AlignmentMap:
 
 
 async def async_analyze_video(video_path: str, interval_ms: int = 500) -> AlignmentMap:
-    """Async wrapper for analyze_video."""
-    return await asyncio.to_thread(analyze_video, video_path, interval_ms)
+    """Async wrapper for analyze_video — now just delegates directly."""
+    return await analyze_video(video_path, interval_ms)
 
 
 # ---------------------------------------------------------------------------

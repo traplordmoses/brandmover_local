@@ -6,6 +6,7 @@ Loaded at the start of each agent run and injected as context.
 
 import json
 import logging
+import os
 import time
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
@@ -41,25 +42,41 @@ class AgentSession:
     # Timestamp of last auto preference extraction run
 
 
+# In-memory cache for session file to avoid re-reading on every call
+_cached_session: AgentSession | None = None
+_cache_mtime: float = 0.0
+
+
 def load_session() -> AgentSession:
-    """Read session from disk. Returns fresh session if missing or corrupt."""
+    """Read session from disk. Returns fresh session if missing or corrupt.
+
+    Uses mtime-based in-memory caching to avoid re-reading on every call.
+    """
+    global _cached_session, _cache_mtime
     try:
         if SESSION_PATH.exists():
+            mtime = os.stat(SESSION_PATH).st_mtime
+            if _cached_session is not None and mtime == _cache_mtime:
+                return _cached_session
             data = json.loads(SESSION_PATH.read_text())
-            return AgentSession(
+            session = AgentSession(
                 recent_posts=data.get("recent_posts", []),
                 rejected_drafts=data.get("rejected_drafts", []),
                 learned_preferences=data.get("learned_preferences", []),
                 last_run=data.get("last_run", {}),
                 last_preference_extraction=data.get("last_preference_extraction"),
             )
+            _cached_session = session
+            _cache_mtime = mtime
+            return session
     except Exception as e:
         logger.warning("Failed to load session from %s: %s", SESSION_PATH, e)
     return AgentSession()
 
 
 def save_session(session: AgentSession) -> None:
-    """Write session to disk, pruning to stay within limits."""
+    """Write session to disk, pruning to stay within limits. Invalidates cache."""
+    global _cached_session, _cache_mtime
     # Prune to caps (keep most recent)
     session.recent_posts = session.recent_posts[-MAX_RECENT_POSTS:]
     session.rejected_drafts = session.rejected_drafts[-MAX_REJECTED_DRAFTS:]
@@ -68,6 +85,8 @@ def save_session(session: AgentSession) -> None:
     SESSION_PATH.parent.mkdir(parents=True, exist_ok=True)
     try:
         SESSION_PATH.write_text(json.dumps(asdict(session), indent=2, default=str))
+        _cached_session = session
+        _cache_mtime = os.stat(SESSION_PATH).st_mtime
     except Exception as e:
         logger.error("Failed to save session to %s: %s", SESSION_PATH, e)
 

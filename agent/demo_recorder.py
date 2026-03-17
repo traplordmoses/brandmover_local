@@ -9,18 +9,16 @@ Public API:
 """
 
 import asyncio
-import ipaddress
 import json
 import logging
-import socket
 import time
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
-from urllib.parse import urlparse
 
 from PIL import Image, ImageDraw, ImageFont
 
+from agent.net_guard import validate_url
 from agent.paths import PROJECT_ROOT
 
 logger = logging.getLogger(__name__)
@@ -58,40 +56,6 @@ class DemoResult:
     screenshot_paths: list[str] = field(default_factory=list)
     duration_seconds: float = 0.0
     error: str = ""
-
-
-# ---------------------------------------------------------------------------
-# SSRF protection (mirrors agent/web_fetch.py)
-# ---------------------------------------------------------------------------
-
-_BLOCKED_NETWORKS = [
-    ipaddress.ip_network("127.0.0.0/8"),
-    ipaddress.ip_network("10.0.0.0/8"),
-    ipaddress.ip_network("172.16.0.0/12"),
-    ipaddress.ip_network("192.168.0.0/16"),
-    ipaddress.ip_network("169.254.0.0/16"),
-    ipaddress.ip_network("::1/128"),
-    ipaddress.ip_network("fc00::/7"),
-]
-
-
-def validate_url(url: str) -> None:
-    """Validate URL scheme and block private IPs. Raises ValueError on failure."""
-    parsed = urlparse(url)
-    if parsed.scheme not in ("http", "https"):
-        raise ValueError(f"Only http/https URLs allowed, got: {parsed.scheme!r}")
-    hostname = parsed.hostname
-    if not hostname:
-        raise ValueError(f"Could not parse hostname from URL: {url}")
-    try:
-        addrinfos = socket.getaddrinfo(hostname, None)
-    except socket.gaierror as e:
-        raise ValueError(f"Could not resolve hostname {hostname!r}: {e}")
-    for info in addrinfos:
-        addr = ipaddress.ip_address(info[4][0])
-        for net in _BLOCKED_NETWORKS:
-            if addr in net:
-                raise ValueError(f"Access to private/internal address {addr} is blocked")
 
 
 # ---------------------------------------------------------------------------
@@ -146,6 +110,9 @@ def _execute_step(page, step: DemoStep, base_url: str) -> None:
         target = step.target
         if target.startswith("/"):
             target = base_url.rstrip("/") + target
+        else:
+            # Full URL supplied — validate against SSRF
+            validate_url(target)
         page.goto(target, wait_until="networkidle", timeout=30000)
 
     elif action == "click":
@@ -357,9 +324,7 @@ async def record_demo(
             try:
                 from agent.demo_narrator import convert_webm_to_mp4
                 mp4_path = str(DEMOS_DIR / f"{run_name}.mp4")
-                mp4_path = await asyncio.to_thread(
-                    convert_webm_to_mp4, result.video_path, mp4_path
-                )
+                mp4_path = await convert_webm_to_mp4(result.video_path, mp4_path)
                 result.video_path = mp4_path
                 logger.info("Converted to MP4: %s", mp4_path)
             except Exception as e:

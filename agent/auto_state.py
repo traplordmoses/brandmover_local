@@ -6,6 +6,7 @@ Tracks daily post counts, posted event IDs, prompt rotation, and recent captions
 
 import json
 import logging
+import os
 import re
 import time
 from pathlib import Path
@@ -15,6 +16,10 @@ from config import settings
 logger = logging.getLogger(__name__)
 
 _STATE_FILE = Path(settings.AUTO_POST_STATE_FILE)
+
+# In-memory cache to avoid re-reading/re-parsing JSON on every call
+_cached_state: dict | None = None
+_cache_mtime: float = 0.0
 
 # Migrate from old location if needed
 _OLD_AUTO_STATE = Path(__file__).resolve().parent.parent / "auto_post_state.json"
@@ -29,14 +34,24 @@ if _OLD_AUTO_STATE.exists() and not _STATE_FILE.exists():
 
 
 def _read_state() -> dict:
-    """Read auto_post_state.json, return empty structure if missing or corrupt."""
+    """Read auto_post_state.json, return empty structure if missing or corrupt.
+
+    Uses mtime-based in-memory caching to avoid re-reading and re-parsing
+    JSON on every call.
+    """
+    global _cached_state, _cache_mtime
     if not _STATE_FILE.exists():
         return _default_state()
     try:
+        mtime = os.stat(_STATE_FILE).st_mtime
+        if _cached_state is not None and mtime == _cache_mtime:
+            return _cached_state
         data = json.loads(_STATE_FILE.read_text(encoding="utf-8"))
         # Ensure all required keys exist
         for key, default in _default_state().items():
             data.setdefault(key, default)
+        _cached_state = data
+        _cache_mtime = mtime
         return data
     except (json.JSONDecodeError, OSError) as e:
         logger.warning("Failed to read auto_post_state.json: %s", e)
@@ -44,11 +59,14 @@ def _read_state() -> dict:
 
 
 def _write_state(data: dict) -> None:
-    """Write state dict to auto_post_state.json."""
+    """Write state dict to auto_post_state.json and update in-memory cache."""
+    global _cached_state, _cache_mtime
     _STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
     _STATE_FILE.write_text(
         json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8"
     )
+    _cached_state = data
+    _cache_mtime = os.stat(_STATE_FILE).st_mtime
 
 
 def _default_state() -> dict:

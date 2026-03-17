@@ -23,6 +23,8 @@ import os
 
 import anthropic
 
+from agent._client import get_anthropic, get_httpx
+
 logger = logging.getLogger(__name__)
 
 # HTTP status codes that trigger fallback (transient errors)
@@ -87,17 +89,13 @@ def get_fallback_chain(primary_model: str) -> list[str]:
 
 # --- Provider-specific clients (lazy-initialized) ---
 
-_anthropic_client: anthropic.AsyncAnthropic | None = None
 _openai_client = None
 _gemini_configured = False
 
 
 def _get_anthropic_client() -> anthropic.AsyncAnthropic:
-    global _anthropic_client
-    if _anthropic_client is None:
-        from config import settings
-        _anthropic_client = anthropic.AsyncAnthropic(api_key=settings.ANTHROPIC_API_KEY)
-    return _anthropic_client
+    """Return the shared AsyncAnthropic client from agent._client."""
+    return get_anthropic()
 
 
 async def _call_anthropic(model: str, **kwargs) -> dict:
@@ -137,7 +135,6 @@ def _normalize_anthropic(response: anthropic.types.Message) -> dict:
 async def _call_openai(model: str, **kwargs) -> dict:
     """Call OpenAI API and return normalized response."""
     from config import settings
-    import httpx
 
     messages = kwargs.get("messages", [])
     system = kwargs.get("system", "")
@@ -168,22 +165,22 @@ async def _call_openai(model: str, **kwargs) -> dict:
             content = "\n".join(text_parts)
         oai_messages.append({"role": role, "content": content})
 
-    async with httpx.AsyncClient() as client:
-        resp = await client.post(
-            "https://api.openai.com/v1/chat/completions",
-            headers={
-                "Authorization": f"Bearer {settings.OPENAI_API_KEY}",
-                "Content-Type": "application/json",
-            },
-            json={
-                "model": model,
-                "messages": oai_messages,
-                "max_tokens": max_tokens,
-            },
-            timeout=120,
-        )
-        resp.raise_for_status()
-        data = resp.json()
+    client = get_httpx()
+    resp = await client.post(
+        "https://api.openai.com/v1/chat/completions",
+        headers={
+            "Authorization": f"Bearer {settings.OPENAI_API_KEY}",
+            "Content-Type": "application/json",
+        },
+        json={
+            "model": model,
+            "messages": oai_messages,
+            "max_tokens": max_tokens,
+        },
+        timeout=120,
+    )
+    resp.raise_for_status()
+    data = resp.json()
 
     choice = data["choices"][0]
     return {
@@ -199,7 +196,6 @@ async def _call_openai(model: str, **kwargs) -> dict:
 async def _call_gemini(model: str, **kwargs) -> dict:
     """Call Google Gemini API and return normalized response."""
     from config import settings
-    import httpx
 
     messages = kwargs.get("messages", [])
     system = kwargs.get("system", "")
@@ -231,15 +227,15 @@ async def _call_gemini(model: str, **kwargs) -> dict:
     if system_text:
         body["systemInstruction"] = {"parts": [{"text": system_text}]}
 
-    async with httpx.AsyncClient() as client:
-        resp = await client.post(
-            f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
-            params={"key": settings.GEMINI_API_KEY},
-            json=body,
-            timeout=120,
-        )
-        resp.raise_for_status()
-        data = resp.json()
+    client = get_httpx()
+    resp = await client.post(
+        f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
+        params={"key": settings.GEMINI_API_KEY},
+        json=body,
+        timeout=120,
+    )
+    resp.raise_for_status()
+    data = resp.json()
 
     candidate = data["candidates"][0]
     text = candidate["content"]["parts"][0]["text"]

@@ -239,7 +239,7 @@ async def _run_loop(
             )
         except anthropic.APIError as e:
             logger.error("Anthropic API error on turn %d: %s", turn + 1, e)
-            result.final_text = f"API error: {e}"
+            result.final_text = "LLM service error — please try again shortly."
             break
 
         if hasattr(response, "usage") and response.usage:
@@ -498,7 +498,7 @@ async def run_agent(
     # (more PDFs, more examples), lower-priority blocks are truncated or dropped
     # to keep the context within the model's effective attention window.
     from agent.context_engine import build_brand_context_block
-    brand_context = build_brand_context_block()
+    brand_context = await build_brand_context_block()
 
     system_blocks = [
         {

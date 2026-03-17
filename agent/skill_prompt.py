@@ -17,11 +17,11 @@ logger = logging.getLogger(__name__)
 _PERSONALITY_DIR = Path(settings.BRAND_FOLDER) / "personality"
 
 
-def _get_platform_block() -> str:
+def _get_platform_block(config=None) -> str:
     """Return platform instructions for agent prompt based on brand config."""
     from agent import compositor_config
     try:
-        cfg = compositor_config.get_config()
+        cfg = config or compositor_config.get_config()
     except Exception:
         return 'The `platform` field is "WEB", "APP", or "PRO" — the badge shown on the template.'
     if cfg.badge_text is None:
@@ -29,11 +29,11 @@ def _get_platform_block() -> str:
     return f'The `platform` badge is fixed to "{cfg.badge_text}". Always use this value.'
 
 
-def _get_platform_json_line() -> str:
+def _get_platform_json_line(config=None) -> str:
     """Return platform JSON line for agent prompt output format."""
     from agent import compositor_config
     try:
-        cfg = compositor_config.get_config()
+        cfg = config or compositor_config.get_config()
     except Exception:
         return '  "platform": "WEB"'
     if cfg.badge_text is None:
@@ -41,11 +41,11 @@ def _get_platform_json_line() -> str:
     return f'  "platform": "{cfg.badge_text}"'
 
 
-def _get_image_mode_block() -> str:
+def _get_image_mode_block(config=None) -> str:
     """Return image generation instruction for agent prompt."""
     from agent import compositor_config
     try:
-        cfg = compositor_config.get_config()
+        cfg = config or compositor_config.get_config()
     except Exception:
         return ""
     mode = cfg.default_mode
@@ -135,9 +135,14 @@ format converters, analysis scripts, template generators."""
 
 def build_system_prompt() -> str:
     """Build the system prompt for the agent, incorporating brand name and context instructions."""
-    platform_block = _get_platform_block()
-    platform_json_line = _get_platform_json_line()
-    image_mode_block = _get_image_mode_block()
+    from agent import compositor_config
+    try:
+        _cfg = compositor_config.get_config()
+    except Exception:
+        _cfg = None
+    platform_block = _get_platform_block(_cfg)
+    platform_json_line = _get_platform_json_line(_cfg)
+    image_mode_block = _get_image_mode_block(_cfg)
     content_types_block = _get_content_types_block()
     skills_block = _get_skills_block()
     workspace_block = _get_workspace_injection()

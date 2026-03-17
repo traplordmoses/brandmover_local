@@ -825,7 +825,7 @@ def generate_scene_json(
     return scene_data
 
 
-def render_video(scene_data: dict, output_path: str | None = None) -> str:
+async def render_video(scene_data: dict, output_path: str | None = None) -> str:
     """Render scene data to MP4 via Remotion CLI.
 
     Args:
@@ -841,7 +841,8 @@ def render_video(scene_data: dict, output_path: str | None = None) -> str:
     # Check node_modules exist
     if not (REMOTION_DIR / "node_modules").exists():
         logger.info("Installing Remotion dependencies...")
-        subprocess.run(
+        await asyncio.to_thread(
+            subprocess.run,
             ["npm", "install"],
             cwd=str(REMOTION_DIR),
             capture_output=True,
@@ -884,7 +885,8 @@ def render_video(scene_data: dict, output_path: str | None = None) -> str:
     logger.info("Rendering video: %s (timeout=%ds)", " ".join(cmd), render_timeout)
 
     try:
-        result = subprocess.run(
+        result = await asyncio.to_thread(
+            subprocess.run,
             cmd,
             cwd=str(REMOTION_DIR),
             capture_output=True,
@@ -947,9 +949,7 @@ async def generate_video(
         scene_data = await resolve_storyboard_assets(scene_data)
 
         # Step 3: Render via Remotion CLI
-        video_path = await asyncio.to_thread(
-            render_video, scene_data, output_path
-        )
+        video_path = await render_video(scene_data, output_path)
         result.video_path = video_path
 
         # Step 4: If voiceover requested, generate TTS and mix audio

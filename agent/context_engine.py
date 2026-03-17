@@ -22,6 +22,7 @@ Usage:
     assembled = engine.assemble()
 """
 
+import asyncio
 import logging
 from dataclasses import dataclass, field
 
@@ -161,7 +162,7 @@ class ContextEngine:
         }
 
 
-def build_brand_context_block(budget_tokens: int = DEFAULT_BUDGET_TOKENS) -> str:
+async def build_brand_context_block(budget_tokens: int = DEFAULT_BUDGET_TOKENS) -> str:
     """Build brand context using priority-based budget assembly.
 
     Assembles brand guidelines, examples, references, session context, and
@@ -173,14 +174,23 @@ def build_brand_context_block(budget_tokens: int = DEFAULT_BUDGET_TOKENS) -> str
     as the brand corpus grows, this ensures the most important context
     always fits within the model's effective attention window.
 
+    Loads guidelines, examples, and references concurrently via asyncio.gather.
+
     Returns:
         Assembled brand context string.
     """
     engine = ContextEngine(budget_tokens=budget_tokens)
 
-    # Priority 0: Brand guidelines (core — always included)
     from agent import guidelines
-    guidelines_text = guidelines.load_guidelines()
+
+    # Load all brand data concurrently — these are independent file I/O calls
+    guidelines_text, examples, references = await asyncio.gather(
+        asyncio.to_thread(guidelines.load_guidelines),
+        asyncio.to_thread(guidelines.load_examples),
+        asyncio.to_thread(guidelines.load_references),
+    )
+
+    # Priority 0: Brand guidelines (core — always included)
     if guidelines_text:
         engine.add(
             "guidelines",
@@ -189,21 +199,17 @@ def build_brand_context_block(budget_tokens: int = DEFAULT_BUDGET_TOKENS) -> str
         )
 
     # Priority 1: Example posts (important for voice matching, truncatable)
-    examples = guidelines.load_examples()
     if examples:
         examples_text = "--- EXAMPLE POSTS ---\n" + "\n\n".join(
             f"Example {i}:\n{ex}" for i, ex in enumerate(examples, 1)
         )
         engine.add("examples", examples_text, priority=1, truncatable=True)
 
-    # Priority 2: Session context (recent posts, rejections, preferences)
-    from agent.session import build_session_context
-    session_ctx = build_session_context()
-    if session_ctx:
-        engine.add("session", session_ctx, priority=2)
+    # NOTE: Session context (recent posts, rejections, preferences) is injected
+    # directly into the user message by engine.run_agent() to avoid duplication.
+    # Do NOT add it here — it was previously called twice per agent run.
 
     # Priority 3: Reference materials (PDFs, docs — truncatable, lower priority)
-    references = guidelines.load_references()
     if references:
         refs_text = "--- REFERENCE MATERIALS ---\n" + "\n\n".join(
             f"[{ref['name']}]\n{ref['text']}" for ref in references

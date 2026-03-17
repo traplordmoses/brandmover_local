@@ -28,6 +28,7 @@ no fine-tuning needed. It's a closed-loop system that improves through prompt co
 import asyncio
 import json
 import logging
+import os
 import time
 from pathlib import Path
 
@@ -36,6 +37,10 @@ import anthropic
 from config import settings
 
 logger = logging.getLogger(__name__)
+
+# In-memory cache for feedback.json to avoid re-reading on every call
+_cached_feedback: list[dict] | None = None
+_feedback_cache_mtime: float = 0.0
 
 # File paths — all state lives in state/ directory
 _project_root = Path(__file__).resolve().parent.parent
@@ -59,23 +64,34 @@ for _old, _new in [
 def _read_feedback() -> list[dict]:
     """Read the feedback log from disk. Returns empty list if missing or corrupt.
 
+    Uses mtime-based in-memory caching to avoid re-reading on every call.
     Defensive: catches JSON parse errors and file I/O errors rather than crashing.
     The bot should keep working even if the feedback file is corrupted.
     """
+    global _cached_feedback, _feedback_cache_mtime
     if not _FEEDBACK_FILE.exists():
         return []
     try:
-        return json.loads(_FEEDBACK_FILE.read_text(encoding="utf-8"))
+        mtime = os.stat(_FEEDBACK_FILE).st_mtime
+        if _cached_feedback is not None and mtime == _feedback_cache_mtime:
+            return _cached_feedback
+        data = json.loads(_FEEDBACK_FILE.read_text(encoding="utf-8"))
+        _cached_feedback = data
+        _feedback_cache_mtime = mtime
+        return data
     except (json.JSONDecodeError, OSError) as e:
         logger.warning("Failed to read feedback.json: %s", e)
         return []
 
 
 def _write_feedback(entries: list[dict]) -> None:
-    """Write the full feedback log to disk (overwrites file with complete list)."""
+    """Write the full feedback log to disk and update in-memory cache."""
+    global _cached_feedback, _feedback_cache_mtime
     _FEEDBACK_FILE.write_text(
         json.dumps(entries, indent=2, ensure_ascii=False), encoding="utf-8"
     )
+    _cached_feedback = entries
+    _feedback_cache_mtime = os.stat(_FEEDBACK_FILE).st_mtime
 
 
 def log_feedback(
@@ -215,7 +231,7 @@ async def summarize_preferences() -> str:
     from agent._client import get_anthropic
     client = get_anthropic()
     response = await client.messages.create(
-        model=settings.SONNET_MODEL,
+        model=settings.HAIKU_MODEL,
         max_tokens=1500,
         system="You analyze content feedback logs and extract patterns about brand preferences.",
         messages=[{

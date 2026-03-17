@@ -91,9 +91,9 @@ _BASE_NEGATIVES = (
 )
 
 
-def _get_brand_terms() -> str:
+def _get_brand_terms(config=None) -> str:
     """Build brand enforcement terms from guidelines config."""
-    cfg = compositor_config.get_config()
+    cfg = config or compositor_config.get_config()
     parts: list[str] = []
     # Style keywords from brand guidelines
     if cfg.style_keywords:
@@ -115,9 +115,9 @@ def _get_brand_terms() -> str:
     return ", ".join(parts)
 
 
-def _get_quality_profile(content_type: str) -> str:
+def _get_quality_profile(content_type: str, config=None) -> str:
     """Build quality profile from brand style keywords + per-type modifiers."""
-    cfg = compositor_config.get_config()
+    cfg = config or compositor_config.get_config()
     ct = content_type.lower()
     parts: list[str] = []
     # Brand style keywords
@@ -139,9 +139,9 @@ def _get_quality_profile(content_type: str) -> str:
     return ", ".join(parts)
 
 
-def _get_negative_prompt() -> str:
+def _get_negative_prompt(config=None) -> str:
     """Build negative prompt from brand avoid_terms + base negatives."""
-    cfg = compositor_config.get_config()
+    cfg = config or compositor_config.get_config()
     if cfg.avoid_terms:
         return ", ".join(cfg.avoid_terms) + ", " + _BASE_NEGATIVES
     return _BASE_NEGATIVES
@@ -283,8 +283,11 @@ def enhance_prompt(raw_prompt: str, content_type: str) -> tuple[str, str]:
         return enhanced, _MASCOT_NEGATIVE
 
     # --- Build enhanced prompt ---
+    # Call get_config() once and pass to all helpers
+    cfg = compositor_config.get_config()
+
     # Add content-type quality profile (strip contradictions if locked)
-    quality = _get_quality_profile(ct)
+    quality = _get_quality_profile(ct, config=cfg)
     if locked:
         quality = _strip_contradictions(quality, locked)
 
@@ -294,7 +297,7 @@ def enhance_prompt(raw_prompt: str, content_type: str) -> tuple[str, str]:
 
     # Add brand terms if not already present (strip contradictions if locked)
     if not _BRAND_INDICATORS.search(prompt):
-        brand = _get_brand_terms()
+        brand = _get_brand_terms(config=cfg)
         if locked:
             brand = _strip_contradictions(brand, locked)
         if brand:
@@ -312,7 +315,7 @@ def enhance_prompt(raw_prompt: str, content_type: str) -> tuple[str, str]:
         locked or "none",
     )
 
-    return enhanced, _get_negative_prompt()
+    return enhanced, _get_negative_prompt(config=cfg)
 
 
 def select_model(content_type: str, prompt: str) -> tuple[str, str]:

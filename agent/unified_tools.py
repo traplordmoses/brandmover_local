@@ -1325,6 +1325,23 @@ async def _handle_execute_code(
     if not code.strip():
         return json.dumps({"error": "No code provided"})
 
+    # --- Security: block dangerous patterns before execution ---
+    _DANGEROUS_PATTERNS = [
+        r"config\.settings",
+        r"config\s+import\s+settings",
+        r"\.env",
+        r"dotenv",
+        r"os\.environ",
+        r"os\.getenv",
+        r"/etc/",
+        r"subprocess",
+        r"__import__",
+    ]
+    _dangerous_re = re.compile("|".join(_DANGEROUS_PATTERNS))
+    match = _dangerous_re.search(code)
+    if match:
+        return json.dumps({"error": f"Blocked: code contains disallowed pattern '{match.group()}'"})
+
     _OUTPUTS_DIR.mkdir(parents=True, exist_ok=True)
 
     # Snapshot output files before execution
@@ -1343,11 +1360,11 @@ async def _handle_execute_code(
     try:
         proc = await asyncio.to_thread(
             subprocess.run,
-            [sys.executable, script_path],
+            [sys.executable, "-I", script_path],
             capture_output=True,
             text=True,
             timeout=60,
-            cwd=str(_PROJECT_ROOT),
+            cwd=str(_OUTPUTS_DIR),
             env={
                 **{k: v for k, v in os.environ.items()
                    if not any(s in k.upper() for s in ("KEY", "TOKEN", "SECRET", "PASSWORD", "CREDENTIAL"))},
@@ -1393,6 +1410,16 @@ async def _handle_register_draft(
     path = Path(image_path)
     if not path.is_absolute():
         path = _PROJECT_ROOT / path
+
+    # Path containment — only allow images within state/ or brand/
+    try:
+        resolved = path.resolve()
+        state_dir = (_PROJECT_ROOT / "state").resolve()
+        brand_dir = (_PROJECT_ROOT / "brand").resolve()
+        if not (resolved.is_relative_to(state_dir) or resolved.is_relative_to(brand_dir)):
+            return json.dumps({"error": "Access denied — image_path must be within state/ or brand/"})
+    except (OSError, ValueError):
+        return json.dumps({"error": "Invalid image path"})
 
     if not path.exists():
         return json.dumps({"error": f"File not found: {image_path}"})
@@ -1451,6 +1478,16 @@ async def _handle_send_file(
     path = Path(file_path)
     if not path.is_absolute():
         path = _PROJECT_ROOT / path
+
+    # Path containment — only allow files within state/ or brand/
+    try:
+        resolved = path.resolve()
+        state_dir = (_PROJECT_ROOT / "state").resolve()
+        brand_dir = (_PROJECT_ROOT / "brand").resolve()
+        if not (resolved.is_relative_to(state_dir) or resolved.is_relative_to(brand_dir)):
+            return json.dumps({"error": "Access denied — only files in state/ or brand/ can be sent"})
+    except (OSError, ValueError):
+        return json.dumps({"error": "Invalid file path"})
 
     if not path.exists():
         return json.dumps({"error": f"File not found: {path}"})
@@ -1902,10 +1939,12 @@ async def _handle_take_screenshot(
     if not url:
         return json.dumps({"error": "url is required"})
 
-    # Validate URL scheme (prevent file://, ftp://, internal IPs)
-    parsed = urlparse(url)
-    if parsed.scheme not in ("http", "https"):
-        return json.dumps({"error": "Only http/https URLs are supported"})
+    # Validate URL scheme and block private/internal IPs (SSRF protection)
+    try:
+        from agent.net_guard import validate_url as _validate_url
+        _validate_url(url)
+    except ValueError as e:
+        return json.dumps({"error": str(e)})
 
     full_page = input_dict.get("full_page", False)
     width = input_dict.get("width", 1280)
@@ -2047,7 +2086,19 @@ async def _handle_edit_image(
 
                 elif op_type == "composite":
                     overlay_path = op.get("overlay_path", "")
-                    if not Path(overlay_path).exists():
+                    # Path containment — overlay must be within state/ or brand/
+                    _overlay_p = Path(overlay_path)
+                    if not _overlay_p.is_absolute():
+                        _overlay_p = _PROJECT_ROOT / _overlay_p
+                    try:
+                        _overlay_resolved = _overlay_p.resolve()
+                        _state_d = (_PROJECT_ROOT / "state").resolve()
+                        _brand_d = (_PROJECT_ROOT / "brand").resolve()
+                        if not (_overlay_resolved.is_relative_to(_state_d) or _overlay_resolved.is_relative_to(_brand_d)):
+                            continue  # skip this op — path outside allowed dirs
+                    except (OSError, ValueError):
+                        continue
+                    if not _overlay_p.exists():
                         continue
                     overlay = Image.open(overlay_path).convert("RGBA")
                     opacity = op.get("opacity", 1.0)

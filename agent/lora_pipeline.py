@@ -14,8 +14,7 @@ import time
 import zipfile
 from pathlib import Path
 
-import httpx
-
+from agent._client import get_httpx
 from config import settings
 
 logger = logging.getLogger(__name__)
@@ -103,10 +102,10 @@ async def add_training_image_from_url(
     tmp_path = _IMAGES_DIR / f"_dl_{ts}.jpg"
 
     try:
-        async with httpx.AsyncClient(timeout=30, follow_redirects=True) as client:
-            resp = await client.get(url)
-            resp.raise_for_status()
-            tmp_path.write_bytes(resp.content)
+        client = get_httpx()
+        resp = await client.get(url)
+        resp.raise_for_status()
+        tmp_path.write_bytes(resp.content)
     except Exception as e:
         logger.warning("Failed to download training image from %s: %s", url[:80], e)
         return len(_load_manifest()["images"]), False
@@ -324,20 +323,20 @@ async def poll_training(prediction_id: str) -> dict:
     url = f"https://api.replicate.com/v1/predictions/{prediction_id}"
     deadline = time.time() + _POLL_TIMEOUT
 
-    async with httpx.AsyncClient(timeout=30) as client:
-        while time.time() < deadline:
-            try:
-                resp = await client.get(url, headers=headers)
-                resp.raise_for_status()
-                data = resp.json()
-                status = data.get("status", "")
-                if status in ("succeeded", "failed", "canceled"):
-                    logger.info("Training %s completed with status: %s", prediction_id, status)
-                    return data
-                logger.debug("Training %s status: %s", prediction_id, status)
-            except Exception as e:
-                logger.warning("Poll error for %s: %s", prediction_id, e)
-            await asyncio.sleep(_POLL_INTERVAL)
+    client = get_httpx()
+    while time.time() < deadline:
+        try:
+            resp = await client.get(url, headers=headers)
+            resp.raise_for_status()
+            data = resp.json()
+            status = data.get("status", "")
+            if status in ("succeeded", "failed", "canceled"):
+                logger.info("Training %s completed with status: %s", prediction_id, status)
+                return data
+            logger.debug("Training %s status: %s", prediction_id, status)
+        except Exception as e:
+            logger.warning("Poll error for %s: %s", prediction_id, e)
+        await asyncio.sleep(_POLL_INTERVAL)
 
     return {"status": "timeout", "error": "Polling timed out after 90 minutes"}
 
@@ -362,10 +361,10 @@ async def download_weights(
 
     versioned_path = _LORA_DIR / f"brand3d_v{version_num}.safetensors"
 
-    async with httpx.AsyncClient(timeout=300, follow_redirects=True) as client:
-        resp = await client.get(output_url)
-        resp.raise_for_status()
-        data = resp.content
+    client = get_httpx()
+    resp = await client.get(output_url)
+    resp.raise_for_status()
+    data = resp.content
 
     versioned_path.write_bytes(data)
     shutil.copy2(str(versioned_path), str(_ACTIVE_WEIGHTS))
@@ -551,42 +550,42 @@ async def trigger_training(
 
     # Upload zip to Replicate files API
     try:
-        async with httpx.AsyncClient(timeout=120) as client:
-            upload_resp = await client.post(
-                "https://api.replicate.com/v1/files",
-                headers=headers,
-                files={"content": (f"training_{version_name}.zip", zip_bytes, "application/zip")},
-            )
-            upload_resp.raise_for_status()
-            file_data = upload_resp.json()
-            file_url = file_data.get("urls", {}).get("get", "")
-            if not file_url:
-                return {"error": "Upload succeeded but no file URL returned"}
-            logger.info("Training zip uploaded: %s", file_url)
+        client = get_httpx()
+        upload_resp = await client.post(
+            "https://api.replicate.com/v1/files",
+            headers=headers,
+            files={"content": (f"training_{version_name}.zip", zip_bytes, "application/zip")},
+        )
+        upload_resp.raise_for_status()
+        file_data = upload_resp.json()
+        file_url = file_data.get("urls", {}).get("get", "")
+        if not file_url:
+            return {"error": "Upload succeeded but no file URL returned"}
+        logger.info("Training zip uploaded: %s", file_url)
     except Exception as e:
         return {"error": f"File upload failed: {e}"}
 
     # Start training via Replicate
     try:
-        async with httpx.AsyncClient(timeout=60) as client:
-            train_resp = await client.post(
-                "https://api.replicate.com/v1/models/ostris/flux-dev-lora-trainer/predictions",
-                headers={**headers, "Content-Type": "application/json"},
-                json={
-                    "input": {
-                        "input_images": file_url,
-                        "trigger_word": trigger_word,
-                        "steps": 1000,
-                        "learning_rate": 0.0004,
-                        "batch_size": 1,
-                        "resolution": "512,768,1024",
-                        "autocaption": True,
-                    },
+        client = get_httpx()
+        train_resp = await client.post(
+            "https://api.replicate.com/v1/models/ostris/flux-dev-lora-trainer/predictions",
+            headers={**headers, "Content-Type": "application/json"},
+            json={
+                "input": {
+                    "input_images": file_url,
+                    "trigger_word": trigger_word,
+                    "steps": 1000,
+                    "learning_rate": 0.0004,
+                    "batch_size": 1,
+                    "resolution": "512,768,1024",
+                    "autocaption": True,
                 },
-            )
-            train_resp.raise_for_status()
-            train_data = train_resp.json()
-            prediction_id = train_data.get("id", "unknown")
+            },
+        )
+        train_resp.raise_for_status()
+        train_data = train_resp.json()
+        prediction_id = train_data.get("id", "unknown")
     except Exception as e:
         return {"error": f"Training request failed: {e}"}
 

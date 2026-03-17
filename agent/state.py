@@ -316,15 +316,28 @@ def get_3d_master_prompt() -> str | None:
 _STYLES_FILE = Path(settings.BRAND_FOLDER) / "styles.json"
 _STYLES_DIR = Path(settings.BRAND_FOLDER) / "references" / "styles"
 
+# In-memory cache for styles.json to avoid re-reading on every call
+_cached_styles: dict | None = None
+_styles_cache_mtime: float = 0.0
+
 
 def _read_styles() -> dict:
-    """Read styles.json, return empty structure if missing or corrupt."""
+    """Read styles.json, return empty structure if missing or corrupt.
+
+    Uses mtime-based in-memory caching.
+    """
+    global _cached_styles, _styles_cache_mtime
     if not _STYLES_FILE.exists():
         return {"profiles": {}, "active": {}}
     try:
+        mtime = _STYLES_FILE.stat().st_mtime
+        if _cached_styles is not None and mtime == _styles_cache_mtime:
+            return _cached_styles
         data = json.loads(_STYLES_FILE.read_text(encoding="utf-8"))
         data.setdefault("profiles", {})
         data.setdefault("active", {})
+        _cached_styles = data
+        _styles_cache_mtime = mtime
         return data
     except (json.JSONDecodeError, OSError) as e:
         logger.warning("Failed to read styles.json: %s", e)
@@ -332,10 +345,13 @@ def _read_styles() -> dict:
 
 
 def _write_styles(data: dict) -> None:
-    """Write styles dict to styles.json."""
+    """Write styles dict to styles.json and update in-memory cache."""
+    global _cached_styles, _styles_cache_mtime
     _STYLES_FILE.write_text(
         json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8"
     )
+    _cached_styles = data
+    _styles_cache_mtime = _STYLES_FILE.stat().st_mtime
 
 
 def get_style_profiles() -> dict:

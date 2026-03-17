@@ -11,6 +11,7 @@ Public API:
     mp4 = stitch_clips(clip_paths, output_path)
 """
 
+import asyncio
 import logging
 import subprocess
 from dataclasses import dataclass
@@ -112,7 +113,7 @@ def _build_drawtext_filters(timeline: list[dict]) -> str:
     return ",".join(filters)
 
 
-def add_narration_overlay(
+async def add_narration_overlay(
     input_webm: str,
     output_mp4: str,
     timeline: list[dict],
@@ -145,7 +146,7 @@ def add_narration_overlay(
     ]
 
     logger.info("ffmpeg narration: %s → %s (%d captions)", input_webm, output_mp4, len(timeline))
-    result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+    result = await asyncio.to_thread(subprocess.run, cmd, capture_output=True, text=True, timeout=120)
     if result.returncode != 0:
         raise RuntimeError(f"ffmpeg failed (exit {result.returncode}): {result.stderr[-500:]}")
 
@@ -153,7 +154,7 @@ def add_narration_overlay(
     return output_mp4
 
 
-def convert_webm_to_mp4(input_webm: str, output_mp4: str) -> str:
+async def convert_webm_to_mp4(input_webm: str, output_mp4: str) -> str:
     """Convert WebM to MP4 without narration overlays.
 
     Args:
@@ -178,14 +179,14 @@ def convert_webm_to_mp4(input_webm: str, output_mp4: str) -> str:
     ]
 
     logger.info("ffmpeg convert: %s → %s", input_webm, output_mp4)
-    result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+    result = await asyncio.to_thread(subprocess.run, cmd, capture_output=True, text=True, timeout=120)
     if result.returncode != 0:
         raise RuntimeError(f"ffmpeg failed (exit {result.returncode}): {result.stderr[-500:]}")
 
     return output_mp4
 
 
-def stitch_clips(clip_paths: list[str], output_path: str) -> str:
+async def stitch_clips(clip_paths: list[str], output_path: str) -> str:
     """Stitch multiple video clips using ffmpeg concat demuxer.
 
     Args:
@@ -221,7 +222,7 @@ def stitch_clips(clip_paths: list[str], output_path: str) -> str:
     ]
 
     logger.info("ffmpeg stitch: %d clips → %s", len(clip_paths), output_path)
-    result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+    result = await asyncio.to_thread(subprocess.run, cmd, capture_output=True, text=True, timeout=120)
     list_path.unlink(missing_ok=True)
 
     if result.returncode != 0:

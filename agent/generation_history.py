@@ -8,10 +8,15 @@ Tracks asset type, content type, prompt, model, image URLs, and status
 import asyncio
 import json
 import logging
+import os
 import time
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
+
+# In-memory cache for generation_history.json to avoid re-reading on every call
+_cached_history: list[dict] | None = None
+_history_cache_mtime: float = 0.0
 
 _project_root = Path(__file__).resolve().parent.parent
 from agent.paths import STATE_DIR as _STATE_DIR
@@ -26,21 +31,34 @@ if _OLD_HISTORY.exists() and not _HISTORY_FILE.exists():
 
 
 def _read_history() -> list[dict]:
-    """Read the history log. Returns empty list if missing or corrupt."""
+    """Read the history log. Returns empty list if missing or corrupt.
+
+    Uses mtime-based in-memory caching to avoid re-reading on every call.
+    """
+    global _cached_history, _history_cache_mtime
     if not _HISTORY_FILE.exists():
         return []
     try:
-        return json.loads(_HISTORY_FILE.read_text(encoding="utf-8"))
+        mtime = os.stat(_HISTORY_FILE).st_mtime
+        if _cached_history is not None and mtime == _history_cache_mtime:
+            return _cached_history
+        data = json.loads(_HISTORY_FILE.read_text(encoding="utf-8"))
+        _cached_history = data
+        _history_cache_mtime = mtime
+        return data
     except (json.JSONDecodeError, OSError) as e:
         logger.warning("Failed to read generation_history.json: %s", e)
         return []
 
 
 def _write_history(entries: list[dict]) -> None:
-    """Write the full history log."""
+    """Write the full history log and update in-memory cache."""
+    global _cached_history, _history_cache_mtime
     _HISTORY_FILE.write_text(
         json.dumps(entries, indent=2, ensure_ascii=False), encoding="utf-8"
     )
+    _cached_history = entries
+    _history_cache_mtime = os.stat(_HISTORY_FILE).st_mtime
 
 
 # Estimated cost per prediction by model (USD). Based on Replicate pricing.

@@ -11,8 +11,7 @@ import subprocess
 import uuid
 from pathlib import Path
 
-import httpx
-
+from agent._client import get_httpx
 from agent.paths import PROJECT_ROOT
 from config import settings
 
@@ -60,25 +59,25 @@ async def generate_voiceover_elevenlabs(
     if not output_path:
         output_path = str(OUTPUT_DIR / f"vo_{uuid.uuid4().hex[:8]}.mp3")
 
-    async with httpx.AsyncClient() as client:
-        resp = await client.post(
-            f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}",
-            headers={
-                "xi-api-key": ELEVENLABS_API_KEY,
-                "Content-Type": "application/json",
+    client = get_httpx()
+    resp = await client.post(
+        f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}",
+        headers={
+            "xi-api-key": ELEVENLABS_API_KEY,
+            "Content-Type": "application/json",
+        },
+        json={
+            "text": text,
+            "model_id": "eleven_monolingual_v1",
+            "voice_settings": {
+                "stability": 0.5,
+                "similarity_boost": 0.75,
             },
-            json={
-                "text": text,
-                "model_id": "eleven_monolingual_v1",
-                "voice_settings": {
-                    "stability": 0.5,
-                    "similarity_boost": 0.75,
-                },
-            },
-            timeout=60,
-        )
-        resp.raise_for_status()
-        Path(output_path).write_bytes(resp.content)
+        },
+        timeout=60,
+    )
+    resp.raise_for_status()
+    Path(output_path).write_bytes(resp.content)
 
     logger.info("ElevenLabs TTS: %d chars -> %s", len(text), output_path)
     return output_path
@@ -97,22 +96,22 @@ async def generate_voiceover_openai(
     if not output_path:
         output_path = str(OUTPUT_DIR / f"vo_{uuid.uuid4().hex[:8]}.mp3")
 
-    async with httpx.AsyncClient() as client:
-        resp = await client.post(
-            "https://api.openai.com/v1/audio/speech",
-            headers={
-                "Authorization": f"Bearer {OPENAI_API_KEY}",
-                "Content-Type": "application/json",
-            },
-            json={
-                "model": "tts-1",
-                "input": text,
-                "voice": voice,
-            },
-            timeout=60,
-        )
-        resp.raise_for_status()
-        Path(output_path).write_bytes(resp.content)
+    client = get_httpx()
+    resp = await client.post(
+        "https://api.openai.com/v1/audio/speech",
+        headers={
+            "Authorization": f"Bearer {OPENAI_API_KEY}",
+            "Content-Type": "application/json",
+        },
+        json={
+            "model": "tts-1",
+            "input": text,
+            "voice": voice,
+        },
+        timeout=60,
+    )
+    resp.raise_for_status()
+    Path(output_path).write_bytes(resp.content)
 
     logger.info("OpenAI TTS: %d chars -> %s", len(text), output_path)
     return output_path

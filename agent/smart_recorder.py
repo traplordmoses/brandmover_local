@@ -816,9 +816,7 @@ async def smart_record_demo(
         try:
             from agent.demo_narrator import convert_webm_to_mp4
             mp4_path = str(DEMOS_DIR / f"{run_name}.mp4")
-            mp4_path = await asyncio.to_thread(
-                convert_webm_to_mp4, result.video_path, mp4_path
-            )
+            mp4_path = await convert_webm_to_mp4(result.video_path, mp4_path)
             result.video_path = mp4_path
             logger.info("Converted to MP4: %s", mp4_path)
         except Exception as e:

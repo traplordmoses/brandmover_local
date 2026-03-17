@@ -828,13 +828,13 @@ async def edit_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
     try:
         # Download the last generated image to a temp file
-        import httpx
+        from agent._client import get_httpx
         ts = int(time.time())
         tmp_path = str(Path(tempfile.gettempdir()) / f"edit_ref_{ts}.jpg")
-        async with httpx.AsyncClient(timeout=30, follow_redirects=True) as client:
-            resp = await client.get(last_url)
-            resp.raise_for_status()
-            _PILImage.open(io.BytesIO(resp.content)).convert("RGB").save(tmp_path, "JPEG", quality=95)
+        client = get_httpx()
+        resp = await client.get(last_url)
+        resp.raise_for_status()
+        _PILImage.open(io.BytesIO(resp.content)).convert("RGB").save(tmp_path, "JPEG", quality=95)
 
         # Build edit prompt with brand constraints
         edit_prompt = (

@@ -247,11 +247,11 @@ Output ONLY valid JSON:
 # Mode-aware prompt helpers
 # ---------------------------------------------------------------------------
 
-def _get_platform_instruction() -> str:
+def _get_platform_instruction(config=None) -> str:
     """Return platform instruction based on brand config badge_text."""
     from agent import compositor_config
     try:
-        cfg = compositor_config.get_config()
+        cfg = config or compositor_config.get_config()
     except Exception:
         return 'The "platform" field is the badge to show — "WEB", "APP", or "PRO".'
     if cfg.badge_text is None:
@@ -259,11 +259,11 @@ def _get_platform_instruction() -> str:
     return f'The platform badge is fixed to "{cfg.badge_text}".'
 
 
-def _get_platform_json_field() -> str:
+def _get_platform_json_field(config=None) -> str:
     """Return the platform JSON field line for prompt templates, or empty."""
     from agent import compositor_config
     try:
-        cfg = compositor_config.get_config()
+        cfg = config or compositor_config.get_config()
     except Exception:
         return ',\n  "platform": "WEB"'
     if cfg.badge_text is None:
@@ -271,11 +271,11 @@ def _get_platform_json_field() -> str:
     return f',\n  "platform": "{cfg.badge_text}"'
 
 
-def _get_image_mode_instruction() -> str:
+def _get_image_mode_instruction(config=None) -> str:
     """Return image generation instruction based on default_mode."""
     from agent import compositor_config
     try:
-        cfg = compositor_config.get_config()
+        cfg = config or compositor_config.get_config()
     except Exception:
         return "Include image_prompt when an image enhances the post."
     mode = cfg.default_mode
@@ -360,7 +360,9 @@ def _parse_json_response(text: str) -> dict:
     return json.loads(cleaned)
 
 
-async def _call_anthropic(system_prompt: str, user_message: str, max_tokens: int = 2048) -> tuple[str, dict]:
+async def _call_anthropic(
+    system_prompt: str, user_message: str, max_tokens: int = 2048, model: str | None = None,
+) -> tuple[str, dict]:
     """Call Anthropic Claude API.
 
     Returns:
@@ -369,7 +371,7 @@ async def _call_anthropic(system_prompt: str, user_message: str, max_tokens: int
     from agent._client import get_anthropic
     client = get_anthropic()
     response = await client.messages.create(
-        model=settings.SONNET_MODEL,
+        model=model or settings.SONNET_MODEL,
         max_tokens=max_tokens,
         system=system_prompt,
         messages=[{"role": "user", "content": user_message}],
@@ -412,13 +414,13 @@ async def _call_gemini(system_prompt: str, user_message: str) -> str:
     return data["candidates"][0]["content"]["parts"][0]["text"]
 
 
-async def _call_llm(system_prompt: str, user_message: str, max_tokens: int = 2048) -> str:
+async def _call_llm(system_prompt: str, user_message: str, max_tokens: int = 2048, model: str | None = None) -> str:
     """Dispatch to the configured LLM provider."""
     provider = settings.LLM_PROVIDER.lower()
     logger.info("Calling LLM provider: %s", provider)
 
     if provider == "anthropic":
-        text, _usage = await _call_anthropic(system_prompt, user_message, max_tokens=max_tokens)
+        text, _usage = await _call_anthropic(system_prompt, user_message, max_tokens=max_tokens, model=model)
         return text
     elif provider == "openai":
         return await _call_openai(system_prompt, user_message)
@@ -495,7 +497,7 @@ async def pipeline_generate(
             context_summary=context_summary,
             request=request,
         )
-        raw_analysis = await _call_llm(analyze_system, analyze_user, max_tokens=600)
+        raw_analysis = await _call_llm(analyze_system, analyze_user, max_tokens=600, model=settings.HAIKU_MODEL)
         result.analysis = _parse_json_response(raw_analysis)
         result.step_timings["analyze"] = round(time.time() - t0, 1)
         logger.info("Pipeline step 1 (Analyze) done in %.1fs", result.step_timings["analyze"])
@@ -514,7 +516,7 @@ async def pipeline_generate(
                 guidelines=guidelines_text,
                 request=request,
             )
-            raw_pv = await _call_llm(pv_system, pv_user, max_tokens=800)
+            raw_pv = await _call_llm(pv_system, pv_user, max_tokens=800, model=settings.HAIKU_MODEL)
             result.plan = _parse_json_response(raw_pv)
             result.verification = result.plan  # merged
             result.step_timings["plan_verify"] = round(time.time() - t0, 1)
@@ -534,7 +536,7 @@ async def pipeline_generate(
                 context_summary=context_summary,
                 request=request,
             )
-            raw_plan = await _call_llm(plan_system, plan_user, max_tokens=800)
+            raw_plan = await _call_llm(plan_system, plan_user, max_tokens=800, model=settings.HAIKU_MODEL)
             result.plan = _parse_json_response(raw_plan)
             result.step_timings["plan"] = round(time.time() - t0, 1)
             logger.info("Pipeline step 2 (Plan) done in %.1fs", result.step_timings["plan"])
@@ -550,7 +552,7 @@ async def pipeline_generate(
                 plan=json.dumps(result.plan, indent=2),
                 guidelines=guidelines_text,
             )
-            raw_verify = await _call_llm(verify_system, verify_user, max_tokens=500)
+            raw_verify = await _call_llm(verify_system, verify_user, max_tokens=500, model=settings.HAIKU_MODEL)
             result.verification = _parse_json_response(raw_verify)
             result.step_timings["verify"] = round(time.time() - t0, 1)
             logger.info("Pipeline step 3 (Verify) done in %.1fs", result.step_timings["verify"])
@@ -560,12 +562,19 @@ async def pipeline_generate(
         if on_step:
             await on_step(total_steps, total_steps, "Generate", "Producing final draft...")
 
+        # Call get_config() once and pass to all helpers
+        from agent import compositor_config
+        try:
+            _cfg = compositor_config.get_config()
+        except Exception:
+            _cfg = None
+
         gen_system = _SYSTEM_PROMPT_TEMPLATE.format(
             brand_name=settings.BRAND_NAME,
             brand_context="",  # context passed in user message
-            platform_instruction=_get_platform_instruction(),
-            platform_json_field=_get_platform_json_field(),
-            image_mode_instruction=_get_image_mode_instruction(),
+            platform_instruction=_get_platform_instruction(_cfg),
+            platform_json_field=_get_platform_json_field(_cfg),
+            image_mode_instruction=_get_image_mode_instruction(_cfg),
             content_type_list=_get_content_type_list(),
         )
         gen_user = _GENERATE_PROMPT.format(
@@ -575,9 +584,9 @@ async def pipeline_generate(
             verification=json.dumps(result.verification, indent=2),
             brand_context=brand_context,
             request=request,
-            platform_instruction=_get_platform_instruction(),
-            platform_json_field=_get_platform_json_field(),
-            image_mode_instruction=_get_image_mode_instruction(),
+            platform_instruction=_get_platform_instruction(_cfg),
+            platform_json_field=_get_platform_json_field(_cfg),
+            image_mode_instruction=_get_image_mode_instruction(_cfg),
         )
         raw_draft = await _call_llm(gen_system, gen_user, max_tokens=1500)
         result.draft = _parse_llm_response(raw_draft)
@@ -616,12 +625,17 @@ async def generate_draft(request: str, brand_context: str) -> dict:
         ValueError: If LLM response cannot be parsed.
         Exception: On LLM API errors.
     """
+    from agent import compositor_config
+    try:
+        _cfg = compositor_config.get_config()
+    except Exception:
+        _cfg = None
     system_prompt = _SYSTEM_PROMPT_TEMPLATE.format(
         brand_name=settings.BRAND_NAME,
         brand_context=brand_context,
-        platform_instruction=_get_platform_instruction(),
-        platform_json_field=_get_platform_json_field(),
-        image_mode_instruction=_get_image_mode_instruction(),
+        platform_instruction=_get_platform_instruction(_cfg),
+        platform_json_field=_get_platform_json_field(_cfg),
+        image_mode_instruction=_get_image_mode_instruction(_cfg),
         content_type_list=_get_content_type_list(),
     )
     logger.info("Generating draft for request: %s", request[:100])
@@ -644,19 +658,24 @@ async def revise_draft(
     Returns:
         Dict with keys: caption, hashtags, alt_text, image_prompt.
     """
+    from agent import compositor_config
+    try:
+        _cfg = compositor_config.get_config()
+    except Exception:
+        _cfg = None
     system_prompt = _SYSTEM_PROMPT_TEMPLATE.format(
         brand_name=settings.BRAND_NAME,
         brand_context=brand_context,
-        platform_instruction=_get_platform_instruction(),
-        platform_json_field=_get_platform_json_field(),
-        image_mode_instruction=_get_image_mode_instruction(),
+        platform_instruction=_get_platform_instruction(_cfg),
+        platform_json_field=_get_platform_json_field(_cfg),
+        image_mode_instruction=_get_image_mode_instruction(_cfg),
         content_type_list=_get_content_type_list(),
     )
     user_message = _REVISION_PROMPT_TEMPLATE.format(
         caption=original_draft.get("caption", ""),
         hashtags=", ".join(original_draft.get("hashtags", [])),
         feedback=feedback,
-        platform_json_field=_get_platform_json_field(),
+        platform_json_field=_get_platform_json_field(_cfg),
     )
     logger.info("Revising draft with feedback: %s", feedback[:100])
     raw = await _call_llm(system_prompt, user_message)

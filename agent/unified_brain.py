@@ -142,7 +142,7 @@ async def run_unified(
     # context is cached by Anthropic's API and reused across turns.
     # Uses ContextEngine for budget-aware assembly as the brand corpus grows.
     from agent.context_engine import build_brand_context_block
-    brand_context = build_brand_context_block()
+    brand_context = await build_brand_context_block()
 
     system_blocks = [
         {
