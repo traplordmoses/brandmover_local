@@ -80,22 +80,43 @@ async def fetch_url(url: str, max_chars: int = 15000) -> str:
     timeout = aiohttp.ClientTimeout(total=_TIMEOUT_SECONDS)
     headers = {"User-Agent": _USER_AGENT}
 
+    _MAX_REDIRECTS = 5
+    current_url = url
+
     try:
         async with aiohttp.ClientSession(timeout=timeout, headers=headers) as session:
-            async with session.get(url, allow_redirects=True) as resp:
-                if resp.status >= 400:
-                    return f"URL: {url}\nError: HTTP {resp.status} — {resp.reason}"
+            for _redirect_i in range(_MAX_REDIRECTS + 1):
+                async with session.get(current_url, allow_redirects=False) as resp:
+                    if resp.status in (301, 302, 303, 307, 308):
+                        location = resp.headers.get("Location")
+                        if not location:
+                            return f"URL: {current_url}\nError: Redirect with no Location header"
+                        # Resolve relative redirects
+                        from urllib.parse import urljoin
+                        current_url = urljoin(current_url, location)
+                        # Validate redirect target against SSRF
+                        try:
+                            validate_url(current_url)
+                        except ValueError as e:
+                            return f"URL: {url}\nError: Redirect blocked — {e}"
+                        continue
 
-                # Only process HTML content
-                content_type = resp.headers.get("Content-Type", "")
-                if "html" not in content_type and "text" not in content_type:
-                    return (
-                        f"URL: {url}\n"
-                        f"Content-Type: {content_type}\n"
-                        f"Note: Not an HTML page. Cannot extract text content."
-                    )
+                    if resp.status >= 400:
+                        return f"URL: {current_url}\nError: HTTP {resp.status} — {resp.reason}"
 
-                html = await resp.text(errors="replace")
+                    # Only process HTML content
+                    content_type = resp.headers.get("Content-Type", "")
+                    if "html" not in content_type and "text" not in content_type:
+                        return (
+                            f"URL: {current_url}\n"
+                            f"Content-Type: {content_type}\n"
+                            f"Note: Not an HTML page. Cannot extract text content."
+                        )
+
+                    html = await resp.text(errors="replace")
+                    break
+            else:
+                return f"URL: {url}\nError: Too many redirects (>{_MAX_REDIRECTS})"
 
     except aiohttp.ClientError as e:
         return f"URL: {url}\nError: Connection failed — {type(e).__name__}: {e}"

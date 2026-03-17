@@ -320,7 +320,7 @@ async def call_with_fallback(
                 # Cross-provider fallback — text only (no tool_use)
                 caller = _PROVIDER_CALLERS[provider]
                 # Strip tools for non-Anthropic providers (they can't handle Anthropic tool format)
-                fallback_kwargs = {k: v for k, v in kwargs.items() if k != "tools"}
+                fallback_kwargs = {k: v for k, v in kwargs.items() if k not in ("tools", "tool_choice")}
                 result = caller(model, **fallback_kwargs)
                 # Handle both sync and async callers
                 if hasattr(result, '__await__'):

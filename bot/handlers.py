@@ -12,6 +12,7 @@ import time
 from pathlib import Path
 
 from PIL import Image as _PILImage
+_PILImage.MAX_IMAGE_PIXELS = 50_000_000  # 50MP limit — protect against image bombs
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import ContextTypes
 
@@ -25,9 +26,20 @@ logger = logging.getLogger(__name__)
 _RATE_LIMIT_SECONDS = 10
 _last_request_time: dict[int, float] = {}
 
+# Tools restricted to admin-only — operators cannot use these
+_ADMIN_ONLY_TOOLS = {"execute_code", "post_approved", "create_skill", "git_info"}
+
 # Bulk upload batch tracking — maps user_id to pending asyncio task
 import asyncio as _aio
 _bulk_upload_tasks: dict[int, _aio.Task] = {}
+
+# Per-user lock to prevent double-post race (e.g., tapping "post" twice quickly)
+_approve_locks: dict[int, _aio.Lock] = {}
+
+def _get_approve_lock(user_id: int) -> _aio.Lock:
+    if user_id not in _approve_locks:
+        _approve_locks[user_id] = _aio.Lock()
+    return _approve_locks[user_id]
 
 
 def _authorized(user_id: int) -> bool:
@@ -1979,6 +1991,16 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         )
         return
 
+    # File size guard — skip PIL processing for excessively large files (>10MB)
+    try:
+        _file_size = Path(tmp_path).stat().st_size
+        if _file_size > 10 * 1024 * 1024:
+            logger.warning("Uploaded image too large (%d bytes), skipping PIL processing", _file_size)
+            await update.message.reply_text("That image is too large (>10 MB). Please send a smaller one.")
+            return
+    except OSError:
+        pass
+
     # Convert to JPEG
     try:
         img = _PILImage.open(tmp_path).convert("RGB")
@@ -2336,27 +2358,29 @@ async def _fast_path(update: Update, context: ContextTypes.DEFAULT_TYPE, message
     has_draft = state.has_pending(user_id=user_id)
     has_approved = state.has_approved(user_id=user_id)
 
-    # Post action
+    # Post action — guarded by per-user lock to prevent double-post race
     if action == "post":
-        if has_approved:
-            await _do_post(update, context, source="unified_fast")
-            return True
-        elif has_draft:
-            # One-shot shortcut: approve + post in one step
-            await _do_approve(update, context, source="unified_fast")
-            await _do_post(update, context, source="unified_fast_auto")
-            return True
-        else:
-            # Nothing to post — pass to unified brain
-            return False
+        async with _get_approve_lock(user_id):
+            if has_approved:
+                await _do_post(update, context, source="unified_fast")
+                return True
+            elif has_draft:
+                # One-shot shortcut: approve + post in one step
+                await _do_approve(update, context, source="unified_fast")
+                await _do_post(update, context, source="unified_fast_auto")
+                return True
+            else:
+                # Nothing to post — pass to unified brain
+                return False
 
     # Draft-dependent actions without a draft → pass to unified brain
     if action in _FAST_PATH_DRAFT_ACTIONS and not has_draft:
         return False
 
     if action == "approve":
-        await _do_approve(update, context, source="unified_fast")
-        return True
+        async with _get_approve_lock(user_id):
+            await _do_approve(update, context, source="unified_fast")
+            return True
 
     if action == "reroll":
         if _rate_limited(user_id):
@@ -2957,11 +2981,15 @@ async def _handle_agent_mode(update: Update, request: str, user_id: int | None =
         await _update_status()
         await update.message.chat.send_action("typing")
 
+    # Restrict dangerous tools for non-admin operators
+    _excluded = _ADMIN_ONLY_TOOLS if not _authorized(user_id) else None
+
     try:
         result = await engine.run_agent(
             request=request,
             on_tool_call=on_tool_call,
             on_reasoning=on_reasoning,
+            excluded_tools=_excluded,
         )
 
         # Delete the status message now that we're done
@@ -5009,6 +5037,16 @@ async def _run_brand_check(update: Update, tg_file) -> None:
             "couldn't download that image, try sending it as a photo instead of a file"
         )
         return
+
+    # File size guard — skip PIL processing for excessively large files (>10MB)
+    try:
+        _file_size = Path(tmp_path).stat().st_size
+        if _file_size > 10 * 1024 * 1024:
+            logger.warning("Uploaded image too large (%d bytes), skipping PIL processing", _file_size)
+            await update.message.reply_text("That image is too large (>10 MB). Please send a smaller one.")
+            return
+    except OSError:
+        pass
 
     # Convert to JPEG
     try:

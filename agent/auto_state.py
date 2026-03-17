@@ -4,6 +4,7 @@ Separate from Telegram's state.json to avoid race conditions.
 Tracks daily post counts, posted event IDs, prompt rotation, and recent captions.
 """
 
+import copy
 import json
 import logging
 import os
@@ -52,7 +53,7 @@ def _read_state() -> dict:
             data.setdefault(key, default)
         _cached_state = data
         _cache_mtime = mtime
-        return data
+        return copy.deepcopy(data)
     except (json.JSONDecodeError, OSError) as e:
         logger.warning("Failed to read auto_post_state.json: %s", e)
         return _default_state()
@@ -62,9 +63,11 @@ def _write_state(data: dict) -> None:
     """Write state dict to auto_post_state.json and update in-memory cache."""
     global _cached_state, _cache_mtime
     _STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
-    _STATE_FILE.write_text(
+    tmp_path = _STATE_FILE.with_suffix(".tmp")
+    tmp_path.write_text(
         json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8"
     )
+    os.replace(str(tmp_path), str(_STATE_FILE))
     _cached_state = data
     _cache_mtime = os.stat(_STATE_FILE).st_mtime
 

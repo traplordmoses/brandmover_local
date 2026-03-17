@@ -38,6 +38,17 @@ logger = logging.getLogger(__name__)
 REMOTION_DIR = PROJECT_ROOT / "video" / "remotion"
 OUTPUT_DIR = PROJECT_ROOT / "state" / "outputs"
 
+# Shared sync Anthropic client for scene generation (called via asyncio.to_thread)
+_sync_anthropic: anthropic.Anthropic | None = None
+
+
+def _get_sync_anthropic() -> anthropic.Anthropic:
+    """Return a shared sync Anthropic client (lazy-initialized)."""
+    global _sync_anthropic
+    if _sync_anthropic is None:
+        _sync_anthropic = anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+    return _sync_anthropic
+
 # Use Sonnet for scene generation — good balance of quality and speed
 _SCENE_GEN_MODEL = settings.SONNET_MODEL
 
@@ -614,7 +625,7 @@ def generate_scene_json(
         format: 'square', 'landscape', or 'portrait'.
         theme: 'dark' or 'light'. Auto-detected from brand bg if None.
     """
-    client = anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+    client = _get_sync_anthropic()
     brand_theme = _brand_config_to_theme()
 
     # Resolve format dimensions

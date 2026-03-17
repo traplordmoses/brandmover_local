@@ -6,7 +6,9 @@ Persists to state/conversation.json. Auto-prunes entries older than 24 hours.
 
 import json
 import logging
+import os
 import re
+import threading
 import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -20,6 +22,13 @@ _CONTEXT_FILE = _STATE_DIR / "conversation.json"
 _PRUNE_AGE_SECONDS = 24 * 60 * 60  # 24 hours
 _MAX_RECENT_INTENTS = 5
 _MAX_CONVERSATION_HISTORY = 20
+
+# mtime-based in-memory cache to avoid re-reading on every call
+_cached_contexts: dict | None = None
+_ctx_cache_mtime: float = 0.0
+_last_prune_time: float = 0.0
+_PRUNE_INTERVAL_SECONDS = 3600  # prune at most once per hour
+_ctx_lock = threading.Lock()
 
 
 @dataclass
@@ -37,32 +46,48 @@ class ConversationContext:
 
 
 def _load_all() -> dict[str, dict]:
-    """Load all contexts from disk, pruning stale entries."""
+    """Load all contexts from disk with mtime-based caching."""
+    global _cached_contexts, _ctx_cache_mtime
     if not _CONTEXT_FILE.exists():
         return {}
     try:
+        mtime = os.stat(_CONTEXT_FILE).st_mtime
+        if _cached_contexts is not None and mtime == _ctx_cache_mtime:
+            return _cached_contexts
         raw = json.loads(_CONTEXT_FILE.read_text(encoding="utf-8"))
+        _cached_contexts = raw
+        _ctx_cache_mtime = mtime
+        return raw
     except (json.JSONDecodeError, OSError) as e:
         logger.warning("Failed to read conversation.json: %s", e)
         return {}
 
-    now = time.time()
-    pruned = {
-        uid: ctx
-        for uid, ctx in raw.items()
-        if now - ctx.get("updated_at", 0) < _PRUNE_AGE_SECONDS
-    }
-    if len(pruned) < len(raw):
-        _save_all(pruned)
-    return pruned
-
 
 def _save_all(data: dict[str, dict]) -> None:
-    """Write all contexts to disk."""
+    """Write all contexts to disk, update cache, and periodically prune."""
+    global _cached_contexts, _ctx_cache_mtime, _last_prune_time
     _STATE_DIR.mkdir(parents=True, exist_ok=True)
-    _CONTEXT_FILE.write_text(
+
+    # Prune stale entries at most once per hour
+    now = time.time()
+    if now - _last_prune_time > _PRUNE_INTERVAL_SECONDS:
+        before = len(data)
+        data = {
+            uid: ctx
+            for uid, ctx in data.items()
+            if now - ctx.get("updated_at", 0) < _PRUNE_AGE_SECONDS
+        }
+        if len(data) < before:
+            logger.debug("Pruned %d stale conversation contexts", before - len(data))
+        _last_prune_time = now
+
+    tmp_path = _CONTEXT_FILE.with_suffix(".tmp")
+    tmp_path.write_text(
         json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8"
     )
+    os.replace(str(tmp_path), str(_CONTEXT_FILE))
+    _cached_contexts = data
+    _ctx_cache_mtime = os.stat(_CONTEXT_FILE).st_mtime
 
 
 def get_context(user_id: int) -> ConversationContext:
@@ -88,22 +113,23 @@ def get_context(user_id: int) -> ConversationContext:
 
 def update_context(user_id: int, **fields) -> ConversationContext:
     """Update specific fields on a user's context and persist."""
-    ctx = get_context(user_id)
-    for key, value in fields.items():
-        if hasattr(ctx, key):
-            setattr(ctx, key, value)
-    # Trim recent_intents to max size
-    if len(ctx.recent_intents) > _MAX_RECENT_INTENTS:
-        ctx.recent_intents = ctx.recent_intents[-_MAX_RECENT_INTENTS:]
-    # Trim conversation history
-    if len(ctx.conversation_history) > _MAX_CONVERSATION_HISTORY:
-        ctx.conversation_history = ctx.conversation_history[-_MAX_CONVERSATION_HISTORY:]
-    ctx.updated_at = time.time()
+    with _ctx_lock:
+        ctx = get_context(user_id)
+        for key, value in fields.items():
+            if hasattr(ctx, key):
+                setattr(ctx, key, value)
+        # Trim recent_intents to max size
+        if len(ctx.recent_intents) > _MAX_RECENT_INTENTS:
+            ctx.recent_intents = ctx.recent_intents[-_MAX_RECENT_INTENTS:]
+        # Trim conversation history
+        if len(ctx.conversation_history) > _MAX_CONVERSATION_HISTORY:
+            ctx.conversation_history = ctx.conversation_history[-_MAX_CONVERSATION_HISTORY:]
+        ctx.updated_at = time.time()
 
-    all_ctx = _load_all()
-    all_ctx[str(user_id)] = asdict(ctx)
-    _save_all(all_ctx)
-    return ctx
+        all_ctx = _load_all()
+        all_ctx[str(user_id)] = asdict(ctx)
+        _save_all(all_ctx)
+        return ctx
 
 
 def clear_context(user_id: int) -> None:

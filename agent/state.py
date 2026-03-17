@@ -4,9 +4,12 @@ One pending draft per user. Admin uses state/state.json, operators use state/dra
 """
 
 import asyncio
+import copy
 import json
 import logging
+import os
 import shutil
+import threading
 import time
 from pathlib import Path
 
@@ -42,6 +45,8 @@ def _user_state_file(user_id: int | None = None) -> Path:
 _state_caches: dict[int, dict] = {}
 # asyncio.Lock for safe concurrent access from handlers + auto-poster
 _state_lock = asyncio.Lock()
+# threading.Lock for sync functions called via asyncio.to_thread or directly
+_sync_lock = threading.Lock()
 
 
 def invalidate_state_cache() -> None:
@@ -62,7 +67,7 @@ def _read_state(user_id: int | None = None) -> dict:
     """
     uid = _resolve_uid(user_id)
     if uid in _state_caches:
-        return _state_caches[uid]
+        return copy.deepcopy(_state_caches[uid])
     state_file = _user_state_file(user_id)
     if not state_file.exists():
         return {}
@@ -81,7 +86,9 @@ def _write_state(data: dict, user_id: int | None = None) -> None:
     _state_caches[uid] = data
     state_file = _user_state_file(user_id)
     state_file.parent.mkdir(parents=True, exist_ok=True)
-    state_file.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+    tmp_path = state_file.with_suffix(".tmp")
+    tmp_path.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+    os.replace(str(tmp_path), str(state_file))
 
 
 def has_pending(user_id: int | None = None) -> bool:
@@ -126,60 +133,63 @@ def save_pending(
         user_id: Telegram user ID. None defaults to admin.
         conversation_history: Agent conversation messages for revision continuity.
     """
-    pending = {
-        "caption": caption,
-        "hashtags": hashtags,
-        "image_url": image_url,
-        "alt_text": alt_text,
-        "image_prompt": image_prompt,
-        "original_request": original_request,
-        "timestamp": time.time(),
-    }
-    if image_urls:
-        pending["image_urls"] = image_urls
-    if auto_slot:
-        pending["auto_slot"] = auto_slot
-    if auto_event_ids:
-        pending["auto_event_ids"] = auto_event_ids
-    if content_type:
-        pending["content_type"] = content_type
-    if conversation_history:
-        pending["conversation_history"] = conversation_history
-    s = _read_state(user_id)
+    with _sync_lock:
+        pending = {
+            "caption": caption,
+            "hashtags": hashtags,
+            "image_url": image_url,
+            "alt_text": alt_text,
+            "image_prompt": image_prompt,
+            "original_request": original_request,
+            "timestamp": time.time(),
+        }
+        if image_urls:
+            pending["image_urls"] = image_urls
+        if auto_slot:
+            pending["auto_slot"] = auto_slot
+        if auto_event_ids:
+            pending["auto_event_ids"] = auto_event_ids
+        if content_type:
+            pending["content_type"] = content_type
+        if conversation_history:
+            pending["conversation_history"] = conversation_history
+        s = _read_state(user_id)
 
-    # Archive the current pending draft (if any) before overwriting
-    old_pending = s.get("pending")
-    if old_pending:
-        history = s.setdefault("draft_history", [])
-        old_pending["archived_at"] = time.time()
-        history.append(old_pending)
-        # Keep last 20 revisions
-        s["draft_history"] = history[-20:]
+        # Archive the current pending draft (if any) before overwriting
+        old_pending = s.get("pending")
+        if old_pending:
+            history = s.setdefault("draft_history", [])
+            old_pending["archived_at"] = time.time()
+            history.append(old_pending)
+            # Keep last 20 revisions
+            s["draft_history"] = history[-20:]
 
-    s["pending"] = pending
-    _write_state(s, user_id)
-    revision = len(s.get("draft_history", [])) + 1
-    logger.info("Saved pending draft (rev %d) for: %s", revision, original_request[:80])
+        s["pending"] = pending
+        _write_state(s, user_id)
+        revision = len(s.get("draft_history", [])) + 1
+        logger.info("Saved pending draft (rev %d) for: %s", revision, original_request[:80])
 
 
 def clear_pending(user_id: int | None = None) -> None:
     """Clear any pending draft (preserves other state like last_generated)."""
-    s = _read_state(user_id)
-    s.pop("pending", None)
-    _write_state(s, user_id)
-    logger.info("Cleared pending state")
+    with _sync_lock:
+        s = _read_state(user_id)
+        s.pop("pending", None)
+        _write_state(s, user_id)
+        logger.info("Cleared pending state")
 
 
 def approve_pending(user_id: int | None = None) -> dict | None:
     """Move pending → approved (approved but not yet posted). Returns approved draft."""
-    s = _read_state(user_id)
-    pending = s.pop("pending", None)
-    if not pending:
-        return None
-    pending["approved_at"] = time.time()
-    s["approved"] = pending
-    _write_state(s, user_id)
-    return pending
+    with _sync_lock:
+        s = _read_state(user_id)
+        pending = s.pop("pending", None)
+        if not pending:
+            return None
+        pending["approved_at"] = time.time()
+        s["approved"] = pending
+        _write_state(s, user_id)
+        return pending
 
 
 def get_approved(user_id: int | None = None) -> dict | None:
@@ -347,9 +357,11 @@ def _read_styles() -> dict:
 def _write_styles(data: dict) -> None:
     """Write styles dict to styles.json and update in-memory cache."""
     global _cached_styles, _styles_cache_mtime
-    _STYLES_FILE.write_text(
+    tmp_path = _STYLES_FILE.with_suffix(".tmp")
+    tmp_path.write_text(
         json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8"
     )
+    os.replace(str(tmp_path), str(_STYLES_FILE))
     _cached_styles = data
     _styles_cache_mtime = _STYLES_FILE.stat().st_mtime
 

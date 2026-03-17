@@ -56,4 +56,5 @@ async def close() -> None:
         await _httpx_client.aclose()
         _httpx_client = None
     if _anthropic_client is not None:
+        await _anthropic_client.close()
         _anthropic_client = None

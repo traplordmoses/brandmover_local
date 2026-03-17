@@ -87,9 +87,12 @@ def _read_feedback() -> list[dict]:
 def _write_feedback(entries: list[dict]) -> None:
     """Write the full feedback log to disk and update in-memory cache."""
     global _cached_feedback, _feedback_cache_mtime
-    _FEEDBACK_FILE.write_text(
+    _FEEDBACK_FILE.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = _FEEDBACK_FILE.with_suffix(".tmp")
+    tmp_path.write_text(
         json.dumps(entries, indent=2, ensure_ascii=False), encoding="utf-8"
     )
+    os.replace(str(tmp_path), str(_FEEDBACK_FILE))
     _cached_feedback = entries
     _feedback_cache_mtime = os.stat(_FEEDBACK_FILE).st_mtime
 

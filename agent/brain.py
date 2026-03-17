@@ -383,9 +383,20 @@ async def _call_anthropic(
     return response.content[0].text, usage
 
 
+_openai_client: "openai.AsyncOpenAI | None" = None
+
+
+def _get_openai_client() -> "openai.AsyncOpenAI":
+    """Return a shared AsyncOpenAI client (lazy-initialized)."""
+    global _openai_client
+    if _openai_client is None:
+        _openai_client = openai.AsyncOpenAI(api_key=settings.OPENAI_API_KEY)
+    return _openai_client
+
+
 async def _call_openai(system_prompt: str, user_message: str) -> str:
     """Call OpenAI API."""
-    client = openai.AsyncOpenAI(api_key=settings.OPENAI_API_KEY)
+    client = _get_openai_client()
     response = await client.chat.completions.create(
         model="gpt-4o",
         max_tokens=2048,

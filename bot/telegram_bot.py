@@ -179,6 +179,16 @@ async def _start_scheduler(app: Application) -> None:
         logger.info("Discord client background task launched")
 
 
+async def _shutdown_cleanup(app: Application) -> None:
+    """Post-shutdown hook: close shared API clients."""
+    from agent._client import close as close_clients
+    try:
+        await close_clients()
+        logger.info("Shared API clients closed")
+    except Exception as e:
+        logger.debug("Client close failed: %s", e)
+
+
 def run() -> None:
     """Start the bot polling loop with the auto-post scheduler."""
     logger.info(
@@ -192,5 +202,6 @@ def run() -> None:
     # Register the scheduler as a post-init hook so it starts after the
     # bot's event loop and updater are running.
     app.post_init = _start_scheduler
+    app.post_shutdown = _shutdown_cleanup
 
     app.run_polling(drop_pending_updates=True)

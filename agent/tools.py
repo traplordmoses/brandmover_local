@@ -14,8 +14,6 @@ import tempfile
 import time as _time
 from pathlib import Path
 
-from PIL import Image as _PILImage, ImageOps as _PILImageOps
-
 from agent import asset_library, content_types, feedback, figma, guidelines, image_gen, lora_pipeline, state as _state
 from agent.resource_log import ResourceTracker
 from config import settings
@@ -649,6 +647,8 @@ def _prepare_logo_ref(logo_path: Path) -> tuple[Path, str | None]:
     tmp_path is set only when a contrast file was created (caller must clean up).
     """
     try:
+        from PIL import Image as _PILImage, ImageOps as _PILImageOps
+
         img = _PILImage.open(logo_path)
 
         # If the image has transparency, flatten onto a white background
@@ -717,6 +717,8 @@ async def _staggered_generate(
 def _stitch_grid(image_paths: list[str], max_images: int = 3, label: str = "ref") -> str:
     """Stitch up to max_images reference images into a horizontal grid.
     Returns path to the stitched image in /tmp."""
+    from PIL import Image as _PILImage
+
     paths = image_paths[:max_images]
     images = [_PILImage.open(p).convert("RGB") for p in paths]
 

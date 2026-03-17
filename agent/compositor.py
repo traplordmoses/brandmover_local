@@ -144,13 +144,21 @@ _font_cache: dict[str, ImageFont.FreeTypeFont] = {}
 
 def clear_font_cache() -> None:
     """Clear cached font objects and background cache. Called after brand change via /setup."""
+    global _fonts_initialized
     _font_cache.clear()
     _bg_cache.clear()
     _fade_mask_cache.clear()
+    _fonts_initialized = False
+
+
+_fonts_initialized = False
 
 
 async def _ensure_fonts_async() -> None:
     """Download missing brand fonts asynchronously (non-blocking)."""
+    global _fonts_initialized
+    if _fonts_initialized:
+        return
     _FONT_DIR.mkdir(parents=True, exist_ok=True)
     font_map = _brand_cfg.get_font_map()
     seen: set[str] = set()
@@ -169,6 +177,7 @@ async def _ensure_fonts_async() -> None:
             path.write_bytes(resp.content)
         except Exception as e:
             logger.warning("Font download failed %s: %s", filename, e)
+    _fonts_initialized = True
 
 
 def _ensure_fonts() -> None:
@@ -446,12 +455,12 @@ def _blend_image_into_canvas(
         mask = mask.filter(ImageFilter.GaussianBlur(radius=w // 10))
         _fade_mask_cache[cache_key] = mask.copy()
 
-    black_base = Image.new("RGB", (w, h), (0, 0, 0))
-    black_base.paste(filled, (0, 0), mask)
-
-    rgb = canvas.convert("RGB")
-    rgb.paste(black_base, (x, y))
-    canvas.paste(rgb.convert("RGBA"), (0, 0))
+    # Composite the feature image onto a black base using the fade mask,
+    # then paste into the canvas using the same mask as alpha.
+    black_base = Image.new("RGBA", (w, h), (0, 0, 0, 255))
+    feature_rgba = filled.convert("RGBA") if filled.mode != "RGBA" else filled
+    black_base.paste(feature_rgba, (0, 0), mask)
+    canvas.paste(black_base, (x, y), mask)
 
 
 # ---------------------------------------------------------------------------

@@ -12,6 +12,7 @@ from agent.conversation_context import (
     update_context,
     clear_context,
     _load_all,
+    _save_all,
     _PRUNE_AGE_SECONDS,
     _MAX_RECENT_INTENTS,
 )
@@ -139,6 +140,8 @@ class TestClearContext:
 
 class TestAutoPrune:
     def test_prunes_old_entries(self, tmp_path):
+        """Pruning now happens in _save_all(), not _load_all()."""
+        import agent.conversation_context as cc
         ctx_file = tmp_path / "state" / "conversation.json"
         old_time = time.time() - _PRUNE_AGE_SECONDS - 100
         data = {
@@ -147,9 +150,17 @@ class TestAutoPrune:
         }
         ctx_file.write_text(json.dumps(data))
 
-        loaded = _load_all()
-        assert "1" not in loaded
-        assert "2" in loaded
+        # Force prune interval to have elapsed so _save_all triggers pruning
+        original_last_prune = cc._last_prune_time
+        cc._last_prune_time = 0.0
+        try:
+            loaded = _load_all()
+            _save_all(loaded)
+            saved = _load_all()
+            assert "1" not in saved
+            assert "2" in saved
+        finally:
+            cc._last_prune_time = original_last_prune
 
     def test_keeps_recent_entries(self, tmp_path):
         ctx_file = tmp_path / "state" / "conversation.json"

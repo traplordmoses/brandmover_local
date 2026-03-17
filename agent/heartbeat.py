@@ -364,14 +364,20 @@ def _fallback_decision(signals: list[dict]) -> HeartbeatDecision:
 # Observability log
 # ---------------------------------------------------------------------------
 
+_heartbeat_write_count = 0
+
+
 def _log_heartbeat(entry: dict) -> None:
     """Append one JSON line to the heartbeat log."""
+    global _heartbeat_write_count
     entry["timestamp"] = time.time()
     HEARTBEAT_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
     try:
         with open(HEARTBEAT_LOG_PATH, "a") as f:
             f.write(json.dumps(entry, default=str) + "\n")
-        _prune_log()
+        _heartbeat_write_count += 1
+        if _heartbeat_write_count % 50 == 0:
+            _prune_log()
     except Exception as e:
         logger.debug("Heartbeat log write failed: %s", e)
 

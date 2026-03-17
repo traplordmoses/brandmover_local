@@ -88,27 +88,27 @@ def is_slot_due(slot_name: str, schedule: dict) -> bool:
 # ---------------------------------------------------------------------------
 
 
-def _visual_style() -> str:
+def _visual_style(config=None) -> str:
     """Build image style directive from brand config."""
-    cfg = compositor_config.get_config()
+    cfg = config or compositor_config.get_config()
     if cfg.visual_style_prompt:
         return f"Image style: {cfg.visual_style_prompt}"
     kw = ", ".join(cfg.style_keywords[:6]) if cfg.style_keywords else "high quality, professional"
     return f"Image style: {kw}"
 
 
-def _voice_summary() -> str:
+def _voice_summary(config=None) -> str:
     """Build a short voice description from brand config."""
-    cfg = compositor_config.get_config()
+    cfg = config or compositor_config.get_config()
     name = cfg.brand_name or settings.BRAND_NAME
     if cfg.voice_traits:
         return f"{name} voice: {', '.join(cfg.voice_traits[:3])}"
     return f"{name} voice"
 
 
-def _brand_context() -> str:
+def _brand_context(config=None) -> str:
     """Build product/tagline/phrases context string."""
-    cfg = compositor_config.get_config()
+    cfg = config or compositor_config.get_config()
     parts = []
     if cfg.tagline:
         parts.append(f"Brand perspective: {cfg.tagline}")
@@ -119,13 +119,13 @@ def _brand_context() -> str:
     return ". ".join(parts) if parts else ""
 
 
-def _brand_name() -> str:
-    cfg = compositor_config.get_config()
+def _brand_name(config=None) -> str:
+    cfg = config or compositor_config.get_config()
     return cfg.brand_name or settings.BRAND_NAME
 
 
-def _themes_hint() -> str:
-    cfg = compositor_config.get_config()
+def _themes_hint(config=None) -> str:
+    cfg = config or compositor_config.get_config()
     if cfg.content_themes:
         return ", ".join(cfg.content_themes[:5])
     return "culture, community, identity"
@@ -133,11 +133,12 @@ def _themes_hint() -> str:
 
 def _engagement_templates() -> list[str]:
     """Build engagement prompt templates from brand config."""
-    name = _brand_name()
-    voice = _voice_summary()
-    ctx = _brand_context()
-    vs = _visual_style()
-    themes = _themes_hint()
+    cfg = compositor_config.get_config()
+    name = _brand_name(cfg)
+    voice = _voice_summary(cfg)
+    ctx = _brand_context(cfg)
+    vs = _visual_style(cfg)
+    themes = _themes_hint(cfg)
 
     ctx_line = f" {ctx}" if ctx else ""
 
@@ -177,10 +178,10 @@ def _engagement_templates() -> list[str]:
 
 def _brand_meme_templates() -> list[str]:
     """Build brand meme prompt templates from brand config."""
-    name = _brand_name()
-    voice = _voice_summary()
-    vs = _visual_style()
     cfg = compositor_config.get_config()
+    name = _brand_name(cfg)
+    voice = _voice_summary(cfg)
+    vs = _visual_style(cfg)
     product_hint = cfg.product_description[:120] if cfg.product_description else "the brand's products and culture"
 
     return [
@@ -251,9 +252,10 @@ async def _build_onchain_prompt() -> tuple[str, list[str]]:
 
     Falls back to philosophical thought-mode if the board is quiet.
     """
-    name = _brand_name()
-    voice = _voice_summary()
-    vs = _visual_style()
+    cfg = compositor_config.get_config()
+    name = _brand_name(cfg)
+    voice = _voice_summary(cfg)
+    vs = _visual_style(cfg)
 
     state = await onchain.fetch_board_state()
 

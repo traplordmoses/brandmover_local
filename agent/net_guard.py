@@ -16,8 +16,10 @@ _BLOCKED_NETWORKS = [
     ipaddress.ip_network("172.16.0.0/12"),
     ipaddress.ip_network("192.168.0.0/16"),
     ipaddress.ip_network("169.254.0.0/16"),
+    ipaddress.ip_network("0.0.0.0/8"),
     ipaddress.ip_network("::1/128"),
     ipaddress.ip_network("fc00::/7"),
+    ipaddress.ip_network("::ffff:0:0/96"),
 ]
 
 
@@ -43,6 +45,12 @@ def validate_url(url: str) -> None:
         for net in _BLOCKED_NETWORKS:
             if addr in net:
                 raise ValueError(f"Access to private/internal address {addr} is blocked")
+        # Check IPv6-mapped IPv4 addresses (e.g. ::ffff:127.0.0.1)
+        mapped = getattr(addr, "ipv4_mapped", None)
+        if mapped:
+            for net in _BLOCKED_NETWORKS:
+                if isinstance(net, ipaddress.IPv4Network) and mapped in net:
+                    raise ValueError(f"URL resolves to blocked IP (mapped): {mapped}")
 
 
 def is_private_ip(hostname: str) -> bool:

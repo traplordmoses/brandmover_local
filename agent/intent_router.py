@@ -152,9 +152,14 @@ def _check_rate_limit(user_id: int) -> bool:
 
 def _record_rate(user_id: int) -> None:
     """Record a Haiku call for rate limiting."""
+    global _rate_counts
     if user_id not in _rate_counts:
         _rate_counts[user_id] = []
     _rate_counts[user_id].append(time.time())
+    # Prune inactive users periodically
+    if len(_rate_counts) > 100:
+        now = time.time()
+        _rate_counts = {uid: ts for uid, ts in _rate_counts.items() if ts and ts[-1] > now - 7200}
 
 
 def reset_rate_limits() -> None:

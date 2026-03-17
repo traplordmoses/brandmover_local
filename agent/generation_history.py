@@ -9,6 +9,7 @@ import asyncio
 import json
 import logging
 import os
+import threading
 import time
 from pathlib import Path
 
@@ -17,6 +18,9 @@ logger = logging.getLogger(__name__)
 # In-memory cache for generation_history.json to avoid re-reading on every call
 _cached_history: list[dict] | None = None
 _history_cache_mtime: float = 0.0
+
+# Threading lock for sync read/write functions (protects cache + file I/O)
+_sync_lock = threading.Lock()
 
 _project_root = Path(__file__).resolve().parent.parent
 from agent.paths import STATE_DIR as _STATE_DIR
@@ -54,9 +58,12 @@ def _read_history() -> list[dict]:
 def _write_history(entries: list[dict]) -> None:
     """Write the full history log and update in-memory cache."""
     global _cached_history, _history_cache_mtime
-    _HISTORY_FILE.write_text(
+    _HISTORY_FILE.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = _HISTORY_FILE.with_suffix(".tmp")
+    tmp_path.write_text(
         json.dumps(entries, indent=2, ensure_ascii=False), encoding="utf-8"
     )
+    os.replace(str(tmp_path), str(_HISTORY_FILE))
     _cached_history = entries
     _history_cache_mtime = os.stat(_HISTORY_FILE).st_mtime
 
@@ -143,7 +150,8 @@ def update_generation_status(timestamp: float, new_status: str) -> bool:
 
 def get_generation_stats() -> dict:
     """Return summary stats: totals by type, status, model, and cost."""
-    entries = _read_history()
+    with _sync_lock:
+        entries = _read_history()
     by_type: dict[str, int] = {}
     by_status: dict[str, int] = {}
     by_model: dict[str, int] = {}
@@ -170,13 +178,15 @@ def get_generation_stats() -> dict:
 
 def get_recent_generations(n: int = 10) -> list[dict]:
     """Return the last N generation entries."""
-    entries = _read_history()
+    with _sync_lock:
+        entries = _read_history()
     return entries[-n:]
 
 
 def get_approval_analytics() -> dict:
     """Return approval/rejection rates broken down by content_type and model."""
-    entries = _read_history()
+    with _sync_lock:
+        entries = _read_history()
 
     by_content_type: dict[str, dict[str, int]] = {}
     by_model: dict[str, dict[str, int]] = {}

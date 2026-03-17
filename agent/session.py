@@ -84,7 +84,9 @@ def save_session(session: AgentSession) -> None:
 
     SESSION_PATH.parent.mkdir(parents=True, exist_ok=True)
     try:
-        SESSION_PATH.write_text(json.dumps(asdict(session), indent=2, default=str))
+        tmp_path = SESSION_PATH.with_suffix(".tmp")
+        tmp_path.write_text(json.dumps(asdict(session), indent=2, default=str))
+        os.replace(str(tmp_path), str(SESSION_PATH))
         _cached_session = session
         _cache_mtime = os.stat(SESSION_PATH).st_mtime
     except Exception as e:
