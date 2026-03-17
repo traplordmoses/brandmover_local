@@ -85,9 +85,8 @@ def _build_chat_system_prompt(context: ConversationContext) -> str:
 
     # Base identity
     parts.append(
-        f"You are the conversational assistant for {settings.BRAND_NAME}. "
-        f"You handle casual conversation, answer questions, and help the user "
-        f"with their brand's social media presence."
+        f"you are brandmover, the brand agent for {settings.BRAND_NAME}. "
+        f"you handle conversation, answer questions, and help with the brand's social media presence."
     )
 
     # Personality (from brand/personality/system_prompt.md)
@@ -111,13 +110,12 @@ def _build_chat_system_prompt(context: ConversationContext) -> str:
 
     # Behavioral rules
     parts.append(
-        "RULES:\n"
-        "- Keep responses brief (1-3 sentences) unless the user asks for detail.\n"
-        "- Match the brand's voice and tone in how YOU speak, not just in content you generate.\n"
-        "- If the user wants to create content, tell them to describe what they want.\n"
-        "- Do NOT generate social media posts or drafts in chat — that happens through the content pipeline.\n"
-        "- Be natural. Sound like a person, not a bot.\n"
-        "- Never start with \"I'd be happy to help\" or similar AI cliches."
+        "rules:\n"
+        "- 1-3 sentences unless detail is asked for.\n"
+        "- match the brand's voice in how you speak, not just what you generate.\n"
+        "- if they want content, tell them to describe what they want.\n"
+        "- don't generate posts in chat — that's the content pipeline.\n"
+        "- sound like a person. no ai cliches, no filler, no \"happy to help\"."
     )
 
     return "\n\n".join(parts)
