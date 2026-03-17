@@ -74,7 +74,7 @@ def _read_state(user_id: int | None = None) -> dict:
     try:
         data = json.loads(state_file.read_text(encoding="utf-8"))
         _state_caches[uid] = data
-        return data
+        return copy.deepcopy(data)
     except (json.JSONDecodeError, OSError) as e:
         logger.warning("Failed to read %s: %s", state_file.name, e)
         return {}
@@ -86,7 +86,7 @@ def _write_state(data: dict, user_id: int | None = None) -> None:
     _state_caches[uid] = data
     state_file = _user_state_file(user_id)
     state_file.parent.mkdir(parents=True, exist_ok=True)
-    tmp_path = state_file.with_suffix(".tmp")
+    tmp_path = state_file.with_suffix(f".tmp_{os.getpid()}_{threading.get_ident()}")
     tmp_path.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
     os.replace(str(tmp_path), str(state_file))
 
@@ -204,9 +204,10 @@ def has_approved(user_id: int | None = None) -> bool:
 
 def clear_approved(user_id: int | None = None) -> None:
     """Clear any approved draft."""
-    s = _read_state(user_id)
-    s.pop("approved", None)
-    _write_state(s, user_id)
+    with _sync_lock:
+        s = _read_state(user_id)
+        s.pop("approved", None)
+        _write_state(s, user_id)
 
 
 def get_draft_history(user_id: int | None = None) -> list[dict]:
@@ -224,9 +225,10 @@ def get_draft_revision_count(user_id: int | None = None) -> int:
 
 def clear_draft_history(user_id: int | None = None) -> None:
     """Clear all draft history (e.g., after approval or at end of session)."""
-    s = _read_state(user_id)
-    s.pop("draft_history", None)
-    _write_state(s, user_id)
+    with _sync_lock:
+        s = _read_state(user_id)
+        s.pop("draft_history", None)
+        _write_state(s, user_id)
 
 
 # ---------------------------------------------------------------------------
@@ -235,10 +237,11 @@ def clear_draft_history(user_id: int | None = None) -> None:
 
 def set_reference_image(path: str) -> None:
     """Store a reference image path for use in the next img2img generation."""
-    s = _read_state()
-    s["reference_image_path"] = path
-    _write_state(s)
-    logger.info("Reference image saved: %s", path)
+    with _sync_lock:
+        s = _read_state()
+        s["reference_image_path"] = path
+        _write_state(s)
+        logger.info("Reference image saved: %s", path)
 
 
 def get_reference_image() -> str | None:
@@ -248,10 +251,11 @@ def get_reference_image() -> str | None:
 
 def clear_reference_image() -> None:
     """Remove the stored reference image path."""
-    s = _read_state()
-    s.pop("reference_image_path", None)
-    _write_state(s)
-    logger.info("Reference image cleared")
+    with _sync_lock:
+        s = _read_state()
+        s.pop("reference_image_path", None)
+        _write_state(s)
+        logger.info("Reference image cleared")
 
 
 # ---------------------------------------------------------------------------
@@ -260,10 +264,11 @@ def clear_reference_image() -> None:
 
 def set_last_composed(path: str, content_type: str, user_id: int | None = None) -> None:
     """Store the path to the last composed image and its content type."""
-    s = _read_state(user_id)
-    s["last_composed_path"] = path
-    s["last_composed_content_type"] = content_type
-    _write_state(s, user_id)
+    with _sync_lock:
+        s = _read_state(user_id)
+        s["last_composed_path"] = path
+        s["last_composed_content_type"] = content_type
+        _write_state(s, user_id)
 
 
 def get_last_composed(user_id: int | None = None) -> tuple[str | None, str]:
@@ -274,18 +279,20 @@ def get_last_composed(user_id: int | None = None) -> tuple[str | None, str]:
 
 def clear_last_composed(user_id: int | None = None) -> None:
     """Remove the last composed image metadata."""
-    s = _read_state(user_id)
-    s.pop("last_composed_path", None)
-    s.pop("last_composed_content_type", None)
-    _write_state(s, user_id)
+    with _sync_lock:
+        s = _read_state(user_id)
+        s.pop("last_composed_path", None)
+        s.pop("last_composed_content_type", None)
+        _write_state(s, user_id)
 
 
 def save_last_generated(image_url: str, content_type: str, user_id: int | None = None) -> None:
     """Store the URL of the last generated image for /edit reuse."""
-    s = _read_state(user_id)
-    s["last_generated"] = {"image_url": image_url, "content_type": content_type}
-    _write_state(s, user_id)
-    logger.info("Saved last generated image: %s (%s)", image_url[:80], content_type)
+    with _sync_lock:
+        s = _read_state(user_id)
+        s["last_generated"] = {"image_url": image_url, "content_type": content_type}
+        _write_state(s, user_id)
+        logger.info("Saved last generated image: %s (%s)", image_url[:80], content_type)
 
 
 def get_last_generated(user_id: int | None = None) -> tuple[str | None, str]:
@@ -357,7 +364,7 @@ def _read_styles() -> dict:
 def _write_styles(data: dict) -> None:
     """Write styles dict to styles.json and update in-memory cache."""
     global _cached_styles, _styles_cache_mtime
-    tmp_path = _STYLES_FILE.with_suffix(".tmp")
+    tmp_path = _STYLES_FILE.with_suffix(f".tmp_{os.getpid()}_{threading.get_ident()}")
     tmp_path.write_text(
         json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8"
     )

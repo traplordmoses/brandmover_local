@@ -781,11 +781,15 @@ async def cancel_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     if not _can_operate(user_id):
         return
 
-    if not state.has_pending(user_id=user_id):
-        await update.message.reply_text("Nothing to cancel — no pending draft.")
+    has_pending = state.has_pending(user_id=user_id)
+    has_approved = state.has_approved(user_id=user_id)
+
+    if not has_pending and not has_approved:
+        await update.message.reply_text("Nothing to cancel — no pending or approved draft.")
         return
 
     state.clear_pending(user_id=user_id)
+    state.clear_approved(user_id=user_id)
     state.clear_draft_history(user_id=user_id)
     await update.message.reply_text("Draft cancelled. Send a new request whenever you're ready.")
 
@@ -1078,9 +1082,11 @@ async def _handle_agent_revision(update: Update, pending: dict, feedback_text: s
                     f"an improved draft via finish. Address the feedback directly."
                 ),
             })
+            _rev_excluded = _ADMIN_ONLY_TOOLS if not _authorized(user_id or 0) else None
             result = await engine.run_agent_with_history(
                 history, on_tool_call=on_tool_call,
                 on_reasoning=on_reasoning,
+                excluded_tools=_rev_excluded,
             )
         else:
             # Fallback: no history available (legacy pending drafts)
@@ -2478,6 +2484,7 @@ async def _handle_unified(
         await update.message.chat.send_action("typing")
 
     try:
+        _excluded = _ADMIN_ONLY_TOOLS if not _authorized(user_id or 0) else None
         result = await unified_brain.run_unified(
             message=request,
             context=ctx,
@@ -2488,6 +2495,7 @@ async def _handle_unified(
                 "bot": context.bot,
                 "chat_id": update.effective_chat.id,
             },
+            excluded_tools=_excluded,
         )
 
         # Delete status message
@@ -4703,15 +4711,17 @@ async def generate_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 async def _build_asset_grid(urls: list[str]) -> io.BytesIO | None:
     """Download images and compose a labeled 2x2 grid. Returns BytesIO or None."""
     import httpx as _httpx
+    from agent.net_guard import validate_url as _validate_url
 
     if not urls:
         return None
 
     images: list[_PILImage.Image] = []
     try:
-        async with _httpx.AsyncClient(timeout=20, follow_redirects=True) as client:
+        async with _httpx.AsyncClient(timeout=20, follow_redirects=False) as client:
             for url in urls[:4]:
                 try:
+                    _validate_url(url)
                     resp = await client.get(url)
                     resp.raise_for_status()
                     img = _PILImage.open(io.BytesIO(resp.content)).convert("RGB")
@@ -4799,7 +4809,7 @@ async def generate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) 
             await query.answer("Invalid option.")
             return
 
-        pending = state.get_pending()
+        pending = state.get_pending(user_id=user_id)
         if not pending:
             await query.answer("Nothing pending to approve.")
             return

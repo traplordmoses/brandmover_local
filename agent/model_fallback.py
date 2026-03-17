@@ -230,7 +230,7 @@ async def _call_gemini(model: str, **kwargs) -> dict:
     client = get_httpx()
     resp = await client.post(
         f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
-        params={"key": settings.GEMINI_API_KEY},
+        headers={"x-goog-api-key": settings.GEMINI_API_KEY, "Content-Type": "application/json"},
         json=body,
         timeout=120,
     )

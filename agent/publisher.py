@@ -26,26 +26,37 @@ async def _download_image(url_or_path: str) -> bytes:
     return Path(url_or_path).read_bytes()
 
 
+# Lazy-initialized singleton Tweepy clients
+_api_v1: tweepy.API | None = None
+_client_v2: tweepy.Client | None = None
+
+
 def _get_api_v1() -> tweepy.API:
-    """Create Tweepy v1.1 API client for media upload."""
-    auth = tweepy.OAuth1UserHandler(
-        settings.X_API_KEY,
-        settings.X_API_SECRET,
-        settings.X_ACCESS_TOKEN,
-        settings.X_ACCESS_SECRET,
-    )
-    return tweepy.API(auth)
+    """Return singleton Tweepy v1.1 API client for media upload."""
+    global _api_v1
+    if _api_v1 is None:
+        auth = tweepy.OAuth1UserHandler(
+            settings.X_API_KEY,
+            settings.X_API_SECRET,
+            settings.X_ACCESS_TOKEN,
+            settings.X_ACCESS_SECRET,
+        )
+        _api_v1 = tweepy.API(auth)
+    return _api_v1
 
 
 def _get_client_v2() -> tweepy.Client:
-    """Create Tweepy v2 Client for posting tweets."""
-    return tweepy.Client(
-        bearer_token=settings.X_BEARER_TOKEN,
-        consumer_key=settings.X_API_KEY,
-        consumer_secret=settings.X_API_SECRET,
-        access_token=settings.X_ACCESS_TOKEN,
-        access_token_secret=settings.X_ACCESS_SECRET,
-    )
+    """Return singleton Tweepy v2 Client for posting tweets."""
+    global _client_v2
+    if _client_v2 is None:
+        _client_v2 = tweepy.Client(
+            bearer_token=settings.X_BEARER_TOKEN,
+            consumer_key=settings.X_API_KEY,
+            consumer_secret=settings.X_API_SECRET,
+            access_token=settings.X_ACCESS_TOKEN,
+            access_token_secret=settings.X_ACCESS_SECRET,
+        )
+    return _client_v2
 
 
 async def post_to_x(

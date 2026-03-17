@@ -582,6 +582,7 @@ async def run_agent_with_history(
     history: list[dict],
     on_tool_call: OnToolCall | None = None,
     on_reasoning: OnReasoning | None = None,
+    excluded_tools: set[str] | None = None,
 ) -> AgentResult:
     """Continue an agent conversation from existing message history.
 
@@ -609,6 +610,7 @@ async def run_agent_with_history(
         client, system_prompt, messages, tracker,
         on_tool_call=on_tool_call, on_reasoning=on_reasoning,
         force_first_tool=False,
+        excluded_tools=excluded_tools,
     )
     result.total_time = round(time.time() - t_start, 1)
 
@@ -695,7 +697,10 @@ def _trim_conversation(messages: list[dict]) -> list[dict]:
 
     # Final size check — remove messages in pairs (user+assistant) from the
     # front (after the first pair) to preserve user/assistant alternation.
-    while len(json.dumps(trimmed, default=str)) > MAX_HISTORY_SIZE_CHARS and len(trimmed) > 4:
+    while len(trimmed) > 4:
+        serialized = json.dumps(trimmed, default=str)
+        if len(serialized) <= MAX_HISTORY_SIZE_CHARS:
+            break
         # Remove the 3rd and 4th messages (oldest pair after the first pair)
         del trimmed[2:4]
 

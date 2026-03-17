@@ -37,6 +37,7 @@ prompt engineering needed for individual tools. We use a two-tier dispatch so
 new tools don't affect the battle-tested original tool registry."
 """
 
+import ast
 import asyncio
 import json
 import logging
@@ -45,6 +46,7 @@ import re
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import uuid
 from pathlib import Path
@@ -1316,6 +1318,70 @@ async def _handle_update_plan_item(
     return json.dumps({"updated_item": item, "current_item": plan.get("current_item") if plan else None})
 
 
+# ---------------------------------------------------------------------------
+# AST-based code validation for execute_code sandbox
+# Uses an allowlist for imports and blocklists for dangerous builtins/attrs.
+# ---------------------------------------------------------------------------
+
+_ALLOWED_MODULES = frozenset({
+    'PIL', 'numpy', 'np', 'math', 'json', 're', 'collections',
+    'dataclasses', 'typing', 'datetime', 'random', 'colorsys',
+    'textwrap', 'string', 'functools', 'itertools', 'operator',
+    'decimal', 'fractions', 'statistics', 'copy', 'enum', 'abc',
+    'struct', 'hashlib', 'uuid', 'pprint',
+})
+
+_BLOCKED_NAMES = frozenset({
+    'eval', 'exec', 'compile', 'execfile', 'input', '__import__',
+    'getattr', 'setattr', 'delattr', 'globals', 'locals', 'vars',
+    'breakpoint', 'exit', 'quit', 'open',
+})
+
+_BLOCKED_ATTRS = frozenset({
+    '__class__', '__mro__', '__subclasses__', '__globals__',
+    '__builtins__', '__import__', '__loader__', '__spec__',
+    '__dict__', '__bases__', '__init_subclass__', '__set_name__',
+    '__reduce__', '__reduce_ex__', '__getstate__', '__setstate__',
+    'environ', 'getenv', 'popen', 'system',
+})
+
+
+def _validate_code_ast(code: str) -> str | None:
+    """Validate code via AST analysis. Returns error message or None if safe."""
+    try:
+        tree = ast.parse(code)
+    except SyntaxError as e:
+        return f"Syntax error: {e}"
+
+    for node in ast.walk(tree):
+        # Block dangerous function calls
+        if isinstance(node, ast.Call):
+            func = node.func
+            if isinstance(func, ast.Name) and func.id in _BLOCKED_NAMES:
+                return f"Blocked function: {func.id}()"
+            if isinstance(func, ast.Name) and func.id == 'type' and len(node.args) == 3:
+                return "Blocked: type() with 3 args (metaclass creation)"
+
+        # Block imports not in allowlist
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                top = alias.name.split('.')[0]
+                if top not in _ALLOWED_MODULES:
+                    return f"Blocked import: {alias.name}"
+        if isinstance(node, ast.ImportFrom):
+            if node.module:
+                top = node.module.split('.')[0]
+                if top not in _ALLOWED_MODULES:
+                    return f"Blocked import: from {node.module}"
+
+        # Block dangerous attribute access
+        if isinstance(node, ast.Attribute):
+            if node.attr in _BLOCKED_ATTRS:
+                return f"Blocked attribute: .{node.attr}"
+
+    return None
+
+
 async def _handle_execute_code(
     input_dict: dict, tracker: ResourceTracker, user_id: int | None = None,
     tool_context: dict | None = None,
@@ -1325,45 +1391,10 @@ async def _handle_execute_code(
     if not code.strip():
         return json.dumps({"error": "No code provided"})
 
-    # --- Security: block dangerous patterns before execution ---
-    _DANGEROUS_PATTERNS = [
-        r"config\.settings",
-        r"config\s+import\s+settings",
-        r"\.env\b",
-        r"dotenv",
-        r"os\.environ",
-        r"os\.getenv",
-        r"os\.popen",
-        r"os\.system",
-        r"/etc/",
-        r"/proc/",
-        r"subprocess",
-        r"__import__",
-        r"__builtins__",
-        r"importlib",
-        r"\beval\s*\(",
-        r"\bexec\s*\(",
-        r"\bcompile\s*\(",
-        r"\bgetattr\s*\(",
-        r"\bglobals\s*\(",
-        r"\blocals\s*\(",
-        r"\bvars\s*\(",
-        r"\bbreakpoint\s*\(",
-        r"b64decode",
-        r"base64",
-        r"\bchr\s*\(",
-        r"\bord\s*\(",
-        r"\bbytearray\s*\(",
-        r"ctypes",
-        r"\bsocket\b",
-        r"shutil",
-        r"signal",
-        r"webbrowser",
-    ]
-    _dangerous_re = re.compile("|".join(_DANGEROUS_PATTERNS))
-    match = _dangerous_re.search(code)
-    if match:
-        return json.dumps({"error": f"Blocked: code contains disallowed pattern '{match.group()}'"})
+    # --- Security: AST-based code validation ---
+    validation_error = _validate_code_ast(code)
+    if validation_error:
+        return json.dumps({"error": f"Blocked: {validation_error}"})
 
     _OUTPUTS_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -2040,6 +2071,15 @@ async def _handle_edit_image(
     src = Path(source_path)
     if not src.is_absolute():
         src = _PROJECT_ROOT / src
+    # Path containment — only allow images within state/ or brand/
+    try:
+        resolved = src.resolve()
+        state_dir = (_PROJECT_ROOT / "state").resolve()
+        brand_dir = (_PROJECT_ROOT / "brand").resolve()
+        if not (resolved.is_relative_to(state_dir) or resolved.is_relative_to(brand_dir)):
+            return json.dumps({"error": "Access denied — source_path must be within state/ or brand/"})
+    except (OSError, ValueError):
+        return json.dumps({"error": "Invalid source path"})
     if not src.exists():
         return json.dumps({"error": f"Source image not found: {source_path}"})
     source_path = str(src)
@@ -2298,9 +2338,11 @@ def log_channel_message(chat_id: int, author: str, text: str, timestamp: float) 
     # Keep last 100 messages
     messages = messages[-100:]
     _CHANNEL_MESSAGES_FILE.parent.mkdir(parents=True, exist_ok=True)
-    _CHANNEL_MESSAGES_FILE.write_text(
+    tmp_path = _CHANNEL_MESSAGES_FILE.with_suffix(f".tmp_{os.getpid()}_{threading.get_ident()}")
+    tmp_path.write_text(
         json.dumps(messages, indent=2, ensure_ascii=False), encoding="utf-8"
     )
+    os.replace(str(tmp_path), str(_CHANNEL_MESSAGES_FILE))
 
 
 async def _handle_read_telegram_channel(

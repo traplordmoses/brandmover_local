@@ -7,6 +7,7 @@ Loaded at the start of each agent run and injected as context.
 import json
 import logging
 import os
+import threading
 import time
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
@@ -84,7 +85,7 @@ def save_session(session: AgentSession) -> None:
 
     SESSION_PATH.parent.mkdir(parents=True, exist_ok=True)
     try:
-        tmp_path = SESSION_PATH.with_suffix(".tmp")
+        tmp_path = SESSION_PATH.with_suffix(f".tmp_{os.getpid()}_{threading.get_ident()}")
         tmp_path.write_text(json.dumps(asdict(session), indent=2, default=str))
         os.replace(str(tmp_path), str(SESSION_PATH))
         _cached_session = session

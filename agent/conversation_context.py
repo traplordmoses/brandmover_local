@@ -81,7 +81,7 @@ def _save_all(data: dict[str, dict]) -> None:
             logger.debug("Pruned %d stale conversation contexts", before - len(data))
         _last_prune_time = now
 
-    tmp_path = _CONTEXT_FILE.with_suffix(".tmp")
+    tmp_path = _CONTEXT_FILE.with_suffix(f".tmp_{os.getpid()}_{threading.get_ident()}")
     tmp_path.write_text(
         json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8"
     )

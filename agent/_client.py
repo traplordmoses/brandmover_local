@@ -35,7 +35,7 @@ def get_httpx() -> httpx.AsyncClient:
     """Return a shared httpx.AsyncClient (lazy-initialized)."""
     global _httpx_client
     if _httpx_client is None:
-        _httpx_client = httpx.AsyncClient(timeout=120, follow_redirects=True)
+        _httpx_client = httpx.AsyncClient(timeout=120, follow_redirects=False)
     return _httpx_client
 
 

@@ -93,7 +93,11 @@ async def fetch_url(url: str, max_chars: int = 15000) -> str:
                             return f"URL: {current_url}\nError: Redirect with no Location header"
                         # Resolve relative redirects
                         from urllib.parse import urljoin
-                        current_url = urljoin(current_url, location)
+                        redirect_url = urljoin(current_url, location)
+                        # Block HTTPS → HTTP downgrade
+                        if url.startswith("https://") and not redirect_url.startswith("https://"):
+                            return f"URL: {url}\nError: HTTPS to HTTP downgrade not allowed"
+                        current_url = redirect_url
                         # Validate redirect target against SSRF
                         try:
                             validate_url(current_url)
@@ -104,6 +108,11 @@ async def fetch_url(url: str, max_chars: int = 15000) -> str:
                     if resp.status >= 400:
                         return f"URL: {current_url}\nError: HTTP {resp.status} — {resp.reason}"
 
+                    # Reject responses that are too large (>5MB)
+                    content_length = resp.headers.get("Content-Length")
+                    if content_length and int(content_length) > 5_000_000:
+                        return f"URL: {current_url}\nError: Response too large ({content_length} bytes, >5MB limit)"
+
                     # Only process HTML content
                     content_type = resp.headers.get("Content-Type", "")
                     if "html" not in content_type and "text" not in content_type:
@@ -113,7 +122,8 @@ async def fetch_url(url: str, max_chars: int = 15000) -> str:
                             f"Note: Not an HTML page. Cannot extract text content."
                         )
 
-                    html = await resp.text(errors="replace")
+                    raw_body = await resp.content.read(5_000_000)
+                    html = raw_body.decode("utf-8", errors="replace")
                     break
             else:
                 return f"URL: {url}\nError: Too many redirects (>{_MAX_REDIRECTS})"

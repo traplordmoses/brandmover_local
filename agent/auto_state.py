@@ -9,6 +9,7 @@ import json
 import logging
 import os
 import re
+import threading
 import time
 from pathlib import Path
 
@@ -63,7 +64,7 @@ def _write_state(data: dict) -> None:
     """Write state dict to auto_post_state.json and update in-memory cache."""
     global _cached_state, _cache_mtime
     _STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
-    tmp_path = _STATE_FILE.with_suffix(".tmp")
+    tmp_path = _STATE_FILE.with_suffix(f".tmp_{os.getpid()}_{threading.get_ident()}")
     tmp_path.write_text(
         json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8"
     )

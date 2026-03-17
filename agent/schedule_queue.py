@@ -9,7 +9,9 @@ Storage: state/schedule_queue.json
 
 import json
 import logging
+import os
 import re
+import threading
 import time
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -22,6 +24,10 @@ logger = logging.getLogger(__name__)
 
 _QUEUE_FILE = Path(settings.AUTO_POST_STATE_FILE).parent / "schedule_queue.json"
 
+# In-memory cache for schedule_queue.json to avoid re-reading on every call
+_cached_queue: list[dict] | None = None
+_queue_cache_mtime: float = 0.0
+
 
 # ---------------------------------------------------------------------------
 # File I/O
@@ -29,25 +35,37 @@ _QUEUE_FILE = Path(settings.AUTO_POST_STATE_FILE).parent / "schedule_queue.json"
 
 
 def _read_queue() -> list[dict]:
-    """Read the schedule queue from disk."""
+    """Read the schedule queue from disk with mtime-based caching."""
+    global _cached_queue, _queue_cache_mtime
     if not _QUEUE_FILE.exists():
         return []
     try:
+        mtime = os.stat(_QUEUE_FILE).st_mtime
+        if _cached_queue is not None and mtime == _queue_cache_mtime:
+            return _cached_queue
         data = json.loads(_QUEUE_FILE.read_text(encoding="utf-8"))
         if isinstance(data, list):
-            return data
-        return data.get("items", [])
+            _cached_queue = data
+        else:
+            _cached_queue = data.get("items", [])
+        _queue_cache_mtime = mtime
+        return _cached_queue
     except (json.JSONDecodeError, OSError) as e:
         logger.warning("Failed to read schedule_queue.json: %s", e)
         return []
 
 
 def _write_queue(items: list[dict]) -> None:
-    """Write the queue to disk."""
+    """Write the queue to disk (atomic write) and update cache."""
+    global _cached_queue, _queue_cache_mtime
     _QUEUE_FILE.parent.mkdir(parents=True, exist_ok=True)
-    _QUEUE_FILE.write_text(
+    tmp_path = _QUEUE_FILE.with_suffix(f".tmp_{os.getpid()}_{threading.get_ident()}")
+    tmp_path.write_text(
         json.dumps(items, indent=2, ensure_ascii=False), encoding="utf-8"
     )
+    os.replace(str(tmp_path), str(_QUEUE_FILE))
+    _cached_queue = items
+    _queue_cache_mtime = os.stat(_QUEUE_FILE).st_mtime
 
 
 # ---------------------------------------------------------------------------

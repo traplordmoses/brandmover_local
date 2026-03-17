@@ -278,7 +278,7 @@ async def _claude_reason(signals: list[dict]) -> HeartbeatDecision:
 
     try:
         response = await client.messages.create(
-            model=settings.AGENT_MODEL,
+            model=settings.HAIKU_MODEL,
             max_tokens=500,
             system="You are a concise planning agent. Pick the single best action.",
             tools=[decide_tool],

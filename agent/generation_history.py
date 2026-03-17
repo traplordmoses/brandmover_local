@@ -59,7 +59,7 @@ def _write_history(entries: list[dict]) -> None:
     """Write the full history log and update in-memory cache."""
     global _cached_history, _history_cache_mtime
     _HISTORY_FILE.parent.mkdir(parents=True, exist_ok=True)
-    tmp_path = _HISTORY_FILE.with_suffix(".tmp")
+    tmp_path = _HISTORY_FILE.with_suffix(f".tmp_{os.getpid()}_{threading.get_ident()}")
     tmp_path.write_text(
         json.dumps(entries, indent=2, ensure_ascii=False), encoding="utf-8"
     )
@@ -103,6 +103,18 @@ def log_generation(
     Tags enable structured retrieval — e.g. ["campaign:launch", "mood:urgent",
     "topic:feature-release"]. Memory search includes tags for better matching.
     """
+    with _sync_lock:
+        return _log_generation_locked(
+            asset_type, content_type, prompt, model_id, image_urls,
+            original_request, status, tags,
+        )
+
+
+def _log_generation_locked(
+    asset_type, content_type, prompt, model_id, image_urls,
+    original_request, status, tags,
+) -> int:
+    """Inner implementation of log_generation, called under _sync_lock."""
     cost = _estimate_cost(model_id, max(len(image_urls), 1))
     entries = _read_history()
     entry: dict = {
@@ -136,6 +148,12 @@ def log_generation(
 
 def update_generation_status(timestamp: float, new_status: str) -> bool:
     """Find entry by timestamp and update its status. Returns True if found."""
+    with _sync_lock:
+        return _update_generation_status_locked(timestamp, new_status)
+
+
+def _update_generation_status_locked(timestamp: float, new_status: str) -> bool:
+    """Inner implementation of update_generation_status, called under _sync_lock."""
     entries = _read_history()
     for entry in reversed(entries):
         if abs(entry.get("timestamp", 0) - timestamp) < 1.0:

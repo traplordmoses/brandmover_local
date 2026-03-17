@@ -12,6 +12,8 @@ State lives in state/self_review_state.json.
 import asyncio
 import json
 import logging
+import os
+import threading
 import time
 from pathlib import Path
 
@@ -39,11 +41,13 @@ def _read_state() -> dict:
 
 
 def _write_state(data: dict) -> None:
-    """Write state to self_review_state.json."""
+    """Write state to self_review_state.json (atomic write)."""
     _STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
-    _STATE_FILE.write_text(
+    tmp_path = _STATE_FILE.with_suffix(f".tmp_{os.getpid()}_{threading.get_ident()}")
+    tmp_path.write_text(
         json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8"
     )
+    os.replace(str(tmp_path), str(_STATE_FILE))
 
 
 def _default_state() -> dict:

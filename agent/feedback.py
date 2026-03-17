@@ -29,6 +29,7 @@ import asyncio
 import json
 import logging
 import os
+import threading
 import time
 from pathlib import Path
 
@@ -41,6 +42,9 @@ logger = logging.getLogger(__name__)
 # In-memory cache for feedback.json to avoid re-reading on every call
 _cached_feedback: list[dict] | None = None
 _feedback_cache_mtime: float = 0.0
+
+# Threading lock for sync read-modify-write functions
+_feedback_lock = threading.Lock()
 
 # File paths — all state lives in state/ directory
 _project_root = Path(__file__).resolve().parent.parent
@@ -88,7 +92,7 @@ def _write_feedback(entries: list[dict]) -> None:
     """Write the full feedback log to disk and update in-memory cache."""
     global _cached_feedback, _feedback_cache_mtime
     _FEEDBACK_FILE.parent.mkdir(parents=True, exist_ok=True)
-    tmp_path = _FEEDBACK_FILE.with_suffix(".tmp")
+    tmp_path = _FEEDBACK_FILE.with_suffix(f".tmp_{os.getpid()}_{threading.get_ident()}")
     tmp_path.write_text(
         json.dumps(entries, indent=2, ensure_ascii=False), encoding="utf-8"
     )
@@ -116,22 +120,23 @@ def log_feedback(
     - resources_used: Which APIs/files were consulted during generation
     - tags: Structured tags for retrieval (e.g., ["content_type:meme", "mood:casual"])
     """
-    entries = _read_feedback()
-    entry: dict = {
-        "request": request,
-        "draft": draft,
-        "accepted": accepted,
-        "feedback_text": feedback_text,
-        "resources_used": resources_used or [],
-        "timestamp": time.time(),
-    }
-    if tags:
-        entry["tags"] = tags
-    entries.append(entry)
-    _write_feedback(entries)
-    count = len(entries)
-    logger.info("Logged feedback #%d (accepted=%s)", count, accepted)
-    return count
+    with _feedback_lock:
+        entries = _read_feedback()
+        entry: dict = {
+            "request": request,
+            "draft": draft,
+            "accepted": accepted,
+            "feedback_text": feedback_text,
+            "resources_used": resources_used or [],
+            "timestamp": time.time(),
+        }
+        if tags:
+            entry["tags"] = tags
+        entries.append(entry)
+        _write_feedback(entries)
+        count = len(entries)
+        logger.info("Logged feedback #%d (accepted=%s)", count, accepted)
+        return count
 
 
 def get_feedback_context() -> str:
@@ -253,7 +258,9 @@ async def summarize_preferences() -> str:
     # Save the generated summary — this overwrites any previous version.
     # The file is loaded by unified_prompt.py on every brain call.
     summary = response.content[0].text
-    _PREFERENCES_FILE.write_text(summary, encoding="utf-8")
+    tmp_path = _PREFERENCES_FILE.with_suffix(f".tmp_{os.getpid()}_{threading.get_ident()}")
+    tmp_path.write_text(summary, encoding="utf-8")
+    os.replace(str(tmp_path), str(_PREFERENCES_FILE))
     logger.info("Updated learned_preferences.md (%d chars)", len(summary))
     return summary
 
