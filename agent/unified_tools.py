@@ -1690,6 +1690,7 @@ async def _handle_start_autonomous_plan(
                 context=ctx,
                 user_id=user_id,
                 tool_context=tool_context,
+                excluded_tools={"execute_code"},
             )
             if result.draft:
                 session_plan.save_queued_draft(

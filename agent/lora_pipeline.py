@@ -15,6 +15,7 @@ import zipfile
 from pathlib import Path
 
 from agent._client import get_httpx
+from agent.net_guard import validate_url
 from config import settings
 
 logger = logging.getLogger(__name__)
@@ -100,6 +101,12 @@ async def add_training_image_from_url(
     _ensure_dirs()
     ts = int(time.time())
     tmp_path = _IMAGES_DIR / f"_dl_{ts}.jpg"
+
+    try:
+        validate_url(url)
+    except ValueError as e:
+        logger.warning("Rejected training image URL %s: %s", url[:80], e)
+        return len(_load_manifest()["images"]), False
 
     try:
         client = get_httpx()

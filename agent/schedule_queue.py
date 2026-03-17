@@ -7,6 +7,7 @@ loop processes due items alongside predefined time slots.
 Storage: state/schedule_queue.json
 """
 
+import copy
 import json
 import logging
 import os
@@ -42,14 +43,14 @@ def _read_queue() -> list[dict]:
     try:
         mtime = os.stat(_QUEUE_FILE).st_mtime
         if _cached_queue is not None and mtime == _queue_cache_mtime:
-            return _cached_queue
+            return copy.deepcopy(_cached_queue)
         data = json.loads(_QUEUE_FILE.read_text(encoding="utf-8"))
         if isinstance(data, list):
             _cached_queue = data
         else:
             _cached_queue = data.get("items", [])
         _queue_cache_mtime = mtime
-        return _cached_queue
+        return copy.deepcopy(_cached_queue)
     except (json.JSONDecodeError, OSError) as e:
         logger.warning("Failed to read schedule_queue.json: %s", e)
         return []
@@ -64,7 +65,7 @@ def _write_queue(items: list[dict]) -> None:
         json.dumps(items, indent=2, ensure_ascii=False), encoding="utf-8"
     )
     os.replace(str(tmp_path), str(_QUEUE_FILE))
-    _cached_queue = items
+    _cached_queue = copy.deepcopy(items)
     _queue_cache_mtime = os.stat(_QUEUE_FILE).st_mtime
 
 

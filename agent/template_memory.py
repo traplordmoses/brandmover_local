@@ -500,6 +500,12 @@ async def apply_template(
     # 2. Load source image (URL or local path)
     try:
         if image_source.startswith("http"):
+            from agent.net_guard import validate_url
+            try:
+                validate_url(image_source)
+            except ValueError as e:
+                logger.warning("Rejected template source URL %s: %s", image_source[:80], e)
+                return None
             async with httpx.AsyncClient(timeout=30) as client:
                 resp = await client.get(image_source)
                 resp.raise_for_status()

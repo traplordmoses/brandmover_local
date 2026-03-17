@@ -6,6 +6,7 @@ Tracks asset type, content type, prompt, model, image URLs, and status
 """
 
 import asyncio
+import copy
 import json
 import logging
 import os
@@ -45,11 +46,11 @@ def _read_history() -> list[dict]:
     try:
         mtime = os.stat(_HISTORY_FILE).st_mtime
         if _cached_history is not None and mtime == _history_cache_mtime:
-            return _cached_history
+            return copy.deepcopy(_cached_history)
         data = json.loads(_HISTORY_FILE.read_text(encoding="utf-8"))
         _cached_history = data
         _history_cache_mtime = mtime
-        return data
+        return copy.deepcopy(data)
     except (json.JSONDecodeError, OSError) as e:
         logger.warning("Failed to read generation_history.json: %s", e)
         return []
@@ -64,7 +65,7 @@ def _write_history(entries: list[dict]) -> None:
         json.dumps(entries, indent=2, ensure_ascii=False), encoding="utf-8"
     )
     os.replace(str(tmp_path), str(_HISTORY_FILE))
-    _cached_history = entries
+    _cached_history = copy.deepcopy(entries)
     _history_cache_mtime = os.stat(_HISTORY_FILE).st_mtime
 
 

@@ -69,7 +69,7 @@ def _write_state(data: dict) -> None:
         json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8"
     )
     os.replace(str(tmp_path), str(_STATE_FILE))
-    _cached_state = data
+    _cached_state = copy.deepcopy(data)
     _cache_mtime = os.stat(_STATE_FILE).st_mtime
 
 

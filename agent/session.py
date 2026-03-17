@@ -4,6 +4,7 @@ Stores recent posts, rejections, learned preferences, and last run metadata.
 Loaded at the start of each agent run and injected as context.
 """
 
+import copy
 import json
 import logging
 import os
@@ -69,7 +70,7 @@ def load_session() -> AgentSession:
             )
             _cached_session = session
             _cache_mtime = mtime
-            return session
+            return copy.deepcopy(session)
     except Exception as e:
         logger.warning("Failed to load session from %s: %s", SESSION_PATH, e)
     return AgentSession()
@@ -88,7 +89,7 @@ def save_session(session: AgentSession) -> None:
         tmp_path = SESSION_PATH.with_suffix(f".tmp_{os.getpid()}_{threading.get_ident()}")
         tmp_path.write_text(json.dumps(asdict(session), indent=2, default=str))
         os.replace(str(tmp_path), str(SESSION_PATH))
-        _cached_session = session
+        _cached_session = copy.deepcopy(session)
         _cache_mtime = os.stat(SESSION_PATH).st_mtime
     except Exception as e:
         logger.error("Failed to save session to %s: %s", SESSION_PATH, e)

@@ -26,6 +26,7 @@ no fine-tuning needed. It's a closed-loop system that improves through prompt co
 """
 
 import asyncio
+import copy
 import json
 import logging
 import os
@@ -78,11 +79,11 @@ def _read_feedback() -> list[dict]:
     try:
         mtime = os.stat(_FEEDBACK_FILE).st_mtime
         if _cached_feedback is not None and mtime == _feedback_cache_mtime:
-            return _cached_feedback
+            return copy.deepcopy(_cached_feedback)
         data = json.loads(_FEEDBACK_FILE.read_text(encoding="utf-8"))
         _cached_feedback = data
         _feedback_cache_mtime = mtime
-        return data
+        return copy.deepcopy(data)
     except (json.JSONDecodeError, OSError) as e:
         logger.warning("Failed to read feedback.json: %s", e)
         return []
@@ -97,7 +98,7 @@ def _write_feedback(entries: list[dict]) -> None:
         json.dumps(entries, indent=2, ensure_ascii=False), encoding="utf-8"
     )
     os.replace(str(tmp_path), str(_FEEDBACK_FILE))
-    _cached_feedback = entries
+    _cached_feedback = copy.deepcopy(entries)
     _feedback_cache_mtime = os.stat(_FEEDBACK_FILE).st_mtime
 
 
@@ -258,9 +259,10 @@ async def summarize_preferences() -> str:
     # Save the generated summary — this overwrites any previous version.
     # The file is loaded by unified_prompt.py on every brain call.
     summary = response.content[0].text
-    tmp_path = _PREFERENCES_FILE.with_suffix(f".tmp_{os.getpid()}_{threading.get_ident()}")
-    tmp_path.write_text(summary, encoding="utf-8")
-    os.replace(str(tmp_path), str(_PREFERENCES_FILE))
+    with _feedback_lock:
+        tmp_path = _PREFERENCES_FILE.with_suffix(f".tmp_{os.getpid()}_{threading.get_ident()}")
+        tmp_path.write_text(summary, encoding="utf-8")
+        os.replace(str(tmp_path), str(_PREFERENCES_FILE))
     logger.info("Updated learned_preferences.md (%d chars)", len(summary))
     return summary
 
