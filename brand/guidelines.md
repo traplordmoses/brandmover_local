@@ -10,10 +10,33 @@
 **Website:** foid.fun
 **Category:** On-chain cultural coordination layer
 **X Handle:** @FOIDFUN
-**Product:** A platform for permanent meme culture — Loreboard (democratic meme curation grid), Foid Mommy Terminal (AI prayer ritual), and MiFOID (evolving identity NFT). Built on Fluent L2.
+**Product:** A permanent culture layer for the internet. Communities show up daily, vote on what gets remembered, and place their best work on-chain forever. Participation generates ownership; ownership generates more participation. Built on Fluent L2.
+
+**The Three Pillars:**
+
+| Pillar | Mechanic | Motivation | On-Chain Action |
+|--------|----------|-----------|-----------------|
+| PRAY | Daily ritual, streak counter, voting weight | Loss aversion — "I don't want to lose my streak" | Prayer hash anchored per session |
+| SWIPE | Democratic curation queue, approve or reject | Tastemaker desire — "my taste matters" | Vote logged, canonized memes enter gallery |
+| LOREBOARD | Infinite canvas, spatial placement, forever | Territorial instinct — "I was here" | Placement minted, manifest recorded on-chain |
+
+**The Flywheel:** Show up daily (pray) → earn influence (streak) → decide what gets remembered (swipe) → feel ownership (gallery) → place your mark (loreboard) → show up again.
+
+**The Funnel:** Pray once → build streak → earn voting weight → swipe on memes → canonize culture → place on loreboard → identity on-chain.
+
+**Onboarding philosophy:** Understanding comes from doing, not reading. The first act is PRAY. One sentence. Anchored on-chain. Streak = 1. Loss aversion kicks in immediately. Everything else follows.
+
+**The Pitch (by audience):**
+- Normal people: "It's like if your group chat had a permanent wall where you put your best memes, and everyone votes on which ones stay forever."
+- Crypto Twitter: "The permanent yearbook for internet culture. Swipe to judge. Pray to power up. The community decides what gets remembered."
+- DAOs / Communities: "Give your community a culture engine. Daily rituals, collaborative canvas, democratic curation. All on-chain."
+
+**Agentic Layer:** Full Agent API. AI agents can pray, propose, vote, and hold MiFOIDs with identical mechanics as human users. First platform where humans and AI agents coexist as cultural participants.
 
 **Brand Positioning:**
 FOID sits at the intersection of meme culture and on-chain permanence. It treats memes as culture, culture as something worth preserving, and preservation as something that requires democratic consensus. The vibe is earnest-ironic — deeply philosophical about internet culture while never taking itself too seriously. Every piece of content should feel like it was made by someone who understands both Ethereum and shitposting.
+
+**Reference Models:** Duolingo (streak + loss aversion), Tinder (swipe dopamine loop), Reddit r/place (territorial canvas, except FOID never resets), Snapchat streaks (social currency), Strava (proof of activity as social flex).
 
 **Key Brand Themes:** Permanence, ritual, democratic curation, internet culture, on-chain identity, community consensus, digital spirituality
 
@@ -241,6 +264,17 @@ FOID sits at the intersection of meme culture and on-chain permanence. It treats
 - "the grid remembers." — loreboard permanence
 - "what gets canonized matters." — curation philosophy
 
+**FOID OS — Platform Play:**
+- White-label toolkit for community culture preservation
+- Any DAO, Discord, NFT project, Telegram group, or brand can deploy their own pray→vote→place stack
+- Community infrastructure as a service
+
+**Monetization (not for posting, just for brand awareness):**
+- Loreboard placement: 0.001 ETH
+- Swipe submission: 0.001 ETH
+- MiFOID mint: 0.01-0.02 ETH
+- No ads, no tokens, just participation
+
 **Community slang the brand uses:**
 - "canonized" — when a placement is accepted and finalized on-chain
 - "epoch" — a time period on the loreboard
@@ -312,6 +346,7 @@ FOID sits at the intersection of meme culture and on-chain permanence. It treats
 
 - **Primary:** Crypto-native internet culture enthusiasts — people who understand both on-chain mechanics and meme culture deeply. Ages 18-35, terminally online, active in Discord/X communities.
 - **Secondary:** Digital artists and meme creators looking for permanent on-chain exhibition. People who care about cultural curation and preservation.
+- **Tertiary:** DAO operators and community builders looking for culture infrastructure. Builders who want open-source cultural primitives.
 - **Psychographics:** Values authenticity over hype, prefers building to shilling, finds meaning in internet culture, appreciates dry humor and philosophical depth, skeptical of corporate Web3 marketing.
 - **Tone match:** Talk to them like they already get it. No explaining basics. No selling. Just vibes and substance.
 
