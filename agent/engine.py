@@ -337,8 +337,9 @@ async def _run_loop(
                             tool_result_str = await execute_tool(tool_name, tool_input, tracker)
                             if len(tool_result_str) > 15000:
                                 tool_result_str = tool_result_str[:15000] + "\n\n[... truncated ...]"
-                        except Exception as e:
-                            tool_result_str = json.dumps({"error": str(e)})
+                        except Exception:
+                            logger.exception("Tool %s failed during critique gate", tool_name)
+                            tool_result_str = json.dumps({"error": "tool execution failed — see logs"})
                         critique_tool_results.append({
                             "type": "tool_result",
                             "tool_use_id": tool_block.id,
@@ -397,9 +398,9 @@ async def _run_loop(
                 tool_result = await execute_tool(tool_name, tool_input, tracker)
                 if len(tool_result) > 15000:
                     tool_result = tool_result[:15000] + "\n\n[... truncated to 15000 chars ...]"
-            except Exception as e:
-                logger.error("Tool %s failed: %s", tool_name, e)
-                tool_result = json.dumps({"error": str(e)})
+            except Exception:
+                logger.exception("Tool %s failed", tool_name)
+                tool_result = json.dumps({"error": "tool execution failed — see logs"})
 
             log_entry = {
                 "name": tool_name,
@@ -553,6 +554,7 @@ async def run_agent(
     on_reasoning: OnReasoning | None = None,
     revision_context: str | None = None,
     excluded_tools: set[str] | None = None,
+    self_score: bool = False,
 ) -> AgentResult:
     """
     Run the goal-oriented agent loop for a content request.
@@ -562,6 +564,8 @@ async def run_agent(
         on_tool_call: Optional async callback(tool_name, brief_description) for progress updates.
         on_reasoning: Optional async callback(text) for live reasoning traces.
         revision_context: Optional context about a previous draft + feedback for revisions.
+        self_score: When True and a draft is produced, run preference_engine.score_draft()
+                    and attach the score to the result's draft dict under "_preference_score".
 
     Returns:
         AgentResult with the final draft and metadata.
@@ -653,6 +657,21 @@ async def run_agent(
         )
     except Exception as e:
         logger.debug("Session record_run failed: %s", e)
+
+    # Optional self-scoring via preference engine
+    if self_score and result.draft:
+        try:
+            from agent.preference_engine import score_draft
+            pref_score = await score_draft(result.draft, request)
+            result.draft["_preference_score"] = {
+                "score": pref_score.score,
+                "reasoning": pref_score.reasoning,
+                "flags": pref_score.flags,
+                "should_reject": pref_score.should_reject,
+            }
+            logger.info("Self-score: %.1f (%s)", pref_score.score, pref_score.reasoning[:60])
+        except Exception as e:
+            logger.debug("Self-scoring failed: %s", e)
 
     return result
 

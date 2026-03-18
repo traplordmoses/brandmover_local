@@ -6,21 +6,19 @@ Tracks asset type, content type, prompt, model, image URLs, and status
 """
 
 import asyncio
-import copy
 import json
 import logging
 import os
 import threading
 import time
+from datetime import datetime, timezone
 from pathlib import Path
+
+from agent.state_manager import FileStore
 
 logger = logging.getLogger(__name__)
 
-# In-memory cache for generation_history.json to avoid re-reading on every call
-_cached_history: list[dict] | None = None
-_history_cache_mtime: float = 0.0
-
-# Threading lock for sync read/write functions (protects cache + file I/O)
+# Threading lock for sync read/write functions (protects read-modify-write sequences)
 _sync_lock = threading.Lock()
 
 _project_root = Path(__file__).resolve().parent.parent
@@ -34,39 +32,29 @@ if _OLD_HISTORY.exists() and not _HISTORY_FILE.exists():
     import shutil as _shutil
     _shutil.move(str(_OLD_HISTORY), str(_HISTORY_FILE))
 
+# ---------------------------------------------------------------------------
+# File I/O — delegated to FileStore
+# ---------------------------------------------------------------------------
+
+_store = FileStore(_HISTORY_FILE, default_factory=list)
+
+
+def _get_store() -> FileStore:
+    """Return the active FileStore, respecting any monkey-patching of _HISTORY_FILE."""
+    global _store
+    if _store.path != _HISTORY_FILE:
+        _store = FileStore(_HISTORY_FILE, default_factory=list)
+    return _store
+
 
 def _read_history() -> list[dict]:
-    """Read the history log. Returns empty list if missing or corrupt.
-
-    Uses mtime-based in-memory caching to avoid re-reading on every call.
-    """
-    global _cached_history, _history_cache_mtime
-    if not _HISTORY_FILE.exists():
-        return []
-    try:
-        mtime = os.stat(_HISTORY_FILE).st_mtime
-        if _cached_history is not None and mtime == _history_cache_mtime:
-            return copy.deepcopy(_cached_history)
-        data = json.loads(_HISTORY_FILE.read_text(encoding="utf-8"))
-        _cached_history = data
-        _history_cache_mtime = mtime
-        return copy.deepcopy(data)
-    except (json.JSONDecodeError, OSError) as e:
-        logger.warning("Failed to read generation_history.json: %s", e)
-        return []
+    """Read the history log. Returns empty list if missing or corrupt."""
+    return _get_store().read()
 
 
 def _write_history(entries: list[dict]) -> None:
-    """Write the full history log and update in-memory cache."""
-    global _cached_history, _history_cache_mtime
-    _HISTORY_FILE.parent.mkdir(parents=True, exist_ok=True)
-    tmp_path = _HISTORY_FILE.with_suffix(f".tmp_{os.getpid()}_{threading.get_ident()}")
-    tmp_path.write_text(
-        json.dumps(entries, indent=2, ensure_ascii=False), encoding="utf-8"
-    )
-    os.replace(str(tmp_path), str(_HISTORY_FILE))
-    _cached_history = copy.deepcopy(entries)
-    _history_cache_mtime = os.stat(_HISTORY_FILE).st_mtime
+    """Write the full history log."""
+    _get_store().write(entries)
 
 
 # Estimated cost per prediction by model (USD). Based on Replicate pricing.
@@ -87,6 +75,30 @@ def _estimate_cost(model_id: str, image_count: int = 1) -> float:
 
 _MAX_HISTORY_ENTRIES = 500
 _history_lock = asyncio.Lock()
+
+
+def _maybe_rotate(entries: list[dict]) -> list[dict]:
+    """If entries exceed _MAX_HISTORY_ENTRIES, archive older ones and keep the most recent.
+
+    Archive file goes to state/generation_history_archive_{timestamp}.json.
+    Must be called under _sync_lock.
+    Returns the (possibly trimmed) entries list.
+    """
+    if len(entries) <= _MAX_HISTORY_ENTRIES:
+        return entries
+    archive_count = len(entries) - _MAX_HISTORY_ENTRIES
+    archived = entries[:archive_count]
+    kept = entries[archive_count:]
+    ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+    archive_path = _STATE_DIR / f"generation_history_archive_{ts}.json"
+    archive_path.write_text(
+        json.dumps(archived, indent=2, ensure_ascii=False), encoding="utf-8"
+    )
+    logger.info(
+        "Rotated %d generation history entries to %s (keeping %d)",
+        archive_count, archive_path.name, len(kept),
+    )
+    return kept
 
 
 def log_generation(
@@ -132,9 +144,7 @@ def _log_generation_locked(
     if tags:
         entry["tags"] = tags
     entries.append(entry)
-    # Cap history size to prevent unbounded growth
-    if len(entries) > _MAX_HISTORY_ENTRIES:
-        entries = entries[-_MAX_HISTORY_ENTRIES:]
+    entries = _maybe_rotate(entries)
     _write_history(entries)
     count = len(entries)
     logger.info("Logged generation #%d (%s/%s, status=%s)", count, asset_type, content_type, status)

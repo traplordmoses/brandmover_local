@@ -237,7 +237,7 @@ async def cache_image(url: str) -> str:
         resp.raise_for_status()
         local_path.write_bytes(resp.content)
         logger.info("Cached image: %s → %s", url[:80], local_path.name)
-    except Exception as e:
+    except httpx.HTTPError as e:
         logger.warning("Failed to cache image %s: %s", url[:80], e)
         return url  # Fall back to original URL
     return str(local_path)
@@ -527,8 +527,11 @@ async def generate_image(
         logger.error("Image generation timed out after %.0fs polling", total_waited)
         return None
 
-    except Exception as e:
-        logger.error("Image generation failed: %s", e)
+    except httpx.HTTPError as e:
+        logger.error("Image generation failed (HTTP): %s", e)
+        return None
+    except Exception:
+        logger.exception("Image generation failed with unexpected error")
         return None
 
 
@@ -642,6 +645,9 @@ async def generate_img2img(
         logger.error("img2img timed out after %.0fs polling", total_waited)
         return None
 
-    except Exception as e:
-        logger.error("img2img generation failed: %s", e)
+    except httpx.HTTPError as e:
+        logger.error("img2img generation failed (HTTP): %s", e)
+        return None
+    except Exception:
+        logger.exception("img2img generation failed with unexpected error")
         return None

@@ -154,13 +154,15 @@ class TestErrorRecovery:
         from bot.handlers import handle_message
 
         async def _run():
-            with patch("bot.handlers._authorized", return_value=True), \
-                 patch("bot.handlers.onboarding") as mock_onboard, \
-                 patch("bot.handlers.settings") as mock_settings, \
-                 patch("bot.handlers._route_intent", side_effect=RuntimeError("boom")), \
-                 patch("bot.handlers._rate_limited", return_value=False), \
-                 patch("bot.handlers.state") as mock_state, \
-                 patch("bot.handlers._handle_pipeline_mode") as mock_pipeline:
+            with patch("bot.handlers.generation._can_operate", return_value=True), \
+                 patch("bot.handlers.generation._authorized", return_value=True), \
+                 patch("bot.handlers.generation.onboarding") as mock_onboard, \
+                 patch("bot.handlers.generation.settings") as mock_settings, \
+                 patch("bot.handlers.generation._route_intent", side_effect=RuntimeError("boom")), \
+                 patch("bot.handlers.generation._rate_limited", return_value=False), \
+                 patch("bot.handlers.generation.state") as mock_state, \
+                 patch("bot.handlers.generation.transcript"), \
+                 patch("bot.handlers.generation._handle_pipeline_mode") as mock_pipeline:
                 mock_settings.UNIFIED_BRAIN_ENABLED = False
                 mock_settings.INTENT_ROUTER_ENABLED = True
                 mock_settings.AGENT_MODE = "pipeline"
@@ -289,13 +291,15 @@ class TestKillSwitch:
         from bot.handlers import handle_message
 
         async def _run():
-            with patch("bot.handlers._authorized", return_value=True), \
-                 patch("bot.handlers.onboarding") as mock_onboard, \
-                 patch("bot.handlers.settings") as mock_settings, \
-                 patch("bot.handlers.intent_router") as mock_ir, \
-                 patch("bot.handlers._rate_limited", return_value=False), \
-                 patch("bot.handlers.state") as mock_state, \
-                 patch("bot.handlers._handle_pipeline_mode") as mock_pipeline:
+            with patch("bot.handlers.generation._can_operate", return_value=True), \
+                 patch("bot.handlers.generation._authorized", return_value=True), \
+                 patch("bot.handlers.generation.onboarding") as mock_onboard, \
+                 patch("bot.handlers.generation.settings") as mock_settings, \
+                 patch("bot.handlers.generation.intent_router") as mock_ir, \
+                 patch("bot.handlers.generation._rate_limited", return_value=False), \
+                 patch("bot.handlers.generation.state") as mock_state, \
+                 patch("bot.handlers.generation.transcript"), \
+                 patch("bot.handlers.generation._handle_pipeline_mode") as mock_pipeline:
                 mock_settings.UNIFIED_BRAIN_ENABLED = False
                 mock_settings.INTENT_ROUTER_ENABLED = False
                 mock_settings.AGENT_MODE = "pipeline"

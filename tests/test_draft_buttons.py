@@ -7,6 +7,7 @@ import pytest
 
 from bot.handlers import draft_callback, _CallbackProxy
 
+_DRAFT = "bot.handlers.draft"
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -58,8 +59,8 @@ class TestCallbackProxy:
 class TestDraftCallback:
     def test_approve_button(self):
         async def _run():
-            with patch("bot.handlers._can_operate", return_value=True), \
-                 patch("bot.handlers._do_approve") as mock_approve:
+            with patch(f"{_DRAFT}._can_operate", return_value=True), \
+                 patch(f"{_DRAFT}._do_approve") as mock_approve:
                 mock_approve.return_value = None
                 update = _mock_callback_update("approve")
                 ctx = _mock_context()
@@ -73,7 +74,7 @@ class TestDraftCallback:
 
     def test_reject_button_asks_for_feedback(self):
         async def _run():
-            with patch("bot.handlers._can_operate", return_value=True):
+            with patch(f"{_DRAFT}._can_operate", return_value=True):
                 update = _mock_callback_update("reject")
                 await draft_callback(update, _mock_context())
                 update.callback_query.message.reply_text.assert_called_once()
@@ -84,7 +85,7 @@ class TestDraftCallback:
 
     def test_edit_button_asks_for_feedback(self):
         async def _run():
-            with patch("bot.handlers._can_operate", return_value=True):
+            with patch(f"{_DRAFT}._can_operate", return_value=True):
                 update = _mock_callback_update("edit")
                 await draft_callback(update, _mock_context())
                 update.callback_query.message.reply_text.assert_called_once()
@@ -95,10 +96,10 @@ class TestDraftCallback:
 
     def test_reroll_button_with_pending(self):
         async def _run():
-            with patch("bot.handlers._can_operate", return_value=True), \
-                 patch("bot.handlers.state") as mock_state, \
-                 patch("bot.handlers._handle_pipeline_mode") as mock_pipeline, \
-                 patch("bot.handlers.settings") as mock_settings:
+            with patch(f"{_DRAFT}._can_operate", return_value=True), \
+                 patch(f"{_DRAFT}.state") as mock_state, \
+                 patch("bot.handlers.generation._handle_pipeline_mode") as mock_pipeline, \
+                 patch(f"{_DRAFT}.settings") as mock_settings:
                 mock_state.get_pending.return_value = {
                     "original_request": "test topic",
                     "caption": "Old",
@@ -118,8 +119,8 @@ class TestDraftCallback:
 
     def test_reroll_button_without_pending(self):
         async def _run():
-            with patch("bot.handlers._can_operate", return_value=True), \
-                 patch("bot.handlers.state") as mock_state:
+            with patch(f"{_DRAFT}._can_operate", return_value=True), \
+                 patch(f"{_DRAFT}.state") as mock_state:
                 mock_state.get_pending.return_value = None
 
                 update = _mock_callback_update("reroll")
@@ -130,8 +131,8 @@ class TestDraftCallback:
 
     def test_unauthorized_user_ignored(self):
         async def _run():
-            with patch("bot.handlers._can_operate", return_value=False), \
-                 patch("bot.handlers._do_approve") as mock_approve:
+            with patch(f"{_DRAFT}._can_operate", return_value=False), \
+                 patch(f"{_DRAFT}._do_approve") as mock_approve:
                 update = _mock_callback_update("approve", user_id=999)
                 await draft_callback(update, _mock_context())
                 mock_approve.assert_not_called()

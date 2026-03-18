@@ -17,6 +17,7 @@ conversation continuity, self-critique, or the heartbeat system.
 import json
 import logging
 import time
+import warnings
 from dataclasses import dataclass, field
 
 import anthropic
@@ -26,6 +27,11 @@ import httpx
 from config import settings
 
 logger = logging.getLogger(__name__)
+
+_DEPRECATION_MSG = (
+    "Pipeline mode (brain.py) is deprecated. "
+    "Set AGENT_MODE=agent to use the active architecture."
+)
 
 # ---------------------------------------------------------------------------
 # Single-shot prompts (kept as fallback)
@@ -490,6 +496,9 @@ async def pipeline_generate(
     """
     Run the multi-step generation pipeline.
 
+    .. deprecated::
+        Pipeline mode is deprecated. Set AGENT_MODE=agent.
+
     Args:
         request: User's content request.
         brand_context: Full brand context from guidelines.get_brand_context().
@@ -499,6 +508,7 @@ async def pipeline_generate(
     Returns:
         PipelineResult with the final draft and intermediate outputs.
     """
+    warnings.warn(_DEPRECATION_MSG, DeprecationWarning, stacklevel=2)
     result = PipelineResult()
     mode = settings.PIPELINE_MODE.lower()
     total_steps = 3 if mode == "fast" else 4
@@ -635,6 +645,9 @@ async def generate_draft(request: str, brand_context: str) -> dict:
     """
     Generate a social media draft from a natural language request.
 
+    .. deprecated::
+        Pipeline mode is deprecated. Set AGENT_MODE=agent.
+
     Args:
         request: The user's content request (e.g. "write a post about our new feature").
         brand_context: Full brand context string from guidelines.get_brand_context().
@@ -646,6 +659,7 @@ async def generate_draft(request: str, brand_context: str) -> dict:
         ValueError: If LLM response cannot be parsed.
         Exception: On LLM API errors.
     """
+    warnings.warn(_DEPRECATION_MSG, DeprecationWarning, stacklevel=2)
     from agent import compositor_config
     try:
         _cfg = compositor_config.get_config()
@@ -671,6 +685,9 @@ async def revise_draft(
     """
     Revise a rejected draft based on user feedback.
 
+    .. deprecated::
+        Pipeline mode is deprecated. Set AGENT_MODE=agent.
+
     Args:
         original_draft: The previously generated draft dict.
         feedback: User's rejection reason / revision instructions.
@@ -679,6 +696,7 @@ async def revise_draft(
     Returns:
         Dict with keys: caption, hashtags, alt_text, image_prompt.
     """
+    warnings.warn(_DEPRECATION_MSG, DeprecationWarning, stacklevel=2)
     from agent import compositor_config
     try:
         _cfg = compositor_config.get_config()

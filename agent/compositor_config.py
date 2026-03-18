@@ -5,6 +5,7 @@ Provides typed color/font/identity lookups with fallbacks so the compositor
 works even if the guidelines file is missing or malformed.
 """
 
+import hashlib
 import logging
 import os
 import re
@@ -497,7 +498,7 @@ def get_config(path: Path | None = None) -> BrandConfig:
         brand_phrases=phrases,
         content_themes=themes,
         layout_mappings=layout_map,
-        raw_hash="",
+        raw_hash=hashlib.md5(raw.encode()).hexdigest(),
         parsed_at=time.time(),
         source_path=str(src),
         **layout,

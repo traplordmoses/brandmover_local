@@ -4,7 +4,6 @@ Separate from Telegram's state.json to avoid race conditions.
 Tracks daily post counts, posted event IDs, prompt rotation, and recent captions.
 """
 
-import copy
 import json
 import logging
 import os
@@ -14,14 +13,11 @@ import time
 from pathlib import Path
 
 from config import settings
+from agent.state_manager import FileStore
 
 logger = logging.getLogger(__name__)
 
 _STATE_FILE = Path(settings.AUTO_POST_STATE_FILE)
-
-# In-memory cache to avoid re-reading/re-parsing JSON on every call
-_cached_state: dict | None = None
-_cache_mtime: float = 0.0
 
 # Migrate from old location if needed
 _OLD_AUTO_STATE = Path(__file__).resolve().parent.parent / "auto_post_state.json"
@@ -31,46 +27,32 @@ if _OLD_AUTO_STATE.exists() and not _STATE_FILE.exists():
     _shutil.move(str(_OLD_AUTO_STATE), str(_STATE_FILE))
 
 # ---------------------------------------------------------------------------
-# File I/O
+# File I/O — delegated to FileStore
 # ---------------------------------------------------------------------------
+
+_store = FileStore(_STATE_FILE, default_factory=lambda: _default_state())
+
+
+def _get_store() -> FileStore:
+    """Return the active FileStore, respecting any monkey-patching of _STATE_FILE."""
+    global _store
+    if _store.path != _STATE_FILE:
+        _store = FileStore(_STATE_FILE, default_factory=lambda: _default_state())
+    return _store
 
 
 def _read_state() -> dict:
-    """Read auto_post_state.json, return empty structure if missing or corrupt.
-
-    Uses mtime-based in-memory caching to avoid re-reading and re-parsing
-    JSON on every call.
-    """
-    global _cached_state, _cache_mtime
-    if not _STATE_FILE.exists():
-        return _default_state()
-    try:
-        mtime = os.stat(_STATE_FILE).st_mtime
-        if _cached_state is not None and mtime == _cache_mtime:
-            return _cached_state
-        data = json.loads(_STATE_FILE.read_text(encoding="utf-8"))
-        # Ensure all required keys exist
-        for key, default in _default_state().items():
-            data.setdefault(key, default)
-        _cached_state = data
-        _cache_mtime = mtime
-        return copy.deepcopy(data)
-    except (json.JSONDecodeError, OSError) as e:
-        logger.warning("Failed to read auto_post_state.json: %s", e)
-        return _default_state()
+    """Read auto_post_state.json, return empty structure if missing or corrupt."""
+    data = _get_store().read()
+    # Ensure all required keys exist
+    for key, default in _default_state().items():
+        data.setdefault(key, default)
+    return data
 
 
 def _write_state(data: dict) -> None:
-    """Write state dict to auto_post_state.json and update in-memory cache."""
-    global _cached_state, _cache_mtime
-    _STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
-    tmp_path = _STATE_FILE.with_suffix(f".tmp_{os.getpid()}_{threading.get_ident()}")
-    tmp_path.write_text(
-        json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8"
-    )
-    os.replace(str(tmp_path), str(_STATE_FILE))
-    _cached_state = copy.deepcopy(data)
-    _cache_mtime = os.stat(_STATE_FILE).st_mtime
+    """Write state dict to auto_post_state.json."""
+    _get_store().write(data)
 
 
 def _default_state() -> dict:

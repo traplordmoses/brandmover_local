@@ -704,7 +704,9 @@ def _prepare_logo_ref(logo_path: Path) -> tuple[Path, str | None]:
         if img.mode in ("RGBA", "LA", "PA"):
             bg = _PILImage.new("RGB", img.size, (255, 255, 255))
             bg.paste(img, mask=img.split()[-1])  # use alpha as mask
-            tmp_name = str(Path(tempfile.gettempdir()) / f"logo_contrast_{logo_path.name}")
+            tmp_fd = tempfile.NamedTemporaryFile(suffix=".png", prefix="logo_contrast_", delete=False)
+            tmp_name = tmp_fd.name
+            tmp_fd.close()
             bg.save(tmp_name, "PNG")
             logger.info("brand_3d logo: flattened %s onto white background", logo_path.name)
             return Path(tmp_name), tmp_name
@@ -715,7 +717,9 @@ def _prepare_logo_ref(logo_path: Path) -> tuple[Path, str | None]:
         mean_val = _np.array(rgb).mean()
         if mean_val < 30:
             inverted = _PILImageOps.invert(rgb)
-            tmp_name = str(Path(tempfile.gettempdir()) / f"logo_contrast_{logo_path.name}")
+            tmp_fd = tempfile.NamedTemporaryFile(suffix=".png", prefix="logo_contrast_", delete=False)
+            tmp_name = tmp_fd.name
+            tmp_fd.close()
             inverted.save(tmp_name, "PNG")
             logger.info("brand_3d logo: inverted %s (mean=%.1f → too dark)", logo_path.name, mean_val)
             return Path(tmp_name), tmp_name
@@ -785,7 +789,9 @@ def _stitch_grid(image_paths: list[str], max_images: int = 3, label: str = "ref"
         grid.paste(img, (x, 0))
         x += img.width
 
-    out_path = str(Path(tempfile.gettempdir()) / f"{label}_stitched_{int(_time.time())}.jpg")
+    tmp_fd = tempfile.NamedTemporaryFile(suffix=".jpg", prefix=f"{label}_stitched_", delete=False)
+    out_path = tmp_fd.name
+    tmp_fd.close()
     grid.save(out_path, "JPEG", quality=95)
     logger.info("Stitched %d %s refs into grid: %s (%dx%d)", len(resized), label, out_path, total_w, min_h)
     return out_path

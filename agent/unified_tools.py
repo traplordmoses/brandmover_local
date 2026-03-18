@@ -62,6 +62,14 @@ logger = logging.getLogger(__name__)
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 _OUTPUTS_DIR = _PROJECT_ROOT / "state" / "outputs"
 
+# Whitelist of environment variables safe to pass to sandboxed subprocesses.
+# Everything else (API keys, tokens, secrets, credentials) is excluded.
+_SAFE_ENV_KEYS = {
+    "PATH", "HOME", "TMPDIR", "LANG", "LC_ALL", "LC_CTYPE",
+    "PYTHONPATH", "PYTHONHASHSEED", "TERM", "USER", "SHELL",
+    "TZ", "VIRTUAL_ENV",
+}
+
 
 # New tool definitions
 
@@ -1385,7 +1393,7 @@ _ALLOWED_MODULES = frozenset({
 _BLOCKED_NAMES = frozenset({
     'eval', 'exec', 'compile', 'execfile', 'input', '__import__',
     'getattr', 'setattr', 'delattr', 'globals', 'locals', 'vars',
-    'breakpoint', 'exit', 'quit', 'open',
+    'breakpoint', 'exit', 'quit', 'open', 'importlib',
 })
 
 _BLOCKED_ATTRS = frozenset({
@@ -1394,6 +1402,7 @@ _BLOCKED_ATTRS = frozenset({
     '__dict__', '__bases__', '__init_subclass__', '__set_name__',
     '__reduce__', '__reduce_ex__', '__getstate__', '__setstate__',
     'environ', 'getenv', 'popen', 'system',
+    'import_module',
 })
 
 
@@ -1434,6 +1443,18 @@ def _validate_code_ast(code: str) -> str | None:
         if isinstance(node, ast.Attribute):
             if node.attr in _BLOCKED_ATTRS:
                 return f"Blocked attribute: .{node.attr}"
+            # Walk attribute chains to catch e.g. importlib.import_module()
+            chain = [node.attr]
+            inner = node.value
+            while isinstance(inner, ast.Attribute):
+                chain.append(inner.attr)
+                inner = inner.value
+            if isinstance(inner, ast.Name):
+                chain.append(inner.id)
+            chain.reverse()
+            full_path = '.'.join(chain)
+            if any(part in _BLOCKED_NAMES for part in chain):
+                return f"Blocked attribute chain: {full_path}"
 
     return None
 
@@ -1476,8 +1497,7 @@ async def _handle_execute_code(
             timeout=60,
             cwd=str(_OUTPUTS_DIR),
             env={
-                **{k: v for k, v in os.environ.items()
-                   if not any(s in k.upper() for s in ("KEY", "TOKEN", "SECRET", "PASSWORD", "CREDENTIAL"))},
+                **{k: v for k, v in os.environ.items() if k in _SAFE_ENV_KEYS},
                 "PYTHONDONTWRITEBYTECODE": "1",
             },
         )

@@ -38,7 +38,7 @@ from pathlib import Path
 _project_root = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_project_root))
 
-from agent import auto_state, engine, publisher, schedule_queue, scheduler, state
+from agent import auto_state, content_planner, context_feed, engine, preference_engine, publisher, schedule_queue, scheduler, state
 from config import settings
 
 logger = logging.getLogger(__name__)
@@ -46,6 +46,9 @@ logger = logging.getLogger(__name__)
 # Max retries for agent generation failures
 _MAX_RETRIES = 2
 _RETRY_DELAY_SECONDS = 300  # 5 minutes
+
+# Gate daily preference cluster refresh (ISO date string)
+_last_cluster_refresh_date: str | None = None
 
 # Daemon / in-process scheduler check interval
 SCHEDULER_INTERVAL_SECONDS = 300  # 5 minutes
@@ -99,6 +102,15 @@ async def process_slot(
     slot_type = slot_config.get("type", "unknown")
     logger.info("Processing slot: %s (type=%s, dry_run=%s)", slot_name, slot_type, dry_run)
 
+    # --- Aggregate real-time context (on-chain events, X mentions) ---
+    context_snapshot = await context_feed.aggregate_context()
+    context_block = context_snapshot.summary
+    if context_snapshot.has_urgent and settings.EVENT_TRIGGER_ENABLED:
+        logger.info(
+            "Urgent context signal detected for slot %s (%d signals)",
+            slot_name, len(context_snapshot.signals),
+        )
+
     # Rate limit check
     min_gap = global_config.get("min_gap_minutes", 120)
     max_posts = global_config.get("max_posts_per_day", 6)
@@ -114,7 +126,13 @@ async def process_slot(
 
     # Build the prompt
     prompt, event_ids = await scheduler.build_prompt_for_slot(slot_name, slot_config)
-    logger.info("Prompt built for %s (%d chars)", slot_name, len(prompt))
+
+    # Inject live context into the prompt if available
+    if context_block:
+        prompt = f"{prompt}\n\n{context_block}"
+
+    logger.info("Prompt built for %s (%d chars, context=%d chars)",
+                slot_name, len(prompt), len(context_block))
 
     # Run the agent (same pipeline as manual Telegram requests)
     result = None
@@ -148,6 +166,39 @@ async def process_slot(
 
     caption = result.draft.get("caption", "")
     image_url = result.image_url
+
+    # --- Preference engine scoring ---
+    try:
+        score_result = await preference_engine.score_draft(result.draft, prompt)
+        logger.info(
+            "Preference score for %s: %.1f (%s)",
+            slot_name, score_result.score, score_result.reasoning[:80],
+        )
+        if score_result.should_reject:
+            logger.warning(
+                "Draft rejected by preference engine (score=%.1f, threshold=%.1f): %s",
+                score_result.score, settings.DRAFT_SCORE_THRESHOLD, score_result.reasoning,
+            )
+            # Retry once with the score reasoning appended to the prompt
+            retry_prompt = (
+                f"{prompt}\n\n"
+                f"[QUALITY NOTE: A previous draft scored {score_result.score}/10. "
+                f"Issues: {score_result.reasoning} "
+                f"Flags: {', '.join(score_result.flags) if score_result.flags else 'none'}. "
+                f"Please address these issues in this attempt.]"
+            )
+            retry_result = await engine.run_agent(request=retry_prompt)
+            if retry_result and retry_result.draft:
+                retry_score = await preference_engine.score_draft(retry_result.draft, prompt)
+                logger.info(
+                    "Retry preference score for %s: %.1f", slot_name, retry_score.score,
+                )
+                # Use the retry result regardless (we only retry once)
+                result = retry_result
+                caption = result.draft.get("caption", "")
+                image_url = result.image_url
+    except Exception as e:
+        logger.warning("Preference scoring failed for %s: %s", slot_name, e)
 
     # Duplicate check
     if auto_state.is_duplicate_caption(caption):
@@ -264,17 +315,25 @@ async def process_scheduled_item(
             return True
 
         try:
-            tweet_url = await publisher.post_to_x(caption, hashtags, publish_image)
+            publish_results = await publisher.publish_to_all(
+                draft=pre_draft,
+                image_url=publish_image,
+                composed_path=pre_draft.get("composed_path"),
+            )
+            tweet_url = publish_results.get("x")
             schedule_queue.mark_done(item_id, tweet_url=tweet_url)
             auto_state.record_post(
                 slot_name=slot_name, caption=caption, tweet_url=tweet_url,
             )
+            platform_summary = ", ".join(
+                f"{p}: {u or 'failed'}" for p, u in publish_results.items()
+            )
             await _notify_telegram(
                 f"<b>Scheduled post published</b>\n\n"
                 f"{caption[:200]}\n\n"
-                f"{tweet_url or '(no URL)'}"
+                f"{platform_summary}"
             )
-            logger.info("Pre-approved scheduled post published: %s → %s", item_id, tweet_url)
+            logger.info("Pre-approved scheduled post published: %s -> %s", item_id, publish_results)
             return True
         except Exception as e:
             logger.error("Pre-approved scheduled post failed: %s", e)
@@ -440,45 +499,98 @@ async def run_cron(
     if drafts_made and not dry_run:
         return drafts_made
 
-    # --- 2. Process predefined time slots ---
-    if not slots:
-        logger.debug("No predefined slots in schedule.json")
-    elif force_slot:
-        if force_slot not in slots:
-            logger.error("Unknown slot: %s (available: %s)", force_slot, list(slots.keys()))
-            return drafts_made
-        due_slots = [force_slot]
-        logger.info("Forcing slot: %s", force_slot)
+    # --- 2. Process predefined time slots (or content planner) ---
+    # When CONTENT_PLANNER_ENABLED, use the planner instead of slot-based scheduling.
+    if settings.CONTENT_PLANNER_ENABLED and not force_slot:
+        planned = content_planner.get_next_planned_post()
+        if planned and not auto_state.is_paused():
+            logger.info(
+                "Content planner: next post %s/%s (%s)",
+                planned.date, planned.time_slot, planned.content_type,
+            )
+            # Build a slot_config compatible dict from the planned post
+            planner_slot_name = f"planner:{planned.content_type}_{planned.time_slot}"
+            planner_slot_config = {
+                "type": planned.content_type,
+                "prompt_hint": planned.prompt_hint,
+            }
+            content_planner.mark_post_status(planned.date, planned.time_slot, "generating")
+            success = await process_slot(
+                planner_slot_name, planner_slot_config, global_config,
+                dry_run=dry_run or settings.AUTO_POST_DRY_RUN,
+                bot=bot,
+            )
+            if success:
+                content_planner.mark_post_status(planned.date, planned.time_slot, "posted")
+                drafts_made += 1
+            else:
+                content_planner.mark_post_status(planned.date, planned.time_slot, "skipped")
+        elif not planned:
+            logger.debug("Content planner: no posts due right now")
     else:
-        due_slots = scheduler.get_due_slots(schedule)
-        if due_slots:
-            logger.info("Due slots: %s", due_slots)
+        # Fallback: original slot-based scheduling
+        if not slots:
+            logger.debug("No predefined slots in schedule.json")
+        elif force_slot:
+            if force_slot not in slots:
+                logger.error("Unknown slot: %s (available: %s)", force_slot, list(slots.keys()))
+                return drafts_made
+            due_slots = [force_slot]
+            logger.info("Forcing slot: %s", force_slot)
         else:
-            due_slots = []
+            due_slots = scheduler.get_due_slots(schedule)
+            if due_slots:
+                logger.info("Due slots: %s", due_slots)
+            else:
+                due_slots = []
 
-    # Check if auto-posting is enabled and not paused (for predefined slots)
-    if not settings.AUTO_POST_ENABLED and not dry_run and not force_slot:
-        logger.debug("Auto-posting disabled — skipping predefined slots")
-        return drafts_made
+        # Check if auto-posting is enabled and not paused (for predefined slots)
+        if not settings.AUTO_POST_ENABLED and not dry_run and not force_slot:
+            logger.debug("Auto-posting disabled — skipping predefined slots")
+            return drafts_made
 
-    if auto_state.is_paused() and not force_slot:
-        logger.debug("Auto-posting paused — skipping predefined slots")
-        return drafts_made
+        if auto_state.is_paused() and not force_slot:
+            logger.debug("Auto-posting paused — skipping predefined slots")
+            return drafts_made
 
-    for slot_name in due_slots:
-        slot_config = slots[slot_name]
-        success = await process_slot(
-            slot_name, slot_config, global_config,
-            dry_run=dry_run or settings.AUTO_POST_DRY_RUN,
-            bot=bot,
-        )
-        if success:
-            drafts_made += 1
-            if not dry_run:
-                break
+        for slot_name in due_slots:
+            slot_config = slots[slot_name]
+            success = await process_slot(
+                slot_name, slot_config, global_config,
+                dry_run=dry_run or settings.AUTO_POST_DRY_RUN,
+                bot=bot,
+            )
+            if success:
+                drafts_made += 1
+                if not dry_run:
+                    break
 
     # --- 3. Periodic housekeeping ---
     schedule_queue.prune_old()
+
+    # --- 3a. Daily content plan update ---
+    if settings.CONTENT_PLANNER_ENABLED:
+        try:
+            from datetime import datetime, timezone as _tz
+            _plan_today = datetime.now(_tz.utc).strftime("%Y-%m-%d")
+            plan = content_planner.load_plan()
+            if plan.week_start != _plan_today:
+                await content_planner.async_update_plan_daily()
+                logger.info("Content plan updated for %s", _plan_today)
+        except Exception as e:
+            logger.debug("Content plan daily update failed: %s", e)
+
+    # --- 3b. Daily preference cluster refresh ---
+    global _last_cluster_refresh_date
+    try:
+        from datetime import datetime, timezone
+        today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        if _last_cluster_refresh_date != today_str:
+            preference_engine.refresh_clusters()
+            _last_cluster_refresh_date = today_str
+            logger.info("Preference clusters refreshed for %s", today_str)
+    except Exception as e:
+        logger.debug("Preference cluster refresh failed: %s", e)
 
     # --- 4. Daily self-review check ---
     try:
@@ -487,14 +599,30 @@ async def run_cron(
     except Exception as e:
         logger.debug("Self-review daily check failed: %s", e)
 
-    # --- 4b. Weekly digest (Sundays) ---
+    # --- 4b. Daily digest ---
     try:
-        from agent.weekly_digest import maybe_trigger_weekly_digest
+        from agent.digest import maybe_trigger_daily_digest
+        daily_sent = await maybe_trigger_daily_digest(bot=bot)
+        if daily_sent:
+            logger.info("Daily digest sent")
+    except Exception as e:
+        logger.debug("Daily digest check failed: %s", e)
+
+    # --- 4c. Weekly digest (Sundays) ---
+    try:
+        from agent.digest import maybe_trigger_weekly_digest
         digest_sent = await maybe_trigger_weekly_digest(bot=bot)
         if digest_sent:
             logger.info("Weekly digest sent")
     except Exception as e:
         logger.debug("Weekly digest check failed: %s", e)
+
+    # --- 4d. Health check ---
+    try:
+        from agent.health_monitor import maybe_run_health_check
+        await maybe_run_health_check(bot=bot)
+    except Exception as e:
+        logger.debug("Health check failed: %s", e)
 
     # --- 5. Topic bank refresh (every TOPIC_BANK_REFRESH_INTERVAL_HOURS) ---
     try:

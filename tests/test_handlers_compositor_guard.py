@@ -8,6 +8,8 @@ import pytest
 
 from agent.compositor_config import BrandConfig
 
+_CORE = "bot.handlers.core"
+
 
 @pytest.fixture
 def cfg_enabled():
@@ -24,7 +26,7 @@ def test_maybe_compose_skips_when_disabled(cfg_disabled):
     from bot.handlers import _maybe_compose
 
     async def _run():
-        with patch("bot.handlers._cc.get_config", return_value=cfg_disabled):
+        with patch(f"{_CORE}._cc.get_config", return_value=cfg_disabled):
             return await _maybe_compose(
                 {"title": "Test", "subtitle": "Sub"}, "https://example.com/img.png", "default"
             )
@@ -41,8 +43,8 @@ def test_maybe_compose_calls_compositor_when_enabled(cfg_enabled):
     mock_composed = io.BytesIO(b"composed_image_data")
 
     async def _run():
-        with patch("bot.handlers._cc.get_config", return_value=cfg_enabled):
-            with patch("bot.handlers.compositor.compose_branded_image", new_callable=AsyncMock, return_value=mock_composed) as mock_compose:
+        with patch(f"{_CORE}._cc.get_config", return_value=cfg_enabled):
+            with patch("agent.compositor.compose_branded_image", new_callable=AsyncMock, return_value=mock_composed) as mock_compose:
                 result = await _maybe_compose(
                     {"title": "Test", "subtitle": "Sub"}, "https://example.com/img.png", "default"
                 )
@@ -59,8 +61,8 @@ def test_maybe_compose_returns_url_on_compositor_failure(cfg_enabled):
     from bot.handlers import _maybe_compose
 
     async def _run():
-        with patch("bot.handlers._cc.get_config", return_value=cfg_enabled):
-            with patch("bot.handlers.compositor.compose_branded_image", new_callable=AsyncMock, return_value=None):
+        with patch(f"{_CORE}._cc.get_config", return_value=cfg_enabled):
+            with patch("agent.compositor.compose_branded_image", new_callable=AsyncMock, return_value=None):
                 return await _maybe_compose(
                     {"title": "Test"}, "https://example.com/img.png", "default"
                 )

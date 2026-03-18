@@ -10,6 +10,7 @@ import pytest
 
 from bot.handlers import _merge_extracted, _process_bulk_upload, _delayed_bulk_process, handle_photo, handle_document
 
+_MEDIA = "bot.handlers.media"
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -105,12 +106,12 @@ class TestBulkUploadBatching:
     def test_no_caption_batches_instead_of_prompting(self):
         """Photos without captions should batch, not immediately prompt."""
         async def _run():
-            with patch("bot.handlers._can_operate", return_value=True), \
-                 patch("bot.handlers.onboarding") as mock_onboard, \
-                 patch("bot.handlers.state"), \
-                 patch("bot.handlers._PILImage") as mock_pil, \
-                 patch("bot.handlers._bulk_upload_tasks", {}), \
-                 patch("bot.handlers.settings") as mock_settings:
+            with patch(f"{_MEDIA}._can_operate", return_value=True), \
+                 patch(f"{_MEDIA}.onboarding") as mock_onboard, \
+                 patch(f"{_MEDIA}.state"), \
+                 patch(f"{_MEDIA}._PILImage") as mock_pil, \
+                 patch(f"{_MEDIA}._bulk_upload_tasks", {}), \
+                 patch(f"{_MEDIA}.settings") as mock_settings:
                 mock_onboard.get_session.return_value = None
                 mock_settings.UNIFIED_BRAIN_ENABLED = False
                 mock_img = MagicMock()
@@ -132,12 +133,12 @@ class TestBulkUploadBatching:
     def test_multiple_photos_accumulate_in_batch(self):
         """Multiple rapid uploads should accumulate in the batch list."""
         async def _run():
-            with patch("bot.handlers._can_operate", return_value=True), \
-                 patch("bot.handlers.onboarding") as mock_onboard, \
-                 patch("bot.handlers.state"), \
-                 patch("bot.handlers._PILImage") as mock_pil, \
-                 patch("bot.handlers._bulk_upload_tasks", {}), \
-                 patch("bot.handlers.settings") as mock_settings:
+            with patch(f"{_MEDIA}._can_operate", return_value=True), \
+                 patch(f"{_MEDIA}.onboarding") as mock_onboard, \
+                 patch(f"{_MEDIA}.state"), \
+                 patch(f"{_MEDIA}._PILImage") as mock_pil, \
+                 patch(f"{_MEDIA}._bulk_upload_tasks", {}), \
+                 patch(f"{_MEDIA}.settings") as mock_settings:
                 mock_onboard.get_session.return_value = None
                 mock_settings.UNIFIED_BRAIN_ENABLED = False
                 mock_img = MagicMock()
@@ -155,13 +156,13 @@ class TestBulkUploadBatching:
     def test_caption_bypasses_batching(self):
         """Photos with captions should NOT go through batching."""
         async def _run():
-            with patch("bot.handlers._can_operate", return_value=True), \
-                 patch("bot.handlers.onboarding") as mock_onboard, \
-                 patch("bot.handlers.state") as mock_state, \
-                 patch("bot.handlers._PILImage") as mock_pil, \
-                 patch("bot.handlers._rate_limited", return_value=False), \
-                 patch("bot.handlers._handle_pipeline_mode") as mock_pipeline, \
-                 patch("bot.handlers.settings") as mock_settings:
+            with patch(f"{_MEDIA}._can_operate", return_value=True), \
+                 patch(f"{_MEDIA}.onboarding") as mock_onboard, \
+                 patch(f"{_MEDIA}.state") as mock_state, \
+                 patch(f"{_MEDIA}._PILImage") as mock_pil, \
+                 patch(f"{_MEDIA}._rate_limited", return_value=False), \
+                 patch("bot.handlers.generation._handle_pipeline_mode") as mock_pipeline, \
+                 patch(f"{_MEDIA}.settings") as mock_settings:
                 mock_onboard.get_session.return_value = None
                 mock_img = MagicMock()
                 mock_pil.open.return_value.convert.return_value = mock_img
@@ -223,7 +224,7 @@ class TestProcessBulkUpload:
             with patch("agent.ingest.extract_brand_from_image", AsyncMock(return_value=mock_extracted)), \
                  patch("agent.ingest.diff_against_guidelines", AsyncMock(return_value="All good")), \
                  patch("shutil.copy2"), \
-                 patch("bot.handlers.Path") as mock_path:
+                 patch(f"{_MEDIA}.Path") as mock_path:
                 mock_path.return_value.mkdir = MagicMock()
                 mock_refs = MagicMock()
                 mock_refs.mkdir = MagicMock()
@@ -285,9 +286,9 @@ class TestSmartPdfHandling:
                 with open(guidelines_path, "w") as f:
                     f.write("# Brand\n")
 
-                with patch("bot.handlers._authorized", return_value=True), \
-                     patch("bot.handlers.onboarding") as mock_onboard, \
-                     patch("bot.handlers.settings") as mock_settings:
+                with patch(f"{_MEDIA}._authorized", return_value=True), \
+                     patch(f"{_MEDIA}.onboarding") as mock_onboard, \
+                     patch(f"{_MEDIA}.settings") as mock_settings:
                     mock_onboard.get_session.return_value = None
                     mock_settings.BRAND_FOLDER = brand_dir
 
@@ -317,8 +318,8 @@ class TestSmartPdfHandling:
     def test_non_pdf_document_rejected(self):
         """Non-PDF documents should get a helpful message."""
         async def _run():
-            with patch("bot.handlers._authorized", return_value=True), \
-                 patch("bot.handlers.onboarding") as mock_onboard:
+            with patch(f"{_MEDIA}._authorized", return_value=True), \
+                 patch(f"{_MEDIA}.onboarding") as mock_onboard:
                 mock_onboard.get_session.return_value = None
 
                 update = MagicMock()

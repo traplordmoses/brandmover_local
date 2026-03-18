@@ -132,6 +132,12 @@ def save_session(session: OnboardingSession) -> None:
     _save_sessions(sessions)
 
 
+async def async_save_session(session: "OnboardingSession") -> None:
+    """Async wrapper for save_session — runs file I/O off the event loop."""
+    import asyncio
+    await asyncio.to_thread(save_session, session)
+
+
 def delete_session(user_id: int) -> None:
     """Remove an onboarding session."""
     sessions = _load_sessions()

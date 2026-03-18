@@ -26,23 +26,20 @@ no fine-tuning needed. It's a closed-loop system that improves through prompt co
 """
 
 import asyncio
-import copy
 import json
 import logging
 import os
 import threading
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 
 import anthropic
 
 from config import settings
+from agent.state_manager import FileStore
 
 logger = logging.getLogger(__name__)
-
-# In-memory cache for feedback.json to avoid re-reading on every call
-_cached_feedback: list[dict] | None = None
-_feedback_cache_mtime: float = 0.0
 
 # Threading lock for sync read-modify-write functions
 _feedback_lock = threading.Lock()
@@ -52,6 +49,7 @@ _project_root = Path(__file__).resolve().parent.parent
 from agent.paths import STATE_DIR as _STATE_DIR
 _FEEDBACK_FILE = _STATE_DIR / "feedback.json"        # Append-only feedback log
 _PREFERENCES_FILE = _STATE_DIR / "learned_preferences.md"  # Claude-generated summary
+_MAX_FEEDBACK_ENTRIES = 500
 
 # ── Migrate from old locations (pre-refactor) ──
 # Early versions stored these files in the project root. This block
@@ -65,41 +63,45 @@ for _old, _new in [
         import shutil as _shutil
         _shutil.move(str(_old), str(_new))
 
+# ---------------------------------------------------------------------------
+# File I/O — delegated to FileStore
+# ---------------------------------------------------------------------------
+
+_store = FileStore(_FEEDBACK_FILE, default_factory=list)
+
 
 def _read_feedback() -> list[dict]:
-    """Read the feedback log from disk. Returns empty list if missing or corrupt.
-
-    Uses mtime-based in-memory caching to avoid re-reading on every call.
-    Defensive: catches JSON parse errors and file I/O errors rather than crashing.
-    The bot should keep working even if the feedback file is corrupted.
-    """
-    global _cached_feedback, _feedback_cache_mtime
-    if not _FEEDBACK_FILE.exists():
-        return []
-    try:
-        mtime = os.stat(_FEEDBACK_FILE).st_mtime
-        if _cached_feedback is not None and mtime == _feedback_cache_mtime:
-            return copy.deepcopy(_cached_feedback)
-        data = json.loads(_FEEDBACK_FILE.read_text(encoding="utf-8"))
-        _cached_feedback = data
-        _feedback_cache_mtime = mtime
-        return copy.deepcopy(data)
-    except (json.JSONDecodeError, OSError) as e:
-        logger.warning("Failed to read feedback.json: %s", e)
-        return []
+    """Read the feedback log from disk. Returns empty list if missing or corrupt."""
+    return _store.read()
 
 
 def _write_feedback(entries: list[dict]) -> None:
-    """Write the full feedback log to disk and update in-memory cache."""
-    global _cached_feedback, _feedback_cache_mtime
-    _FEEDBACK_FILE.parent.mkdir(parents=True, exist_ok=True)
-    tmp_path = _FEEDBACK_FILE.with_suffix(f".tmp_{os.getpid()}_{threading.get_ident()}")
-    tmp_path.write_text(
-        json.dumps(entries, indent=2, ensure_ascii=False), encoding="utf-8"
+    """Write the full feedback log to disk."""
+    _store.write(entries)
+
+
+def _maybe_rotate(entries: list[dict]) -> list[dict]:
+    """If entries exceed _MAX_FEEDBACK_ENTRIES, archive older ones and keep the most recent.
+
+    Archive file goes to state/feedback_archive_{timestamp}.json.
+    Must be called under _feedback_lock.
+    Returns the (possibly trimmed) entries list.
+    """
+    if len(entries) <= _MAX_FEEDBACK_ENTRIES:
+        return entries
+    archive_count = len(entries) - _MAX_FEEDBACK_ENTRIES
+    archived = entries[:archive_count]
+    kept = entries[archive_count:]
+    ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+    archive_path = _STATE_DIR / f"feedback_archive_{ts}.json"
+    archive_path.write_text(
+        json.dumps(archived, indent=2, ensure_ascii=False), encoding="utf-8"
     )
-    os.replace(str(tmp_path), str(_FEEDBACK_FILE))
-    _cached_feedback = copy.deepcopy(entries)
-    _feedback_cache_mtime = os.stat(_FEEDBACK_FILE).st_mtime
+    logger.info(
+        "Rotated %d feedback entries to %s (keeping %d)",
+        archive_count, archive_path.name, len(kept),
+    )
+    return kept
 
 
 def log_feedback(
@@ -134,6 +136,7 @@ def log_feedback(
         if tags:
             entry["tags"] = tags
         entries.append(entry)
+        entries = _maybe_rotate(entries)
         _write_feedback(entries)
         count = len(entries)
         logger.info("Logged feedback #%d (accepted=%s)", count, accepted)

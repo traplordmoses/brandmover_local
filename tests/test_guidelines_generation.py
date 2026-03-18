@@ -508,8 +508,8 @@ class TestRegenGuidelines:
         async def _run():
             import tempfile
             with tempfile.TemporaryDirectory() as tmpdir:
-                with patch("bot.handlers._authorized", return_value=True), \
-                     patch("bot.handlers.settings") as mock_settings:
+                with patch("bot.handlers.admin._authorized", return_value=True), \
+                     patch("bot.handlers.admin.settings") as mock_settings:
                     mock_settings.BRAND_FOLDER = tmpdir
 
                     update = _mock_update()
@@ -562,8 +562,8 @@ class TestRegenGuidelines:
 
                 mock_cfg = MagicMock(brand_name="TestBrand", product_description="Test")
 
-                with patch("bot.handlers._authorized", return_value=True), \
-                     patch("bot.handlers.settings") as mock_settings, \
+                with patch("bot.handlers.admin._authorized", return_value=True), \
+                     patch("bot.handlers.admin.settings") as mock_settings, \
                      patch("agent.asset_audit.load_inventory", return_value=inventory), \
                      patch("agent.compositor_config.get_config", return_value=mock_cfg), \
                      patch("agent.compositor_config.invalidate_cache") as mock_invalidate, \
@@ -618,8 +618,8 @@ class TestRegenGuidelines:
 
                 mock_cfg = MagicMock(brand_name="TestBrand", product_description="Test")
 
-                with patch("bot.handlers._authorized", return_value=True), \
-                     patch("bot.handlers.settings") as mock_settings, \
+                with patch("bot.handlers.admin._authorized", return_value=True), \
+                     patch("bot.handlers.admin.settings") as mock_settings, \
                      patch("agent.asset_audit.audit_batch", AsyncMock(return_value=inventory)) as mock_audit, \
                      patch("agent.asset_audit.save_inventory") as mock_save_inv, \
                      patch("agent.compositor_config.get_config", return_value=mock_cfg), \

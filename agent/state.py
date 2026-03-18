@@ -14,6 +14,7 @@ import time
 from pathlib import Path
 
 from config import settings
+from agent.state_manager import FileStore
 
 logger = logging.getLogger(__name__)
 
@@ -42,16 +43,26 @@ def _user_state_file(user_id: int | None = None) -> Path:
 
 
 # Per-user in-memory cache to reduce repeated file I/O
-_state_caches: dict[int, dict] = {}
+# Each entry stores (data_dict, last_access_timestamp) for LRU eviction.
+_STATE_CACHE_MAX = 50
+_state_caches: dict[int, tuple[dict, float]] = {}
 # asyncio.Lock for safe concurrent access from handlers + auto-poster
 _state_lock = asyncio.Lock()
 # threading.Lock for sync functions called via asyncio.to_thread or directly
-_sync_lock = threading.Lock()
+_sync_lock = threading.RLock()
 
 
 def invalidate_state_cache() -> None:
     """Clear all in-memory state caches. Called by tests and after file changes."""
-    _state_caches.clear()
+    with _sync_lock:
+        _state_caches.clear()
+
+
+def _evict_state_cache() -> None:
+    """Evict the least recently accessed entry if cache exceeds _STATE_CACHE_MAX."""
+    while len(_state_caches) > _STATE_CACHE_MAX:
+        oldest_uid = min(_state_caches, key=lambda uid: _state_caches[uid][1])
+        del _state_caches[oldest_uid]
 
 
 def _resolve_uid(user_id: int | None) -> int:
@@ -64,16 +75,24 @@ def _read_state(user_id: int | None = None) -> dict:
 
     Uses a per-user in-memory cache so multiple reads within the same request
     (has_pending → get_pending → clear_pending) don't re-parse the file.
+
+    All _state_caches access is protected by _sync_lock to prevent race
+    conditions when concurrent threads read/write the cache simultaneously.
     """
     uid = _resolve_uid(user_id)
-    if uid in _state_caches:
-        return copy.deepcopy(_state_caches[uid])
+    with _sync_lock:
+        if uid in _state_caches:
+            cached_data, _ = _state_caches[uid]
+            _state_caches[uid] = (cached_data, time.monotonic())
+            return copy.deepcopy(cached_data)
     state_file = _user_state_file(user_id)
     if not state_file.exists():
         return {}
     try:
         data = json.loads(state_file.read_text(encoding="utf-8"))
-        _state_caches[uid] = data
+        with _sync_lock:
+            _state_caches[uid] = (data, time.monotonic())
+            _evict_state_cache()
         return copy.deepcopy(data)
     except (json.JSONDecodeError, OSError) as e:
         logger.warning("Failed to read %s: %s", state_file.name, e)
@@ -83,7 +102,8 @@ def _read_state(user_id: int | None = None) -> dict:
 def _write_state(data: dict, user_id: int | None = None) -> None:
     """Write state dict to user's state file and update in-memory cache."""
     uid = _resolve_uid(user_id)
-    _state_caches[uid] = copy.deepcopy(data)
+    _state_caches[uid] = (copy.deepcopy(data), time.monotonic())
+    _evict_state_cache()
     state_file = _user_state_file(user_id)
     state_file.parent.mkdir(parents=True, exist_ok=True)
     tmp_path = state_file.with_suffix(f".tmp_{os.getpid()}_{threading.get_ident()}")
@@ -341,44 +361,26 @@ def get_3d_master_prompt() -> str | None:
 _STYLES_FILE = Path(settings.BRAND_FOLDER) / "styles.json"
 _STYLES_DIR = Path(settings.BRAND_FOLDER) / "references" / "styles"
 
-# In-memory cache for styles.json to avoid re-reading on every call
-_cached_styles: dict | None = None
-_styles_cache_mtime: float = 0.0
+# ---------------------------------------------------------------------------
+# Styles I/O — delegated to FileStore
+# ---------------------------------------------------------------------------
+
+_styles_store = FileStore(
+    _STYLES_FILE, default_factory=lambda: {"profiles": {}, "active": {}}
+)
 
 
 def _read_styles() -> dict:
-    """Read styles.json, return empty structure if missing or corrupt.
-
-    Uses mtime-based in-memory caching.
-    """
-    global _cached_styles, _styles_cache_mtime
-    if not _STYLES_FILE.exists():
-        return {"profiles": {}, "active": {}}
-    try:
-        mtime = _STYLES_FILE.stat().st_mtime
-        if _cached_styles is not None and mtime == _styles_cache_mtime:
-            return copy.deepcopy(_cached_styles)
-        data = json.loads(_STYLES_FILE.read_text(encoding="utf-8"))
-        data.setdefault("profiles", {})
-        data.setdefault("active", {})
-        _cached_styles = data
-        _styles_cache_mtime = mtime
-        return data
-    except (json.JSONDecodeError, OSError) as e:
-        logger.warning("Failed to read styles.json: %s", e)
-        return {"profiles": {}, "active": {}}
+    """Read styles.json, return empty structure if missing or corrupt."""
+    data = _styles_store.read()
+    data.setdefault("profiles", {})
+    data.setdefault("active", {})
+    return data
 
 
 def _write_styles(data: dict) -> None:
-    """Write styles dict to styles.json and update in-memory cache."""
-    global _cached_styles, _styles_cache_mtime
-    tmp_path = _STYLES_FILE.with_suffix(f".tmp_{os.getpid()}_{threading.get_ident()}")
-    tmp_path.write_text(
-        json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8"
-    )
-    os.replace(str(tmp_path), str(_STYLES_FILE))
-    _cached_styles = copy.deepcopy(data)
-    _styles_cache_mtime = _STYLES_FILE.stat().st_mtime
+    """Write styles dict to styles.json."""
+    _styles_store.write(data)
 
 
 def get_style_profiles() -> dict:

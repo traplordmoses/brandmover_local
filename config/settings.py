@@ -90,7 +90,7 @@ REFERENCES_FOLDER: str = os.getenv("REFERENCES_FOLDER", str(Path(BRAND_FOLDER) /
 # but higher cost. 15 is generous for complex multi-tool workflows.
 # SONNET_MODEL: The main model used for all brain calls. Sonnet for speed+cost.
 # HAIKU_MODEL: Used for lightweight tasks (intent classification, etc.)
-AGENT_MODE: str = os.getenv("AGENT_MODE", "pipeline")
+AGENT_MODE: str = os.getenv("AGENT_MODE", "agent")
 AGENT_MAX_TURNS: int = int(os.getenv("AGENT_MAX_TURNS", "15"))
 AGENT_MODEL: str = os.getenv("AGENT_MODEL", "claude-sonnet-4-6")
 AGENT_SELF_CRITIQUE: bool = os.getenv("AGENT_SELF_CRITIQUE", "true").lower() in ("true", "1", "yes")
@@ -108,6 +108,22 @@ AGENT_FALLBACK_MODELS: str = os.getenv("AGENT_FALLBACK_MODELS", "")
 # Optional Discord bot for cross-posting content to Discord channels.
 DISCORD_BOT_TOKEN: str = os.getenv("DISCORD_BOT_TOKEN", "")
 DISCORD_GUILD_ID: int = int(os.getenv("DISCORD_GUILD_ID", "0"))
+
+# ── Multi-Platform Publishing ──
+# PUBLISH_PLATFORMS: Comma-separated list of platforms to publish to on /approve.
+# Supported: x, discord, telegram. Default: ["x"].
+# DISCORD_CROSSPOST_ENABLED: Automatically cross-post to Discord when DISCORD_BOT_TOKEN is set.
+_raw_platforms = os.getenv("PUBLISH_PLATFORMS", "x")
+PUBLISH_PLATFORMS: list[str] = [
+    p.strip().lower() for p in _raw_platforms.split(",") if p.strip()
+]
+DISCORD_CROSSPOST_ENABLED: bool = os.getenv(
+    "DISCORD_CROSSPOST_ENABLED",
+    "true" if os.getenv("DISCORD_BOT_TOKEN") else "false",
+).lower() in ("true", "1", "yes")
+# Auto-add discord to PUBLISH_PLATFORMS when cross-post is enabled
+if DISCORD_CROSSPOST_ENABLED and "discord" not in PUBLISH_PLATFORMS:
+    PUBLISH_PLATFORMS.append("discord")
 
 # ── Figma ──
 # Optional Figma integration for design-accurate content generation.
@@ -216,6 +232,37 @@ TELEGRAM_MONITOR_CHANNELS: str = os.getenv("TELEGRAM_MONITOR_CHANNELS", "")
 # When cumulative daily spend reaches this limit, check_cost_budget() returns allowed=False.
 DAILY_COST_BUDGET_USD: float = float(os.getenv("DAILY_COST_BUDGET_USD", "5.0"))
 
+# ── Content Planner ──
+# Rolling 7-day content plan with automatic type balancing.
+# CONTENT_PLANNER_ENABLED: opt-in; when True, auto_post uses the planner
+# instead of slot-based scheduling.
+# PLAN_HORIZON_DAYS: how many days ahead the planner maintains.
+CONTENT_PLANNER_ENABLED: bool = os.getenv("CONTENT_PLANNER_ENABLED", "false").lower() in ("true", "1", "yes")
+PLAN_HORIZON_DAYS: int = int(os.getenv("PLAN_HORIZON_DAYS", "7"))
+
+# ── Draft Scoring ──
+# Preference engine scores drafts against learned approval/rejection patterns.
+# DRAFT_SCORE_THRESHOLD: Minimum score (1-10) to pass. Drafts below are flagged.
+# DRAFT_SCORE_ENABLED: Master toggle for the scoring system.
+DRAFT_SCORE_THRESHOLD: float = float(os.getenv("DRAFT_SCORE_THRESHOLD", "6.0"))
+DRAFT_SCORE_ENABLED: bool = os.getenv("DRAFT_SCORE_ENABLED", "true").lower() in ("true", "1", "yes")
+
+# ── Context Feed ──
+# Real-time context aggregator that feeds on-chain events and X mentions
+# into auto-post content generation prompts.
+CONTEXT_FEED_ENABLED: bool = os.getenv("CONTEXT_FEED_ENABLED", "true").lower() in ("true", "1", "yes")
+X_MENTIONS_ENABLED: bool = os.getenv("X_MENTIONS_ENABLED", "false").lower() in ("true", "1", "yes")
+X_MENTIONS_POLL_MINUTES: int = int(os.getenv("X_MENTIONS_POLL_MINUTES", "30"))
+EVENT_TRIGGER_ENABLED: bool = os.getenv("EVENT_TRIGGER_ENABLED", "true").lower() in ("true", "1", "yes")
+
+# ── Monitoring ──
+# Daily digest: summary of bot performance sent at DAILY_DIGEST_HOUR (UTC).
+DAILY_DIGEST_ENABLED: bool = os.getenv("DAILY_DIGEST_ENABLED", "true").lower() in ("true", "1", "yes")
+DAILY_DIGEST_HOUR: int = int(os.getenv("DAILY_DIGEST_HOUR", "21"))
+# Health monitor: periodic system health checks with Telegram alerts.
+HEALTH_CHECK_ENABLED: bool = os.getenv("HEALTH_CHECK_ENABLED", "true").lower() in ("true", "1", "yes")
+HEALTH_ALERT_ENABLED: bool = os.getenv("HEALTH_ALERT_ENABLED", "true").lower() in ("true", "1", "yes")
+
 
 # ---------------------------------------------------------------------------
 # Startup validation
@@ -253,6 +300,12 @@ def validate(exit_on_error: bool = True) -> list[str]:
         warnings.append("DISCORD_BOT_TOKEN not set — Discord posting disabled")
     if not FIGMA_ACCESS_TOKEN:
         warnings.append("FIGMA_ACCESS_TOKEN not set — Figma design checks disabled")
+
+    # ── Deprecation checks ──
+    if AGENT_MODE == "pipeline":
+        _logger.warning(
+            "AGENT_MODE=pipeline is deprecated. Switch to AGENT_MODE=agent."
+        )
 
     # ── Value validation ──
     if AGENT_MAX_TURNS < 1:

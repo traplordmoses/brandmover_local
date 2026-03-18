@@ -44,6 +44,9 @@ def _routing_result(intent, confidence=0.95, parameters=None, via="table"):
 # _route_intent dispatch
 # ---------------------------------------------------------------------------
 
+# _route_intent lives in bot.handlers.generation, so patches target that module.
+_GEN = "bot.handlers.generation"
+
 class TestRouteIntent:
     """Test that _route_intent dispatches intents to the correct handlers."""
 
@@ -51,10 +54,10 @@ class TestRouteIntent:
         from bot.handlers import _route_intent
 
         async def _run():
-            with patch("bot.handlers.conversation_context") as mock_cc, \
-                 patch("bot.handlers.intent_router") as mock_ir, \
-                 patch("bot.handlers.state") as mock_state, \
-                 patch("bot.handlers.chat") as mock_chat:
+            with patch(f"{_GEN}.conversation_context") as mock_cc, \
+                 patch(f"{_GEN}.intent_router") as mock_ir, \
+                 patch(f"{_GEN}.state") as mock_state, \
+                 patch(f"{_GEN}.chat") as mock_chat:
                 mock_cc.get_context.return_value = ConversationContext(user_id=123, updated_at=time.time())
                 mock_state.has_pending.return_value = False
                 mock_ir.classify_intent = AsyncMock(
@@ -73,10 +76,10 @@ class TestRouteIntent:
         from bot.handlers import _route_intent
 
         async def _run():
-            with patch("bot.handlers.conversation_context") as mock_cc, \
-                 patch("bot.handlers.intent_router") as mock_ir, \
-                 patch("bot.handlers.state") as mock_state, \
-                 patch("bot.handlers.chat") as mock_chat:
+            with patch(f"{_GEN}.conversation_context") as mock_cc, \
+                 patch(f"{_GEN}.intent_router") as mock_ir, \
+                 patch(f"{_GEN}.state") as mock_state, \
+                 patch(f"{_GEN}.chat") as mock_chat:
                 mock_cc.get_context.return_value = ConversationContext(user_id=123, updated_at=time.time())
                 mock_state.has_pending.return_value = False
                 mock_ir.classify_intent = AsyncMock(
@@ -95,10 +98,10 @@ class TestRouteIntent:
         from bot.handlers import _route_intent
 
         async def _run():
-            with patch("bot.handlers.conversation_context") as mock_cc, \
-                 patch("bot.handlers.intent_router") as mock_ir, \
-                 patch("bot.handlers.state") as mock_state, \
-                 patch("bot.handlers._do_approve") as mock_approve:
+            with patch(f"{_GEN}.conversation_context") as mock_cc, \
+                 patch(f"{_GEN}.intent_router") as mock_ir, \
+                 patch(f"{_GEN}.state") as mock_state, \
+                 patch(f"{_GEN}._do_approve") as mock_approve:
                 mock_cc.get_context.return_value = ConversationContext(
                     user_id=123, pending_draft_exists=True, updated_at=time.time()
                 )
@@ -120,10 +123,10 @@ class TestRouteIntent:
         from bot.handlers import _route_intent
 
         async def _run():
-            with patch("bot.handlers.conversation_context") as mock_cc, \
-                 patch("bot.handlers.intent_router") as mock_ir, \
-                 patch("bot.handlers.state") as mock_state, \
-                 patch("bot.handlers._do_reject") as mock_reject:
+            with patch(f"{_GEN}.conversation_context") as mock_cc, \
+                 patch(f"{_GEN}.intent_router") as mock_ir, \
+                 patch(f"{_GEN}.state") as mock_state, \
+                 patch(f"{_GEN}._do_reject") as mock_reject:
                 mock_cc.get_context.return_value = ConversationContext(
                     user_id=123, pending_draft_exists=True, updated_at=time.time()
                 )
@@ -147,10 +150,10 @@ class TestRouteIntent:
         from bot.handlers import _route_intent
 
         async def _run():
-            with patch("bot.handlers.conversation_context") as mock_cc, \
-                 patch("bot.handlers.intent_router") as mock_ir, \
-                 patch("bot.handlers.state") as mock_state, \
-                 patch("bot.handlers.status_command") as mock_status:
+            with patch(f"{_GEN}.conversation_context") as mock_cc, \
+                 patch(f"{_GEN}.intent_router") as mock_ir, \
+                 patch(f"{_GEN}.state") as mock_state, \
+                 patch("bot.handlers.draft.status_command") as mock_status:
                 mock_cc.get_context.return_value = ConversationContext(user_id=123, updated_at=time.time())
                 mock_state.has_pending.return_value = False
                 mock_ir.classify_intent = AsyncMock(
@@ -170,9 +173,9 @@ class TestRouteIntent:
         from bot.handlers import _route_intent
 
         async def _run():
-            with patch("bot.handlers.conversation_context") as mock_cc, \
-                 patch("bot.handlers.intent_router") as mock_ir, \
-                 patch("bot.handlers.state") as mock_state:
+            with patch(f"{_GEN}.conversation_context") as mock_cc, \
+                 patch(f"{_GEN}.intent_router") as mock_ir, \
+                 patch(f"{_GEN}.state") as mock_state:
                 mock_cc.get_context.return_value = ConversationContext(user_id=123, updated_at=time.time())
                 mock_state.has_pending.return_value = False
                 mock_ir.classify_intent = AsyncMock(
@@ -189,9 +192,9 @@ class TestRouteIntent:
         from bot.handlers import _route_intent
 
         async def _run():
-            with patch("bot.handlers.conversation_context") as mock_cc, \
-                 patch("bot.handlers.intent_router") as mock_ir, \
-                 patch("bot.handlers.state") as mock_state:
+            with patch(f"{_GEN}.conversation_context") as mock_cc, \
+                 patch(f"{_GEN}.intent_router") as mock_ir, \
+                 patch(f"{_GEN}.state") as mock_state:
                 mock_cc.get_context.return_value = ConversationContext(user_id=123, updated_at=time.time())
                 mock_state.has_pending.return_value = False
                 mock_ir.classify_intent = AsyncMock(
@@ -214,13 +217,15 @@ class TestKillSwitch:
         from bot.handlers import handle_message
 
         async def _run():
-            with patch("bot.handlers.settings") as mock_settings, \
-                 patch("bot.handlers._authorized", return_value=True), \
-                 patch("bot.handlers.onboarding") as mock_onboard, \
-                 patch("bot.handlers.intent_router") as mock_ir, \
-                 patch("bot.handlers._rate_limited", return_value=False), \
-                 patch("bot.handlers.state") as mock_state, \
-                 patch("bot.handlers._handle_pipeline_mode") as mock_pipeline:
+            with patch(f"{_GEN}._can_operate", return_value=True), \
+                 patch(f"{_GEN}.settings") as mock_settings, \
+                 patch(f"{_GEN}._authorized", return_value=True), \
+                 patch(f"{_GEN}.onboarding") as mock_onboard, \
+                 patch(f"{_GEN}.intent_router") as mock_ir, \
+                 patch(f"{_GEN}._rate_limited", return_value=False), \
+                 patch(f"{_GEN}.state") as mock_state, \
+                 patch(f"{_GEN}.transcript"), \
+                 patch(f"{_GEN}._handle_pipeline_mode") as mock_pipeline:
                 mock_settings.UNIFIED_BRAIN_ENABLED = False
                 mock_settings.INTENT_ROUTER_ENABLED = False
                 mock_settings.AGENT_MODE = "pipeline"
@@ -250,12 +255,12 @@ class TestRerollIntent:
         from bot.handlers import _route_intent
 
         async def _run():
-            with patch("bot.handlers.conversation_context") as mock_cc, \
-                 patch("bot.handlers.intent_router") as mock_ir, \
-                 patch("bot.handlers.state") as mock_state, \
-                 patch("bot.handlers._handle_pipeline_mode") as mock_pipeline, \
-                 patch("bot.handlers.settings") as mock_settings, \
-                 patch("bot.handlers._rate_limited", return_value=False):
+            with patch(f"{_GEN}.conversation_context") as mock_cc, \
+                 patch(f"{_GEN}.intent_router") as mock_ir, \
+                 patch(f"{_GEN}.state") as mock_state, \
+                 patch(f"{_GEN}._handle_pipeline_mode") as mock_pipeline, \
+                 patch(f"{_GEN}.settings") as mock_settings, \
+                 patch(f"{_GEN}._rate_limited", return_value=False):
                 mock_cc.get_context.return_value = ConversationContext(user_id=123, updated_at=time.time())
                 mock_state.has_pending.return_value = True
                 mock_state.get_pending.return_value = {
@@ -282,9 +287,9 @@ class TestRerollIntent:
         from bot.handlers import _route_intent
 
         async def _run():
-            with patch("bot.handlers.conversation_context") as mock_cc, \
-                 patch("bot.handlers.intent_router") as mock_ir, \
-                 patch("bot.handlers.state") as mock_state:
+            with patch(f"{_GEN}.conversation_context") as mock_cc, \
+                 patch(f"{_GEN}.intent_router") as mock_ir, \
+                 patch(f"{_GEN}.state") as mock_state:
                 mock_cc.get_context.return_value = ConversationContext(user_id=123, updated_at=time.time())
                 mock_state.has_pending.return_value = False
                 mock_state.get_pending.return_value = None
