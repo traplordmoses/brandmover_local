@@ -240,6 +240,19 @@ DAILY_COST_BUDGET_USD: float = float(os.getenv("DAILY_COST_BUDGET_USD", "5.0"))
 CONTENT_PLANNER_ENABLED: bool = os.getenv("CONTENT_PLANNER_ENABLED", "false").lower() in ("true", "1", "yes")
 PLAN_HORIZON_DAYS: int = int(os.getenv("PLAN_HORIZON_DAYS", "7"))
 
+# ── Skeleton Library & Diversity Tracking ──
+# Structural skeletons ensure content variety by assigning structure templates
+# (hook type, body flow, CTA style) before generation. The diversity tracker
+# checks proposed structures against recent posts to prevent repetition.
+SKELETON_LIBRARY_ENABLED: bool = os.getenv("SKELETON_LIBRARY_ENABLED", "true").lower() in ("true", "1", "yes")
+DIVERSITY_TRACKER_ENABLED: bool = os.getenv("DIVERSITY_TRACKER_ENABLED", "true").lower() in ("true", "1", "yes")
+
+# ── Performance Tracking ──
+# Tracks post engagement metrics (likes, retweets, impressions) from X API
+# and feeds data back into skeleton selection and content planning.
+PERFORMANCE_TRACKING_ENABLED: bool = os.getenv("PERFORMANCE_TRACKING_ENABLED", "true").lower() in ("true", "1", "yes")
+PERFORMANCE_REFRESH_HOURS: int = int(os.getenv("PERFORMANCE_REFRESH_HOURS", "6"))
+
 # ── Draft Scoring ──
 # Preference engine scores drafts against learned approval/rejection patterns.
 # DRAFT_SCORE_THRESHOLD: Minimum score (1-10) to pass. Drafts below are flagged.

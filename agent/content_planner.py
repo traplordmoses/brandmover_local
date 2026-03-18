@@ -61,6 +61,7 @@ class PlannedPost:
     time_slot: str  # "morning" | "midday" | "afternoon" | "evening"
     content_type: str
     prompt_hint: str = ""
+    skeleton_id: str = ""  # Structural skeleton template ID
     status: str = "planned"  # planned | generating | posted | skipped | event_override
     event_source: str | None = None
     created_at: float = field(default_factory=time.time)
@@ -231,6 +232,15 @@ async def generate_plan(days_ahead: int = 7) -> ContentPlan:
     if brand_context:
         prompt += f"Brand context (brief):\n{brand_context[:1000]}\n\n"
 
+    # Inject performance context so the planner learns from what works
+    try:
+        from agent.performance import get_performance_context
+        perf_context = get_performance_context()
+        if perf_context:
+            prompt += f"\nPerformance insight: {perf_context}\n\n"
+    except Exception:
+        pass
+
     prompt += (
         "Generate 2-3 posts per day spread across time slots. "
         "Return ONLY a JSON array of objects with keys: "
@@ -270,6 +280,9 @@ async def generate_plan(days_ahead: int = 7) -> ContentPlan:
                 prompt_hint=item.get("prompt_hint", ""),
             ))
 
+        # Assign structural skeletons if enabled
+        _assign_skeletons_to_posts(posts)
+
         plan = ContentPlan(week_start=today, posts=posts)
         save_plan(plan)
         logger.info("Generated content plan: %d posts over %d days", len(posts), horizon)
@@ -301,10 +314,45 @@ def _generate_fallback_plan(dates: list[str], gaps: list[str]) -> ContentPlan:
             ))
             idx += 1
 
+    # Assign structural skeletons if enabled
+    _assign_skeletons_to_posts(posts)
+
     plan = ContentPlan(week_start=dates[0] if dates else _today_iso(), posts=posts)
     save_plan(plan)
     logger.info("Fallback plan generated: %d posts", len(posts))
     return plan
+
+
+def _assign_skeletons_to_posts(posts: list[PlannedPost]) -> None:
+    """Assign structural skeletons to planned posts using diversity-aware selection.
+
+    Modifies posts in place, setting skeleton_id on each.
+    Skipped if SKELETON_LIBRARY_ENABLED is False.
+    """
+    if not settings.SKELETON_LIBRARY_ENABLED:
+        return
+
+    try:
+        from agent.skeleton_library import select_skeleton
+        from agent.diversity_tracker import get_recent_skeleton_ids
+        from agent.compositor_config import get_config
+
+        brand_config = get_config()
+        recent_ids = get_recent_skeleton_ids(10)
+
+        for post in posts:
+            skeleton = select_skeleton(
+                content_type=post.content_type,
+                recent_skeleton_ids=recent_ids,
+                variation_aggressiveness=brand_config.variation_aggressiveness,
+                preferred=brand_config.preferred_skeletons or None,
+                excluded=brand_config.excluded_skeletons or None,
+            )
+            post.skeleton_id = skeleton.id
+            # Track this assignment so the next post considers it
+            recent_ids.insert(0, skeleton.id)
+    except Exception as e:
+        logger.warning("Skeleton assignment failed, posts will generate without structure: %s", e)
 
 
 # ---------------------------------------------------------------------------

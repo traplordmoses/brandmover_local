@@ -41,6 +41,7 @@ def create_bot() -> Application:
     app.add_handler(CommandHandler("review", handlers.review_command))
     app.add_handler(CommandHandler("style", handlers.style_command))
     app.add_handler(CommandHandler("brand", handlers.brand_command))
+    app.add_handler(CommandHandler("refine", handlers.refine_command))
     app.add_handler(CommandHandler("edit", handlers.edit_command))
     app.add_handler(CommandHandler("setup", handlers.setup_command))
     app.add_handler(CommandHandler("schedule", handlers.schedule_command))

@@ -340,3 +340,13 @@ FOID lives in an iridescent underwater dreamworld — a luminous light-blue univ
 | Setting        | Value          |
 |----------------|----------------|
 | Enabled        | true           |
+
+---
+
+## DIVERSITY CONFIG
+
+| Setting                  | Value                    |
+|--------------------------|--------------------------|
+| Variation aggressiveness | 60                       |
+| Preferred skeletons      | quiet_value, observation_post, cultural_commentary, bold_declaration |
+| Excluded skeletons       | none                     |

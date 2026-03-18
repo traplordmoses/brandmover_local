@@ -214,6 +214,46 @@ def get_performance_summary(last_n: int = 20) -> dict:
     }
 
 
+async def refresh_recent_metrics(max_posts: int = 10) -> int:
+    """Fetch fresh metrics for the most recent tracked posts.
+
+    Called periodically from the auto-post scheduler to keep
+    performance data current. Returns number of posts updated.
+    """
+    data = _load_performance()
+    if not data:
+        return 0
+
+    now = time.time()
+    refresh_interval = 6 * 3600  # 6 hours
+    try:
+        from config import settings
+        refresh_interval = settings.PERFORMANCE_REFRESH_HOURS * 3600
+    except Exception:
+        pass
+
+    # Find posts that haven't been checked recently, most recent first
+    candidates = sorted(data, key=lambda p: p.get("posted_at", 0), reverse=True)
+    stale = [
+        p for p in candidates
+        if now - p.get("last_checked", 0) > refresh_interval
+    ][:max_posts]
+
+    updated = 0
+    for entry in stale:
+        tweet_id = entry.get("tweet_id", "")
+        if not tweet_id:
+            continue
+        metrics = await fetch_post_metrics(tweet_id)
+        if metrics:
+            update_metrics(tweet_id, **metrics)
+            updated += 1
+
+    if updated:
+        logger.info("Refreshed metrics for %d/%d posts", updated, len(stale))
+    return updated
+
+
 def get_performance_context() -> str:
     """Generate a brief performance context string for the system prompt.
 

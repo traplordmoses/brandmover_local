@@ -127,6 +127,16 @@ async def process_slot(
     # Build the prompt
     prompt, event_ids = await scheduler.build_prompt_for_slot(slot_name, slot_config)
 
+    # Inject skeleton hint so the engine applies the right structural template
+    skeleton_id = slot_config.get("skeleton_id", "")
+    if skeleton_id:
+        prompt = f"[skeleton:{skeleton_id}] {prompt}"
+
+    # Inject prompt_hint from the content planner
+    prompt_hint = slot_config.get("prompt_hint", "")
+    if prompt_hint:
+        prompt = f"{prompt}\n\nTopic hint: {prompt_hint}"
+
     # Inject live context into the prompt if available
     if context_block:
         prompt = f"{prompt}\n\n{context_block}"
@@ -513,6 +523,7 @@ async def run_cron(
             planner_slot_config = {
                 "type": planned.content_type,
                 "prompt_hint": planned.prompt_hint,
+                "skeleton_id": planned.skeleton_id,
             }
             content_planner.mark_post_status(planned.date, planned.time_slot, "generating")
             success = await process_slot(
@@ -580,7 +591,17 @@ async def run_cron(
         except Exception as e:
             logger.debug("Content plan daily update failed: %s", e)
 
-    # --- 3b. Daily preference cluster refresh ---
+    # --- 3b. Periodic performance metrics refresh ---
+    if settings.PERFORMANCE_TRACKING_ENABLED:
+        try:
+            from agent.performance import refresh_recent_metrics
+            refreshed = await refresh_recent_metrics(max_posts=10)
+            if refreshed:
+                logger.info("Performance metrics refreshed for %d posts", refreshed)
+        except Exception as e:
+            logger.debug("Performance metrics refresh failed: %s", e)
+
+    # --- 3c. Daily preference cluster refresh ---
     global _last_cluster_refresh_date
     try:
         from datetime import datetime, timezone

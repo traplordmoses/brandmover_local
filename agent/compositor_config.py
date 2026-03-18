@@ -78,6 +78,10 @@ class BrandConfig:
     compositor_enabled: bool = True
     badge_text: str | None = None       # None = no badge, str = custom badge text
     default_mode: str = "image_optional" # "text_only" | "image_always" | "image_optional"
+    # Diversity config — configurable via ## DIVERSITY CONFIG table
+    variation_aggressiveness: float = 0.6   # 0.0 (consistent) to 1.0 (max variety)
+    preferred_skeletons: list[str] = field(default_factory=list)
+    excluded_skeletons: list[str] = field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------
@@ -415,6 +419,45 @@ def _parse_layout_mappings(text: str) -> dict[str, str]:
     return mappings
 
 
+_DIVERSITY_KEY_MAP = {
+    "variation aggressiveness": "variation_aggressiveness",
+    "preferred skeletons": "preferred_skeletons",
+    "excluded skeletons": "excluded_skeletons",
+}
+
+_DIVERSITY_ROW = re.compile(
+    r"\|\s*(?P<setting>[^|]+?)\s*\|\s*(?P<value>[^|]+?)\s*\|",
+)
+
+
+def _parse_diversity_config(text: str) -> dict:
+    """Parse optional ## DIVERSITY CONFIG table section."""
+    m = re.search(r"##\s*DIVERSITY CONFIG(.*?)(?=\n##|\Z)", text, re.DOTALL)
+    if not m:
+        return {}
+    section = m.group(1)
+    diversity: dict = {}
+    for row in _DIVERSITY_ROW.finditer(section):
+        raw_setting = row.group("setting").strip().lower()
+        raw_value = row.group("value").strip()
+        if raw_setting in ("setting", "---", "-------") or raw_setting.startswith("-"):
+            continue
+        key = _DIVERSITY_KEY_MAP.get(raw_setting)
+        if not key:
+            continue
+        if key == "variation_aggressiveness":
+            try:
+                val = int(raw_value)
+                diversity[key] = max(0.0, min(1.0, val / 100.0))
+            except ValueError:
+                pass
+        elif key in ("preferred_skeletons", "excluded_skeletons"):
+            items = [s.strip() for s in raw_value.split(",") if s.strip()]
+            if items and items != ["none"]:
+                diversity[key] = items
+    return diversity
+
+
 # ---------------------------------------------------------------------------
 # brand/config.json loader (v8)
 # ---------------------------------------------------------------------------
@@ -482,6 +525,7 @@ def get_config(path: Path | None = None) -> BrandConfig:
     layout = _parse_layout_profiles(raw)
     layout_map = _parse_layout_mappings(raw)
     compositor = _parse_compositor_section(raw)
+    diversity = _parse_diversity_config(raw)
 
     _cached_config = BrandConfig(
         brand_name=identity.get("brand_name", ""),
@@ -504,6 +548,7 @@ def get_config(path: Path | None = None) -> BrandConfig:
         **layout,
         **effects,
         **compositor,
+        **diversity,
     )
     _cached_mtime = mtime
     # config.json overrides (v8) — takes precedence over ## COMPOSITOR in guidelines.md

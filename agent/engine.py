@@ -548,6 +548,124 @@ async def _run_loop(
     return result
 
 
+def _build_skeleton_context(request: str) -> str:
+    """Build skeleton instructions to inject into the generation prompt.
+
+    Looks for a skeleton_id hint embedded in the request (set by the content
+    planner) or selects one based on diversity tracking.
+    """
+    if not settings.SKELETON_LIBRARY_ENABLED:
+        return ""
+
+    try:
+        from agent.skeleton_library import (
+            get_skeleton, select_skeleton, format_skeleton_for_prompt,
+        )
+        from agent.diversity_tracker import get_recent_skeleton_ids
+        from agent.compositor_config import get_config
+
+        # Check if the request contains a skeleton hint from the planner
+        # Format: [skeleton:skeleton_id] at the start of the request
+        skeleton = None
+        import re as _re
+        hint = _re.search(r"\[skeleton:(\w+)\]", request)
+        if hint:
+            skeleton = get_skeleton(hint.group(1))
+
+        # If no hint, select one based on diversity
+        if not skeleton:
+            brand_config = get_config()
+            recent_ids = get_recent_skeleton_ids(10)
+            # Infer content type from request keywords
+            content_type = "announcement"  # default
+            for ct in ("meme", "thread", "community", "educational", "market_commentary"):
+                if ct in request.lower():
+                    content_type = ct
+                    break
+            skeleton = select_skeleton(
+                content_type=content_type,
+                recent_skeleton_ids=recent_ids,
+                variation_aggressiveness=brand_config.variation_aggressiveness,
+                preferred=brand_config.preferred_skeletons or None,
+                excluded=brand_config.excluded_skeletons or None,
+            )
+
+        if skeleton:
+            formatted = format_skeleton_for_prompt(skeleton)
+            return (
+                f"## STRUCTURAL TEMPLATE\n\n"
+                f"Follow this content structure for variety. Adapt it to the topic, "
+                f"but match the hook style, body flow, and CTA pattern.\n\n"
+                f"{formatted}"
+            )
+    except Exception as e:
+        logger.debug("Skeleton context build failed: %s", e)
+
+    return ""
+
+
+def _run_diversity_check(result: AgentResult) -> None:
+    """Log structure metadata and check diversity after draft generation."""
+    from agent.diversity_tracker import log_structure, check_structural_diversity, StructureEntry
+    from agent.compositor_config import get_config
+
+    draft = result.draft
+    content_type = draft.get("content_type", "unknown")
+
+    # Extract skeleton metadata from draft or infer from content
+    skeleton_id = draft.get("_skeleton_id", "unknown")
+    # The skeleton_id gets set via the planner or the context builder
+    # If not set, try to detect from the structure
+    hook_type = draft.get("_hook_type", "cold_open")
+    body_structure = draft.get("_body_structure", [])
+    cta_type = draft.get("_cta_type", "none")
+    tone = draft.get("_tone", "neutral")
+
+    # If we injected a skeleton, use its metadata
+    if settings.SKELETON_LIBRARY_ENABLED:
+        try:
+            from agent.skeleton_library import get_skeleton
+            skeleton = get_skeleton(skeleton_id)
+            if skeleton:
+                hook_type = skeleton.hook
+                body_structure = skeleton.body
+                cta_type = skeleton.cta
+                tone = skeleton.tone
+        except Exception:
+            pass
+
+    # Log the structure
+    entry = StructureEntry(
+        skeleton_id=skeleton_id,
+        hook_type=hook_type,
+        body_structure=body_structure,
+        cta_type=cta_type,
+        tone=tone,
+        content_type=content_type,
+    )
+    log_structure(entry)
+
+    # Run diversity check
+    brand_config = get_config()
+    diversity = check_structural_diversity(
+        skeleton_id=skeleton_id,
+        hook_type=hook_type,
+        body_structure=body_structure,
+        cta_type=cta_type,
+        variation_aggressiveness=brand_config.variation_aggressiveness,
+    )
+
+    if diversity["reasons"]:
+        draft["_diversity_score"] = diversity["diversity_score"]
+        draft["_diversity_reasons"] = diversity["reasons"]
+        if diversity["should_reject"]:
+            draft["_diversity_warning"] = True
+            logger.warning(
+                "Diversity check: score=%.1f, rejecting — %s",
+                diversity["diversity_score"], diversity["reasons"],
+            )
+
+
 async def run_agent(
     request: str,
     on_tool_call: OnToolCall | None = None,
@@ -626,6 +744,11 @@ async def run_agent(
     if session_context:
         user_content = f"{session_context}\n\n---\n\n{user_content}"
 
+    # Inject structural skeleton instructions if a skeleton_id is provided
+    skeleton_context = _build_skeleton_context(request)
+    if skeleton_context:
+        user_content = f"{skeleton_context}\n\n---\n\n{user_content}"
+
     messages = [{"role": "user", "content": user_content}]
 
     result = await _run_loop(
@@ -657,6 +780,13 @@ async def run_agent(
         )
     except Exception as e:
         logger.debug("Session record_run failed: %s", e)
+
+    # Structural diversity check and logging
+    if result.draft and settings.DIVERSITY_TRACKER_ENABLED:
+        try:
+            _run_diversity_check(result)
+        except Exception as e:
+            logger.debug("Diversity check failed: %s", e)
 
     # Optional self-scoring via preference engine
     if self_score and result.draft:

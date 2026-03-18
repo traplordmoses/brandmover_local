@@ -32,6 +32,7 @@ from bot.handlers.draft import (      # noqa: F401
     _CallbackProxy,
     _do_approve,
     _do_reject,
+    refine_command,
 )
 from bot.handlers.generation import ( # noqa: F401
     _route_intent,

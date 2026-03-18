@@ -6,6 +6,7 @@ __all__ = [
     "draft_callback",
     "approve_command",
     "reject_command",
+    "refine_command",
     "edit_command",
     "cancel_command",
     "status_command",
@@ -265,6 +266,19 @@ async def _do_post(update: Update, context: ContextTypes.DEFAULT_TYPE, source: s
         except Exception as e:
             logger.debug("Session record failed: %s", e)
 
+        # Track post performance for analytics feedback loop
+        try:
+            from agent.performance import record_post as _perf_record
+            if tweet_url:
+                _thread_tweet_id = tweet_url.rstrip("/").split("/")[-1]
+                _perf_record(
+                    tweet_id=_thread_tweet_id,
+                    content_type=approved.get("content_type", ""),
+                    caption=approved.get("caption", ""),
+                )
+        except Exception as e:
+            logger.debug("Performance tracking failed: %s", e)
+
         url_list = "\n".join(f"  {i+1}/ {url}" for i, url in enumerate(tweet_urls))
         await update.message.reply_text(
             f"Thread posted to X! ({len(tweet_urls)} posts)\n{url_list}",
@@ -347,6 +361,19 @@ async def _do_post(update: Update, context: ContextTypes.DEFAULT_TYPE, source: s
         )
     except Exception as e:
         logger.debug("Session record_approved_post failed: %s", e)
+
+    # Track post performance for analytics feedback loop
+    try:
+        from agent.performance import record_post as _perf_record
+        if tweet_url:
+            _tweet_id = tweet_url.rstrip("/").split("/")[-1]
+            _perf_record(
+                tweet_id=_tweet_id,
+                content_type=approved.get("content_type", ""),
+                caption=approved.get("caption", ""),
+            )
+    except Exception as e:
+        logger.debug("Performance tracking failed: %s", e)
 
     # Build response message showing all platform results
     slot_note = f"  (auto-slot: {_esc(auto_slot)})" if auto_slot else ""
@@ -937,6 +964,137 @@ async def reject_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     feedback_text = text.partition("/reject")[2].strip()
 
     await _do_reject(update, context, feedback_text=feedback_text, source="command")
+
+
+async def refine_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /refine <instruction> — focused edit on the current pending draft.
+
+    Unlike /reject, this does NOT reject the draft or log negative feedback.
+    It applies a targeted edit and preserves conversation history.
+    """
+    user_id = update.effective_user.id
+    if not _can_operate(user_id):
+        return
+
+    text = (update.message.text or "").strip()
+    instruction = text.partition("/refine")[2].strip()
+
+    if not instruction:
+        await update.message.reply_text(
+            "Usage: /refine <i>instruction</i>\n\n"
+            "Examples:\n"
+            "  /refine make the tone more casual\n"
+            "  /refine shorten to under 100 chars\n"
+            "  /refine add a call to action",
+            parse_mode="HTML",
+        )
+        return
+
+    pending = state.get_pending(user_id=user_id)
+    if not pending:
+        await update.message.reply_text("Nothing to refine. Send me a content request first.")
+        return
+
+    await update.message.chat.send_action("typing")
+
+    from agent.refinement import refine_artifact, extract_artifact_from_pending
+
+    artifact = extract_artifact_from_pending(user_id=user_id)
+    if not artifact:
+        await update.message.reply_text("Could not load pending draft.")
+        return
+
+    history = artifact.pop("conversation_history", None)
+
+    # Progress display — same pattern as agent revision
+    _status_msg = None
+    _status_lines: list[str] = []
+    _reasoning_line: str = ""
+
+    def _build_status_text() -> str:
+        parts = list(_status_lines)
+        if _reasoning_line:
+            parts.append(f"<i>\U0001F4AD {_esc(_reasoning_line)}</i>")
+        return "\n".join(parts)
+
+    async def _update_status():
+        nonlocal _status_msg
+        text = _build_status_text()
+        if not text:
+            return
+        if _status_msg is None:
+            _status_msg = await update.message.reply_text(text, parse_mode="HTML")
+        else:
+            try:
+                await _status_msg.edit_text(text, parse_mode="HTML")
+            except Exception:
+                pass
+
+    async def on_tool_call(tool_name: str, description: str):
+        nonlocal _reasoning_line
+        _reasoning_line = ""
+        icon = _TOOL_ICONS.get(tool_name, "\u26A1")
+        _status_lines.append(f"{icon} {_esc(description)}")
+        await _update_status()
+        await update.message.chat.send_action("typing")
+
+    async def on_reasoning(text: str):
+        nonlocal _reasoning_line
+        _reasoning_line = _truncate_reasoning(text)
+        await _update_status()
+        await update.message.chat.send_action("typing")
+
+    try:
+        result = await refine_artifact(
+            artifact=artifact,
+            instruction=instruction,
+            history=history,
+            on_tool_call=on_tool_call,
+            on_reasoning=on_reasoning,
+        )
+
+        # Clean up status message
+        if _status_msg:
+            try:
+                await _status_msg.delete()
+            except Exception:
+                pass
+
+        if not result.draft:
+            await update.message.reply_text(
+                f"Refinement couldn't produce a valid draft.\n\n<pre>{_esc(result.final_text[:500])}</pre>",
+                parse_mode="HTML",
+            )
+            return
+
+        # Save refined draft — preserve all metadata from original pending
+        image_url = result.image_url or pending.get("image_url")
+        state.save_pending(
+            caption=result.draft["caption"],
+            hashtags=result.draft.get("hashtags", []),
+            image_url=image_url,
+            alt_text=result.draft.get("alt_text", ""),
+            image_prompt=result.draft.get("image_prompt", ""),
+            original_request=pending["original_request"],
+            auto_slot=pending.get("auto_slot"),
+            auto_event_ids=pending.get("auto_event_ids"),
+            content_type=result.draft.get("content_type", pending.get("content_type")),
+            user_id=user_id,
+            conversation_history=result.conversation_history,
+            draft_format=result.draft.get("format", pending.get("format", "single")),
+            format_data=result.draft.get("format_data", pending.get("format_data")),
+        )
+
+        await _send_draft(update, result.draft, image_url, resources=result.resources, user_id=user_id)
+
+    except Exception as e:
+        logger.error("Refinement failed: %s", e)
+        # Original pending is still intact (save_pending archives, but we
+        # only call it on success above)
+        await update.message.reply_text(
+            f"Refinement failed: {_esc(str(e))}\n\nOriginal draft still pending. Try again or /cancel.",
+            parse_mode="HTML",
+        )
 
 
 async def edit_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
