@@ -197,10 +197,11 @@ for 3d brand assets, set content_type to `"brand_3d"`. a locked master prompt ha
 enforced by post-processing. violating them wastes tokens.
 
 1. zero hashtags — none in caption, title, or subtitle. ever.
-2. no ai words — never use "revolutionizing", "leveraging", "cutting-edge", "seamlessly", "dive into", "unlock"
-3. max 1 emoji — zero is default. never start with emoji
-4. caption length — 50-150 chars. shorter > longer
-5. sound human — match the brand voice exactly as described in guidelines
+2. no ai language — never use: revolutionizing, leveraging, cutting-edge, seamlessly, dive into, unlock, ecosystem, paradigm, synergy, holistic, robust, scalable, reimagining, redefining, groundbreaking, game-changing, transformative, empower, elevate, harness, streamline. this list is long because AI uses these words constantly. you are not AI when you write.
+3. no em-dashes (—) — use periods or commas. em-dashes are the #1 AI tell.
+4. max 1 emoji — zero is default. never start with emoji
+5. caption length — 50-150 chars. shorter > longer
+6. write like a person — short sentences. plain words. specific details. no filler. no compound adjective chains. no sentences that start with "By [gerund]..." or "Through [noun]..."
 
 ## image prompts
 

@@ -62,11 +62,31 @@ def _try_parse_draft(text: str) -> dict | None:
     return None
 
 
-# AI-sounding words to strip from captions (case-insensitive)
+# AI-sounding words and phrases to strip from captions (case-insensitive)
 _AI_WORDS = re.compile(
-    r"\b(?:revolutionizing|leveraging|cutting-edge|seamlessly|dive into|unlock)\b",
+    r"\b(?:"
+    r"revolutionizing|leveraging|cutting-edge|seamlessly|dive into|unlock|"
+    r"reimagining|redefining|supercharging|turbocharging|"
+    r"game-?changing|groundbreaking|trailblazing|pioneering|"
+    r"next-?gen(?:eration)?|best-in-class|world-class|state-of-the-art|"
+    r"harness(?:ing)?|empower(?:ing)?|elevat(?:e|ing)|"
+    r"robust|scalable|synerg(?:y|ies|istic)|holistic|"
+    r"ecosystem|paradigm|disruptive|innovative|"
+    r"transformative|comprehensive|streamlin(?:e|ed|ing)|"
+    r"architected|architecting|architecturally|"
+    r"self-sustaining|human-driven|autonomous(?:ly)?|"
+    r"delve|unpack|navigate the|landscape|"
+    r"at the forefront|at the intersection|on the cutting edge|"
+    r"excited to announce|thrilled to share|proud to|"
+    r"double down|move the needle|low-hanging fruit|"
+    r"north star|deep dive|circle back|"
+    r"the result is|it's worth noting|importantly"
+    r")\b",
     re.IGNORECASE,
 )
+
+# Em-dash pattern — replace with comma or period
+_EM_DASH = re.compile(r"\s*—\s*")
 
 # Hashtag pattern: # followed by word chars (but not hex color codes like #000000 in image_prompt)
 _HASHTAG_RE = re.compile(r"#[A-Za-z]\w*")
@@ -98,6 +118,14 @@ def _sanitize_draft(draft: dict) -> dict:
         if ai_matches:
             cleaned = _AI_WORDS.sub("", cleaned)
             logger.warning("Sanitized AI word(s) from draft.%s: %s", field, ai_matches)
+
+        # Replace em-dashes with comma or period
+        if "—" in cleaned:
+            cleaned = _EM_DASH.sub(", ", cleaned)
+            # Clean up ", ," or leading commas
+            cleaned = re.sub(r",\s*,", ",", cleaned)
+            cleaned = re.sub(r"^\s*,\s*", "", cleaned)
+            logger.info("Stripped em-dash(es) from draft.%s", field)
 
         # Collapse double spaces and strip
         if cleaned != original:

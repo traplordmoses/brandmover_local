@@ -137,7 +137,7 @@ body::before {
     font-family: 'Orbitron', monospace;
     font-size: 10px;
     font-weight: 700;
-    color: #D4A843;
+    color: #FFD700;
     letter-spacing: 1.5px;
     text-transform: uppercase;
 }
@@ -211,7 +211,7 @@ body::before {
     font-family: 'Orbitron', sans-serif;
     font-size: 14px;
     font-weight: 700;
-    color: #D4A843;
+    color: #FFD700;
     text-transform: uppercase;
     letter-spacing: 2px;
     margin-bottom: 16px;
@@ -371,9 +371,18 @@ body::before {
 """
 
 
+def _deai(text: str) -> str:
+    """Strip AI-sounding language and em-dashes from text."""
+    import re
+    # Em-dashes → comma
+    text = re.sub(r"\s*—\s*", ", ", text)
+    text = re.sub(r",\s*,", ",", text)
+    return text
+
+
 def _esc(text: str) -> str:
-    """HTML-escape text."""
-    return html.escape(str(text))
+    """HTML-escape text after stripping AI language."""
+    return html.escape(_deai(str(text)))
 
 
 def _badge(text: str, color: str = "gray") -> str:
@@ -527,7 +536,7 @@ def _build_campaign_report(title: str, subtitle: str, campaign_name: str) -> str
 
     # Status breakdown chart
     status_items = sorted(by_status.items(), key=lambda x: -x[1])
-    status_chart = _bar_chart(status_items, "#D4A843")
+    status_chart = _bar_chart(status_items, "#FFD700")
 
     # Slot table
     slot_rows = []
