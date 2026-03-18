@@ -385,6 +385,55 @@ async def process_scheduled_item(
         schedule_queue._write_queue(items)
         return False
 
+    # --- Exact-copy shortcut: bypass agent entirely for verbatim posts ---
+    import re as _re
+    _exact_match = _re.search(
+        r"post this exact copy[^:]*:\s*\n+(.*)",
+        prompt, _re.IGNORECASE | _re.DOTALL,
+    )
+    if _exact_match:
+        exact_caption = _exact_match.group(1).strip()
+        # Strip any trailing MEDIA TASK block (handled separately if present)
+        media_split = _re.split(r"\n\s*MEDIA TASK:", exact_caption, flags=_re.IGNORECASE)
+        exact_caption = media_split[0].strip()
+
+        logger.info("Exact-copy shortcut for %s: %s", item_id, exact_caption[:80])
+
+        if dry_run:
+            logger.info("DRY RUN — scheduled=%s (exact-copy) caption=%s", item_id, exact_caption[:80])
+            schedule_queue.mark_done(item_id)
+            return True
+
+        # Save as pending draft with the exact caption — no agent, no image gen
+        await state.async_save_pending(
+            caption=exact_caption,
+            hashtags=[],
+            image_url=None,
+            alt_text="",
+            image_prompt="",
+            original_request=prompt,
+            auto_slot=slot_name,
+        )
+
+        schedule_queue.mark_done(item_id)
+
+        if bot:
+            from bot.handlers import send_auto_draft
+            draft = {"caption": exact_caption, "hashtags": [], "content_type": "announcement"}
+            await send_auto_draft(bot, draft, None, slot_name)
+        else:
+            notification = (
+                f"<b>Scheduled Draft Ready</b>  [<code>{item_id}</code>]\n\n"
+                f"{exact_caption}\n\n"
+                f"/approve to post to X\n"
+                f"/reject <i>feedback</i> to revise\n"
+                f"/cancel to discard"
+            )
+            await _notify_telegram(notification)
+
+        logger.info("Exact-copy draft queued for approval: %s", item_id)
+        return True
+
     # Run the agent with the user's prompt
     result = None
     for attempt in range(_MAX_RETRIES + 1):
