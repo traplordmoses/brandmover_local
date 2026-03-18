@@ -189,12 +189,13 @@ TOOL_DEFINITIONS = [
         "name": "finish",
         "description": (
             "Call this when your draft is complete. Submit the final content. "
-            "Do not output raw JSON in your text response — always submit your final draft through this tool."
+            "Do not output raw JSON in your text response — always submit your final draft through this tool. "
+            "For threads, set format to 'thread' and provide thread_posts array."
         ),
         "input_schema": {
             "type": "object",
             "properties": {
-                "caption": {"type": "string"},
+                "caption": {"type": "string", "description": "Post text (or first post for threads)."},
                 "hashtags": {"type": "array", "items": {"type": "string"}},
                 "alt_text": {"type": "string"},
                 "image_prompt": {"type": "string"},
@@ -202,6 +203,54 @@ TOOL_DEFINITIONS = [
                 "title": {"type": "string"},
                 "subtitle": {"type": "string"},
                 "platform": {"type": "string"},
+                "format": {
+                    "type": "string",
+                    "enum": ["single", "thread", "calendar", "report"],
+                    "description": "Output format. Defaults to 'single'. Use 'thread' for multi-post threads.",
+                },
+                "thread_posts": {
+                    "type": "array",
+                    "description": "For threads: array of post objects. Each has 'text' (required) and optional 'image_prompt'.",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "text": {"type": "string"},
+                            "image_prompt": {"type": "string"},
+                        },
+                        "required": ["text"],
+                    },
+                },
+                "calendar_entries": {
+                    "type": "array",
+                    "description": "For calendars: array of {date, time, theme, type, topic, status} entries.",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "date": {"type": "string"},
+                            "time": {"type": "string"},
+                            "theme": {"type": "string"},
+                            "type": {"type": "string"},
+                            "topic": {"type": "string"},
+                            "status": {"type": "string"},
+                        },
+                    },
+                },
+                "report_type": {
+                    "type": "string",
+                    "description": "For reports: 'performance', 'campaign', 'feedback', or 'custom'.",
+                },
+                "report_sections": {
+                    "type": "array",
+                    "description": "For custom reports: sections array.",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "heading": {"type": "string"},
+                            "content": {"type": "string"},
+                            "type": {"type": "string", "enum": ["text", "table", "stats"]},
+                        },
+                    },
+                },
             },
             "required": ["caption"],
         },
@@ -961,7 +1010,7 @@ async def _handle_use_skill(
     if not skill:
         return json.dumps({"error": f"Skill '{name}' not found. Use list_skills to see available skills."})
 
-    tracker.log_api(f"skill:{name}")
+    tracker.log_skill(name)
 
     result = {"name": skill["name"], "instructions": skill["content"]}
     if skill["scripts"]:

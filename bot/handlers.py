@@ -311,7 +311,56 @@ async def _do_post(update: Update, context: ContextTypes.DEFAULT_TYPE, source: s
 
     await update.message.chat.send_action("typing")
 
+    draft_format = approved.get("format", "single")
+    format_data = approved.get("format_data", {})
+
     composed_path, composed_ct = state.get_last_composed(user_id=user_id)
+
+    # --- Thread publishing ---
+    if draft_format == "thread" and format_data.get("thread_posts"):
+        thread_posts = format_data["thread_posts"]
+        tweet_url = None
+        try:
+            tweet_urls = await publisher.post_thread_to_x(thread_posts)
+            tweet_url = tweet_urls[0] if tweet_urls else None
+        except Exception as e:
+            logger.error("Failed to post thread to X: %s", e)
+            await update.message.reply_text(
+                f"Thread posting failed. Check logs.\n"
+                f"Your draft is still approved — try again with 'post it'.",
+                parse_mode="HTML",
+            )
+            return
+
+        # Record and clean up (shared with single post flow below)
+        auto_slot = approved.get("auto_slot")
+        if auto_slot:
+            auto_state.record_post(
+                slot_name=auto_slot,
+                caption=approved.get("caption", ""),
+                tweet_url=tweet_url,
+                event_ids=approved.get("auto_event_ids"),
+            )
+        state.clear_approved(user_id=user_id)
+
+        try:
+            from agent.session import record_approved_post
+            record_approved_post(
+                caption=approved.get("caption", ""),
+                slot=auto_slot or "",
+                tweet_url=tweet_url,
+            )
+        except Exception as e:
+            logger.debug("Session record failed: %s", e)
+
+        url_list = "\n".join(f"  {i+1}/ {url}" for i, url in enumerate(tweet_urls))
+        await update.message.reply_text(
+            f"Thread posted to X! ({len(tweet_urls)} posts)\n{url_list}",
+            parse_mode="HTML",
+        )
+        transcript.log_publish(user_id or 0, "twitter", url=tweet_url)
+        await hooks.emit("post:published", {"platform": "twitter", "url": tweet_url, "user_id": user_id, "format": "thread"})
+        return
 
     # Post to X — prefer composed image over raw URL
     tweet_url = None
@@ -673,6 +722,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             "/onboard — Start conversational brand onboarding\n"
             "/onboard_cancel — Cancel onboarding\n"
             "/library — List or search the asset library\n"
+            "/skills — List agent skills with usage stats\n"
             "/strategy — View current brand strategy and config\n"
             "/preview [topic] — Generate a sample post (no rate limit)\n"
             "/regen_guidelines — Regenerate guidelines from asset inventory\n"
@@ -2856,6 +2906,26 @@ async def _route_intent(update: Update, context: ContextTypes.DEFAULT_TYPE, mess
         await brand_check_command(update, context)
         return True
 
+    # Skill-matched intent — route to agent mode with skill hint
+    if intent == "use_skill" and confidence >= 0.5:
+        skill_name = result.parameters.get("skill", "")
+        topic = result.parameters.get("topic", message)
+        if skill_name:
+            # Prefix the message with a skill hint so the agent picks it up
+            augmented = f"[skill:{skill_name}] {topic}"
+        else:
+            augmented = message
+        if _rate_limited(user_id):
+            await update.message.reply_text(
+                f"Please wait {_RATE_LIMIT_SECONDS}s between requests."
+            )
+            return True
+        if settings.AGENT_MODE == "agent":
+            await _handle_agent_mode(update, augmented, user_id=user_id)
+        else:
+            await _handle_pipeline_mode(update, augmented, user_id=user_id)
+        return True
+
     if intent == "upload_assets":
         await update.message.reply_text(
             "go ahead — send your images or PDFs and I'll analyze them automatically.\n\n"
@@ -3032,6 +3102,17 @@ async def _handle_agent_mode(update: Update, request: str, user_id: int | None =
             image_url = direct_photo_path
             logger.info("Direct photo mode: using %s as image source", direct_photo_path)
 
+        # Determine draft format and format-specific data
+        draft_format = result.draft.get("format", "single")
+        format_data = None
+        if draft_format == "thread" and result.draft.get("thread_posts"):
+            format_data = {"thread_posts": result.draft["thread_posts"]}
+        elif draft_format == "report":
+            format_data = {
+                "report_type": result.draft.get("report_type", "custom"),
+                "report_sections": result.draft.get("report_sections", []),
+            }
+
         # Save pending state
         state.save_pending(
             caption=result.draft["caption"],
@@ -3044,6 +3125,8 @@ async def _handle_agent_mode(update: Update, request: str, user_id: int | None =
             content_type=result.draft.get("content_type"),
             user_id=user_id,
             conversation_history=result.conversation_history,
+            draft_format=draft_format,
+            format_data=format_data,
         )
 
         # Log to generation history (agent mode was previously missing this)
@@ -3888,6 +3971,63 @@ async def _send_draft(
     """
     caption = draft["caption"]
     content_type = draft.get("content_type", "default")
+    draft_format = draft.get("format", "single")
+
+    # --- Thread display ---
+    if draft_format == "thread" and draft.get("thread_posts"):
+        thread_posts = draft["thread_posts"]
+        keyboard = InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton("Approve Thread", callback_data="draft_approve"),
+                InlineKeyboardButton("Reject", callback_data="draft_reject"),
+            ],
+        ])
+        lines = [f"<b>Thread ({len(thread_posts)} posts)</b>\n"]
+        for i, post in enumerate(thread_posts, 1):
+            text = _esc(post.get("text", ""))
+            char_count = len(post.get("text", ""))
+            lines.append(f"<b>{i}/</b> {text} <i>({char_count})</i>\n")
+        lines.append(f"\n/approve to post thread | /reject <i>feedback</i> to revise")
+        await update.message.reply_text("\n".join(lines), parse_mode="HTML", reply_markup=keyboard)
+        return
+
+    # --- Report display ---
+    if draft_format == "report" and draft.get("_report_path"):
+        report_path = draft["_report_path"]
+        try:
+            with open(report_path, "rb") as f:
+                await update.message.reply_document(
+                    document=f,
+                    filename=Path(report_path).name,
+                    caption=f"Report: {_esc(draft.get('title', 'Report'))}",
+                    parse_mode="HTML",
+                )
+        except Exception as e:
+            logger.warning("Failed to send report file: %s", e)
+            await update.message.reply_text(
+                f"Report generated at: <code>{_esc(report_path)}</code>",
+                parse_mode="HTML",
+            )
+        return
+
+    # --- Calendar display ---
+    if draft_format == "calendar" and draft.get("_calendar_path"):
+        cal_path = draft["_calendar_path"]
+        try:
+            with open(cal_path, "rb") as f:
+                await update.message.reply_document(
+                    document=f,
+                    filename=Path(cal_path).name,
+                    caption=f"Content Calendar: {_esc(draft.get('title', 'Calendar'))}",
+                    parse_mode="HTML",
+                )
+        except Exception as e:
+            logger.warning("Failed to send calendar file: %s", e)
+            await update.message.reply_text(
+                f"Calendar saved to: <code>{_esc(cal_path)}</code>",
+                parse_mode="HTML",
+            )
+        return
 
     # Ensure the compositor has title/subtitle — synthesize from caption if missing
     if not draft.get("title") and not draft.get("subtitle") and caption:
@@ -5542,6 +5682,36 @@ async def library_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         prompt_short = (e.prompt[:40] + "...") if len(e.prompt) > 40 else e.prompt
         lines.append(f"<code>{e.id}</code> {e.source}/{e.content_type}{tags}{used}\n  {_esc(prompt_short)}")
 
+    await update.message.reply_text("\n".join(lines), parse_mode="HTML")
+
+
+async def skills_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /skills — list available agent skills with stats."""
+    if not _authorized(update.effective_user.id):
+        return
+
+    from agent.skills import load_registry, get_skill_stats
+
+    registry = load_registry()
+    active = [s for s in registry if s.get("status", "active") == "active"]
+
+    if not active:
+        await update.message.reply_text("No skills registered yet.")
+        return
+
+    lines = ["<b>Agent Skills</b>\n"]
+    for s in active:
+        stats = get_skill_stats(s["name"])
+        uses = stats.get("uses", 0)
+        rate = stats.get("approval_rate", 0)
+        learnings = stats.get("learnings_count", 0)
+        rate_str = f"{rate:.0%}" if uses > 0 else "n/a"
+        lines.append(
+            f"<b>{_esc(s['name'])}</b> — {_esc(s['description'])}\n"
+            f"  uses: {uses} | approval: {rate_str} | learnings: {learnings}"
+        )
+
+    lines.append(f"\n<i>{len(active)} skills active</i>")
     await update.message.reply_text("\n".join(lines), parse_mode="HTML")
 
 

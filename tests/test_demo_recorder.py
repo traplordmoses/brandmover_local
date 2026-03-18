@@ -109,13 +109,13 @@ class TestLoadDemoScript:
 
 class TestValidateUrl:
     def test_https_allowed(self):
-        with patch("agent.demo_recorder.socket.getaddrinfo", return_value=[
+        with patch("agent.net_guard.socket.getaddrinfo", return_value=[
             (2, 1, 6, "", ("93.184.216.34", 443)),
         ]):
             validate_url("https://example.com")  # Should not raise
 
     def test_http_allowed(self):
-        with patch("agent.demo_recorder.socket.getaddrinfo", return_value=[
+        with patch("agent.net_guard.socket.getaddrinfo", return_value=[
             (2, 1, 6, "", ("93.184.216.34", 80)),
         ]):
             validate_url("http://example.com")  # Should not raise
@@ -129,36 +129,36 @@ class TestValidateUrl:
             validate_url("ftp://example.com/file")
 
     def test_private_ip_127(self):
-        with patch("agent.demo_recorder.socket.getaddrinfo", return_value=[
+        with patch("agent.net_guard.socket.getaddrinfo", return_value=[
             (2, 1, 6, "", ("127.0.0.1", 80)),
         ]):
-            with pytest.raises(ValueError, match="private"):
+            with pytest.raises(ValueError, match="private|blocked"):
                 validate_url("http://localhost")
 
     def test_private_ip_10(self):
-        with patch("agent.demo_recorder.socket.getaddrinfo", return_value=[
+        with patch("agent.net_guard.socket.getaddrinfo", return_value=[
             (2, 1, 6, "", ("10.0.0.1", 80)),
         ]):
-            with pytest.raises(ValueError, match="private"):
+            with pytest.raises(ValueError, match="private|blocked"):
                 validate_url("http://internal.corp")
 
     def test_private_ip_192(self):
-        with patch("agent.demo_recorder.socket.getaddrinfo", return_value=[
+        with patch("agent.net_guard.socket.getaddrinfo", return_value=[
             (2, 1, 6, "", ("192.168.1.1", 80)),
         ]):
-            with pytest.raises(ValueError, match="private"):
+            with pytest.raises(ValueError, match="private|blocked"):
                 validate_url("http://router.local")
 
     def test_private_ip_172(self):
-        with patch("agent.demo_recorder.socket.getaddrinfo", return_value=[
+        with patch("agent.net_guard.socket.getaddrinfo", return_value=[
             (2, 1, 6, "", ("172.16.0.1", 80)),
         ]):
-            with pytest.raises(ValueError, match="private"):
+            with pytest.raises(ValueError, match="private|blocked"):
                 validate_url("http://docker-host")
 
     def test_unresolvable_host(self):
         import socket as _socket
-        with patch("agent.demo_recorder.socket.getaddrinfo", side_effect=_socket.gaierror("Name resolution failed")):
+        with patch("agent.net_guard.socket.getaddrinfo", side_effect=_socket.gaierror("Name resolution failed")):
             with pytest.raises(ValueError, match="resolve"):
                 validate_url("http://does-not-exist.invalid")
 

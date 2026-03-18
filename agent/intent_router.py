@@ -28,6 +28,7 @@ KNOWN_INTENTS = (
     "edit_request",
     "reroll",
     "generate_content",
+    "use_skill",
     "schedule_post",
     "change_style",
     "modify_last",
@@ -217,6 +218,7 @@ Available intents:
 - edit_request: User wants to modify a pending draft (has specific feedback)
 - reroll: User wants to regenerate content from scratch
 - generate_content: User wants to create new content (has a topic/idea)
+- use_skill: User wants a strategic capability (campaign plan, content calendar, weekly digest, competitor scan, thread, etc.) — match against the available skills listed below
 - schedule_post: User wants to schedule a post for a future time (says "schedule", "post at", "post tomorrow", "queue up", etc.)
 - change_style: User wants to change the visual or writing style
 - modify_last: User wants to tweak the last generated content
@@ -235,6 +237,7 @@ Respond with ONLY valid JSON:
 
 For edit_request, include: {"feedback": "the user's feedback"}
 For generate_content, include: {"topic": "extracted topic"}
+For use_skill, include: {"skill": "matched skill name", "topic": "what the user wants"}
 For schedule_post, include: {"time": "the time expression", "topic": "what to post about"}
 For change_style, include: {"style": "requested style"}
 """
@@ -250,6 +253,16 @@ def _build_classify_user_message(message: str, context: ConversationContext) -> 
         parts.append(f"- Last content type: {context.last_content_type}")
     if context.recent_intents:
         parts.append(f"- Recent intents: {', '.join(context.recent_intents[-3:])}")
+
+    # Inject available skills so Haiku can match use_skill intent
+    try:
+        from agent.skills import get_skills_for_routing
+        skills_summary = get_skills_for_routing(max_tokens=300)
+        if skills_summary:
+            parts.append(f"\nAvailable skills:\n{skills_summary}")
+    except Exception:
+        pass
+
     return "\n".join(parts)
 
 

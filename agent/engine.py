@@ -425,13 +425,61 @@ async def _run_loop(
 
     # Run default-FAIL quality gate on finalized draft
     if result.draft:
+        draft_format = result.draft.get("format", "single")
+
+        # For reports: auto-generate HTML via report_generator
+        if draft_format == "report":
+            try:
+                from agent.report_generator import generate_report
+                report_path = generate_report(
+                    report_type=result.draft.get("report_type", "performance"),
+                    title=result.draft.get("title", ""),
+                    subtitle=result.draft.get("subtitle", ""),
+                    sections=result.draft.get("report_sections"),
+                )
+                if report_path:
+                    result.draft["_report_path"] = report_path
+                    logger.info("Report generated: %s", report_path)
+            except Exception as e:
+                logger.warning("Report auto-generation failed: %s", e)
+
+        # For calendars: save markdown content calendar
+        if draft_format == "calendar":
+            try:
+                from agent.calendar_generator import generate_calendar
+                cal_path = generate_calendar(result.draft)
+                if cal_path:
+                    result.draft["_calendar_path"] = cal_path
+                    logger.info("Calendar generated: %s", cal_path)
+            except Exception as e:
+                logger.warning("Calendar generation failed: %s", e)
+
+        # For threads: sanitize each post's text
+        if draft_format == "thread" and result.draft.get("thread_posts"):
+            for post in result.draft["thread_posts"]:
+                post_text = post.get("text", "")
+                if post_text:
+                    post["text"] = _HASHTAG_RE.sub("", post_text).strip()
+                    post["text"] = _AI_WORDS.sub("", post["text"]).strip()
+                    post["text"] = re.sub(r"  +", " ", post["text"])
+                    # Enforce 280 char limit per post
+                    if len(post["text"]) > 280:
+                        post["text"] = post["text"][:277] + "..."
+            # Use first post as caption for quality gate compatibility
+            if not result.draft.get("caption"):
+                result.draft["caption"] = result.draft["thread_posts"][0].get("text", "")
+
         from agent.self_review import draft_quality_gate
         gate = draft_quality_gate(result.draft)
         if gate["auto_fixed"]:
             logger.info("Quality gate auto-fixed: %s", gate["auto_fixed"])
         if not gate["passed"]:
             failed = [c for c in gate["checks"] if not c["passed"]]
-            logger.warning("Quality gate: NEEDS WORK — %s", [c["rule"] for c in failed])
+            # For non-single formats, image_prompt is optional
+            if draft_format != "single":
+                failed = [c for c in failed if c["rule"] != "has_image_prompt"]
+            if failed:
+                logger.warning("Quality gate: NEEDS WORK — %s", [c["rule"] for c in failed])
 
         # Weighted quality score
         from agent.scoring import score_draft
@@ -452,6 +500,9 @@ async def _run_loop(
 
         # Risk scoring
         all_text = f"{result.draft.get('caption', '')} {result.draft.get('title', '')} {result.draft.get('subtitle', '')}"
+        # For threads, include all post texts in risk check
+        if draft_format == "thread" and result.draft.get("thread_posts"):
+            all_text += " " + " ".join(p.get("text", "") for p in result.draft["thread_posts"])
         from agent.risk_score import score_risk
         risk = score_risk(all_text)
         if risk["risk_level"] != "low":

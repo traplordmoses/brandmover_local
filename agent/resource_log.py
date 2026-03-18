@@ -13,6 +13,7 @@ class ResourceTracker:
     files_loaded: list[str] = field(default_factory=list)
     figma_nodes_checked: list[str] = field(default_factory=list)
     scripts_executed: list[str] = field(default_factory=list)
+    skills_used: list[str] = field(default_factory=list)
     apis_called: list[str] = field(default_factory=list)
     input_tokens: int = 0
     output_tokens: int = 0
@@ -28,6 +29,10 @@ class ResourceTracker:
     def log_script(self, name: str) -> None:
         if name not in self.scripts_executed:
             self.scripts_executed.append(name)
+
+    def log_skill(self, name: str) -> None:
+        if name not in self.skills_used:
+            self.skills_used.append(name)
 
     def log_api(self, name: str) -> None:
         if name not in self.apis_called:
@@ -47,6 +52,8 @@ class ResourceTracker:
             items.append(f"figma:{n}")
         for s in self.scripts_executed:
             items.append(f"script:{s}")
+        for sk in self.skills_used:
+            items.append(f"skill:{sk}")
         for a in self.apis_called:
             items.append(f"api:{a}")
         return items
@@ -60,6 +67,8 @@ class ResourceTracker:
             parts.append(f"Figma nodes: {', '.join(self.figma_nodes_checked)}")
         if self.scripts_executed:
             parts.append(f"Scripts: {', '.join(self.scripts_executed)}")
+        if self.skills_used:
+            parts.append(f"Skills: {', '.join(self.skills_used)}")
         if self.apis_called:
             parts.append(f"APIs: {', '.join(self.apis_called)}")
         if self.input_tokens or self.output_tokens:

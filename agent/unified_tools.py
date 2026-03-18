@@ -785,6 +785,55 @@ _campaign_preview_def = {
     },
 }
 
+_generate_report_def = {
+    "name": "generate_report",
+    "description": (
+        "Generate a branded HTML report. Types: 'performance' (generation stats, approval rates, costs), "
+        "'campaign' (progress for a specific campaign), 'feedback' (approval patterns), "
+        "'custom' (freeform sections you define). Returns the file path — send it to the user with send_file."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "report_type": {
+                "type": "string",
+                "enum": ["performance", "campaign", "feedback", "custom"],
+                "description": "Type of report to generate.",
+            },
+            "title": {
+                "type": "string",
+                "description": "Report title. Auto-generated if empty.",
+            },
+            "subtitle": {
+                "type": "string",
+                "description": "Report subtitle.",
+            },
+            "campaign_name": {
+                "type": "string",
+                "description": "Campaign name (required for campaign reports).",
+            },
+            "sections": {
+                "type": "array",
+                "description": (
+                    "For custom reports: list of sections. "
+                    "Each: {heading, content, type} where type is 'text', 'table', or 'stats'. "
+                    "For table: content is JSON {headers: [...], rows: [[...]]}. "
+                    "For stats: content is JSON [{label, value}]."
+                ),
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "heading": {"type": "string"},
+                        "content": {"type": "string"},
+                        "type": {"type": "string", "enum": ["text", "table", "stats"]},
+                    },
+                },
+            },
+        },
+        "required": ["report_type"],
+    },
+}
+
 _register_draft_def = {
     "name": "register_draft",
     "description": (
@@ -1076,6 +1125,7 @@ UNIFIED_TOOL_DEFINITIONS = _BASE_TOOL_DEFINITIONS + [
     _edit_video_def,
     _review_video_def,
     _campaign_preview_def,
+    _generate_report_def,
     {
         "name": "analyze_video_scenes",
         "description": (
@@ -1329,6 +1379,7 @@ _ALLOWED_MODULES = frozenset({
     'textwrap', 'string', 'functools', 'itertools', 'operator',
     'decimal', 'fractions', 'statistics', 'copy', 'enum', 'abc',
     'struct', 'hashlib', 'uuid', 'pprint',
+    'pathlib', 'io', 'base64', 'html', 'urllib',
 })
 
 _BLOCKED_NAMES = frozenset({
@@ -2650,6 +2701,35 @@ async def _handle_campaign_preview(
     return json.dumps({"success": True, "path": path, "message": f"Preview generated at {path}. Use send_file to deliver it."})
 
 
+async def _handle_generate_report(
+    input_dict: dict, tracker: ResourceTracker, user_id: int | None = None,
+    tool_context: dict | None = None,
+) -> str:
+    from agent.report_generator import generate_report
+
+    report_type = input_dict.get("report_type", "performance")
+    title = input_dict.get("title", "")
+    subtitle = input_dict.get("subtitle", "")
+    campaign_name = input_dict.get("campaign_name", "")
+    sections = input_dict.get("sections", None)
+
+    path = generate_report(
+        report_type=report_type,
+        title=title,
+        subtitle=subtitle,
+        campaign_name=campaign_name,
+        sections=sections,
+    )
+    if not path:
+        return json.dumps({"error": f"Failed to generate {report_type} report."})
+
+    return json.dumps({
+        "success": True,
+        "path": path,
+        "message": f"Report generated at {path}. Use send_file to deliver it.",
+    })
+
+
 async def _handle_record_walkthrough(
     input_dict: dict, tracker: ResourceTracker, user_id: int | None = None,
     tool_context: dict | None = None,
@@ -2848,6 +2928,7 @@ _UNIFIED_HANDLERS = {
     "create_campaign": _handle_create_campaign,
     "campaign_status": _handle_campaign_status,
     "campaign_preview": _handle_campaign_preview,
+    "generate_report": _handle_generate_report,
     "record_walkthrough": _handle_record_walkthrough,
     "smart_record": _handle_smart_record,
     "style_video": _handle_style_video,

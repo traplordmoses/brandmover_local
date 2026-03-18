@@ -119,6 +119,69 @@ async def post_to_x(
 _cached_username: str | None = None
 
 
+async def post_thread_to_x(
+    posts: list[dict],
+) -> list[str]:
+    """Post a thread (reply chain) to X.
+
+    Args:
+        posts: List of dicts, each with 'text' (required) and optional 'image_url'.
+               First post starts the thread, subsequent posts reply to the previous.
+
+    Returns:
+        List of tweet URLs in order.
+    """
+    if not posts:
+        raise ValueError("Thread must have at least one post.")
+
+    client_v2 = _get_client_v2()
+    api_v1 = _get_api_v1()
+    username = await _get_cached_username(client_v2)
+
+    tweet_urls = []
+    previous_tweet_id = None
+
+    for i, post in enumerate(posts):
+        text = post.get("text", "").strip()
+        if not text:
+            continue
+
+        # Truncate to 280 chars
+        if len(text) > 280:
+            text = text[:277] + "..."
+
+        # Upload image if provided
+        media_id = None
+        image_url = post.get("image_url")
+        if image_url:
+            try:
+                image_bytes = await _download_image(image_url)
+                media = await asyncio.to_thread(
+                    api_v1.media_upload,
+                    filename=f"thread_{i}.webp",
+                    file=io.BytesIO(image_bytes),
+                )
+                media_id = media.media_id
+            except Exception as e:
+                logger.warning("Thread post %d image upload failed: %s", i + 1, e)
+
+        kwargs = {"text": text}
+        if media_id:
+            kwargs["media_ids"] = [media_id]
+        if previous_tweet_id:
+            kwargs["in_reply_to_tweet_id"] = previous_tweet_id
+
+        response = await asyncio.to_thread(client_v2.create_tweet, **kwargs)
+        tweet_id = response.data["id"]
+        previous_tweet_id = tweet_id
+        tweet_url = f"https://x.com/{username}/status/{tweet_id}"
+        tweet_urls.append(tweet_url)
+
+        logger.info("Thread post %d/%d posted: %s", i + 1, len(posts), tweet_url)
+
+    return tweet_urls
+
+
 async def _get_cached_username(client_v2: tweepy.Client) -> str:
     """Get the authenticated user's username, cached after first call."""
     global _cached_username

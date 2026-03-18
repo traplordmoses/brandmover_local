@@ -69,6 +69,7 @@ def create_bot() -> Application:
     app.add_handler(CommandHandler("onboard_cancel", handlers.onboard_cancel_command))
     app.add_handler(CommandHandler("onboard_skip", handlers.onboard_skip_command))
     app.add_handler(CommandHandler("library", handlers.library_command))
+    app.add_handler(CommandHandler("skills", handlers.skills_command))
     app.add_handler(CommandHandler("strategy", handlers.strategy_command))
     app.add_handler(CommandHandler("reset_brand", handlers.reset_brand_command))
     app.add_handler(CommandHandler("regen_guidelines", handlers.regen_guidelines_command))

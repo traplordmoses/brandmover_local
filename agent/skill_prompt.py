@@ -110,27 +110,22 @@ def _get_workspace_injection() -> str:
 
 def _get_skills_block() -> str:
     """Return skills registry block for agent prompt. Empty if no skills."""
-    from agent.skills import get_skill_summary
-    summary = get_skill_summary()
+    from agent.skills import get_skills_for_routing
+    summary = get_skills_for_routing(max_tokens=600)
     if not summary:
         return ""
     return f"""
 
 ## SKILLS
 
-You have saved skills from previous sessions — reusable capabilities you've built up over time.
-Before writing code from scratch, check if a relevant skill exists. Using a skill is faster,
-tested, and consistent.
+You have saved skills — reusable strategic capabilities. Check if a skill matches before working from scratch.
 
 {summary}
 
 To use a skill: call `use_skill` with the skill name. It returns full instructions + scripts.
 To save a new skill: after solving a novel problem, call `create_skill` to save it for future use.
-To browse skills: call `list_skills` to see everything available.
 
-**When to create a skill:** If you wrote custom code (via execute_code) that worked well and
-could be useful again, save it as a skill. Good candidates: data fetchers, image processors,
-format converters, analysis scripts, template generators."""
+If the user message starts with `[skill:name]`, the router already matched a skill — call `use_skill` with that name immediately."""
 
 
 def build_system_prompt() -> str:
@@ -178,6 +173,15 @@ you receive recent activity context at the top of the user message. use it silen
    - subtitle: MAX 8 WORDS (e.g. "the future of decentralized identity"){platform_field}
 
 title and subtitle are text overlays on the branded card. shorter is always better — overflow looks broken. {platform_block}
+
+## threads
+
+for multi-post threads, use `finish` with `format: "thread"` and `thread_posts` array. each post has `text` (max 280 chars) and optional `image_prompt`. the caption field becomes the hook (first post). thread structure: hook → body posts → turn/reveal → CTA. keep 5-7 posts.
+
+## calendars
+
+for content calendars, use `finish` with `format: "calendar"` and `calendar_entries` array. each entry has `date`, `time`, `theme`, `type`, `topic`, `status`. the calendar is saved as brand/content_calendar.md.
+
 {image_mode_block}
 content types (pick best fit):
 {content_types_block}

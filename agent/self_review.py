@@ -18,6 +18,26 @@ from config import settings
 
 logger = logging.getLogger(__name__)
 
+
+# ---------------------------------------------------------------------------
+# Skill tracing
+# ---------------------------------------------------------------------------
+
+def trace_feedback_to_skills(feedback_entry: dict) -> list[str]:
+    """Given a feedback entry, identify which skills were used.
+
+    Checks resources_used for 'skill:name' entries.
+    Returns list of skill names involved.
+    """
+    resources = feedback_entry.get("resources_used", [])
+    skills = []
+    for r in resources:
+        if isinstance(r, str) and r.startswith("skill:"):
+            skill_name = r[len("skill:"):]
+            if skill_name and skill_name not in skills:
+                skills.append(skill_name)
+    return skills
+
 _project_root = Path(__file__).resolve().parent.parent
 _STATE_DIR = _project_root / "state"
 _FEEDBACK_FILE = _STATE_DIR / "feedback.json"
@@ -308,6 +328,33 @@ async def run_self_review() -> dict:
     except OSError as e:
         logger.warning("Failed to write last_self_review.json: %s", e)
 
+    # h) Trace feedback to skills — record stats and append learnings for rejections
+    from agent.skills import record_skill_use, append_skill_learning
+
+    skill_learnings_added = 0
+    for entry in feedback_entries:
+        involved_skills = trace_feedback_to_skills(entry)
+        if not involved_skills:
+            continue
+
+        is_approved = entry.get("action") == "approved"
+        for sk_name in involved_skills:
+            record_skill_use(sk_name, approved=is_approved)
+
+            # For rejections, extract learning from feedback and append to skill
+            if not is_approved:
+                rejection_reason = entry.get("feedback") or entry.get("reason", "")
+                if rejection_reason and len(rejection_reason) > 5:
+                    append_skill_learning(
+                        sk_name,
+                        rejection_reason.strip()[:200],
+                        source="self_review",
+                    )
+                    skill_learnings_added += 1
+
+    if skill_learnings_added:
+        logger.info("Self-review: added %d skill learnings from rejections", skill_learnings_added)
+
     logger.info(
         "Self-review: complete in %.1fs — approval_rate=%.0f%%, %d patterns, %d friction points",
         time.time() - t_start,
@@ -316,7 +363,7 @@ async def run_self_review() -> dict:
         len(friction),
     )
 
-    # h) Return results
+    # i) Return results
     insights = patterns + friction
     return {
         "insights": insights,

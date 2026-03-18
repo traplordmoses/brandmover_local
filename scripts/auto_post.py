@@ -487,6 +487,15 @@ async def run_cron(
     except Exception as e:
         logger.debug("Self-review daily check failed: %s", e)
 
+    # --- 4b. Weekly digest (Sundays) ---
+    try:
+        from agent.weekly_digest import maybe_trigger_weekly_digest
+        digest_sent = await maybe_trigger_weekly_digest(bot=bot)
+        if digest_sent:
+            logger.info("Weekly digest sent")
+    except Exception as e:
+        logger.debug("Weekly digest check failed: %s", e)
+
     # --- 5. Topic bank refresh (every TOPIC_BANK_REFRESH_INTERVAL_HOURS) ---
     try:
         import time as _time

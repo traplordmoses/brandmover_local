@@ -6,6 +6,96 @@
       "created": "2026-03-16",
       "author": "agent",
       "status": "active"
+    },
+    {
+      "name": "build-campaign-plan",
+      "description": "Design multi-day marketing campaigns with objectives, audiences, channels, timeline, and daily content angles. Outputs structured JSON for campaigns.py.",
+      "category": "strategy",
+      "priority": 1,
+      "created": "2026-03-17",
+      "author": "agent",
+      "status": "active"
+    },
+    {
+      "name": "build-content-calendar",
+      "description": "Generate weekly/monthly content calendars balancing themes, content types, and posting cadence against schedule.json slots.",
+      "category": "strategy",
+      "priority": 1,
+      "created": "2026-03-17",
+      "author": "agent",
+      "status": "active"
+    },
+    {
+      "name": "generate-thread",
+      "description": "Create multi-post X threads with hooks, pacing, education arcs, and CTAs. Each post under 280 chars.",
+      "category": "content_creation",
+      "priority": 1,
+      "created": "2026-03-17",
+      "author": "agent",
+      "status": "active"
+    },
+    {
+      "name": "weekly-digest",
+      "description": "Auto-summarize weekly performance — posts published, engagement patterns, approval rates, top content. HTML report output.",
+      "category": "analytics",
+      "priority": 2,
+      "created": "2026-03-17",
+      "author": "agent",
+      "status": "active"
+    },
+    {
+      "name": "repurpose-content",
+      "description": "Transform one piece of content into multiple formats — thread, single post, image caption, newsletter section.",
+      "category": "repurposing",
+      "priority": 2,
+      "created": "2026-03-17",
+      "author": "agent",
+      "status": "active"
+    },
+    {
+      "name": "competitor-scan",
+      "description": "Research competitor social presence, positioning, and content strategy. Outputs structured comparison with actionable takeaways.",
+      "category": "strategy",
+      "priority": 2,
+      "created": "2026-03-17",
+      "author": "agent",
+      "status": "active"
+    },
+    {
+      "name": "launch-checklist",
+      "description": "Generate pre/during/post launch marketing checklists with T-minus countdown, content assignments, and dependencies.",
+      "category": "strategy",
+      "priority": 3,
+      "created": "2026-03-17",
+      "author": "agent",
+      "status": "active"
+    },
+    {
+      "name": "crisis-playbook",
+      "description": "Pre-written response templates for negative events — exploits, FUD, outages. Includes escalation paths and tone adjustments.",
+      "category": "strategy",
+      "priority": 3,
+      "created": "2026-03-17",
+      "author": "agent",
+      "status": "active"
+    },
+    {
+      "name": "analyze-narrative",
+      "description": "Read market/ecosystem conditions and recommend current narrative angles — what to lean into, avoid, or counter.",
+      "category": "strategy",
+      "priority": 2,
+      "created": "2026-03-17",
+      "author": "agent",
+      "status": "active"
+    },
+    {
+      "name": "grant-application",
+      "description": "Write ecosystem grant applications with project description, milestones, budget, team, and impact sections.",
+      "category": "crypto_web3",
+      "priority": 3,
+      "created": "2026-03-17",
+      "author": "agent",
+      "status": "active"
     }
   ]
 }

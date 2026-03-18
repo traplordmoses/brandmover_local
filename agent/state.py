@@ -115,6 +115,8 @@ def save_pending(
     content_type: str | None = None,
     user_id: int | None = None,
     conversation_history: list | None = None,
+    draft_format: str = "single",
+    format_data: dict | None = None,
 ) -> None:
     """
     Save a draft as pending approval.
@@ -132,6 +134,8 @@ def save_pending(
         content_type: Content type for LoRA training filtering.
         user_id: Telegram user ID. None defaults to admin.
         conversation_history: Agent conversation messages for revision continuity.
+        draft_format: Output format — "single", "thread", "calendar", "report".
+        format_data: Format-specific data (e.g. thread_posts, report_sections).
     """
     with _sync_lock:
         pending = {
@@ -153,6 +157,10 @@ def save_pending(
             pending["content_type"] = content_type
         if conversation_history:
             pending["conversation_history"] = conversation_history
+        if draft_format and draft_format != "single":
+            pending["format"] = draft_format
+        if format_data:
+            pending["format_data"] = format_data
         s = _read_state(user_id)
 
         # Archive the current pending draft (if any) before overwriting

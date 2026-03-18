@@ -37,7 +37,7 @@ brand/skills/
 import json
 import logging
 import shutil
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 
 from config import settings
@@ -285,3 +285,153 @@ def delete_skill(name: str) -> dict:
 
     logger.info("Deleted skill '%s'", name)
     return {"success": True, "message": f"Skill '{name}' deleted."}
+
+
+# ---------------------------------------------------------------------------
+# Learning infrastructure
+# ---------------------------------------------------------------------------
+
+def append_skill_learning(name: str, learning: str, source: str = "feedback") -> dict:
+    """Append a learning to a skill's Edge Cases & Learnings section.
+
+    Args:
+        name: Skill name.
+        learning: The learning text (one line, actionable).
+        source: "feedback", "self_review", or "operator".
+
+    Finds the '## Edge Cases & Learnings' section in SKILL.md and appends
+    the learning. If no such section exists, appends one at the end.
+    Returns {success, message}.
+    """
+    skill_dir = _SKILLS_DIR / name
+    skill_file = skill_dir / "SKILL.md"
+    if not skill_file.exists():
+        return {"success": False, "message": f"Skill '{name}' not found."}
+
+    timestamp = date.today().isoformat()
+    entry = f"- [{timestamp}] {learning} (source: {source})"
+
+    content = skill_file.read_text(encoding="utf-8")
+
+    section_header = "## Edge Cases & Learnings"
+    if section_header in content:
+        # Find the section and append after it (before the next ## or end of file)
+        idx = content.index(section_header)
+        rest = content[idx + len(section_header):]
+        # Find the next ## heading (if any)
+        import re
+        next_section = re.search(r"\n## ", rest)
+        if next_section:
+            insert_pos = idx + len(section_header) + next_section.start()
+            content = content[:insert_pos] + "\n" + entry + content[insert_pos:]
+        else:
+            content = content.rstrip() + "\n" + entry + "\n"
+    else:
+        content = content.rstrip() + "\n\n" + section_header + "\n" + entry + "\n"
+
+    skill_file.write_text(content, encoding="utf-8")
+    logger.info("Appended learning to skill '%s': %s", name, learning[:60])
+    return {"success": True, "message": f"Learning appended to '{name}'."}
+
+
+def get_skill_stats(name: str) -> dict:
+    """Get usage and performance stats for a skill.
+
+    Returns {uses, approvals, rejections, approval_rate, last_used, learnings_count}.
+    Reads from REGISTRY.json stats field.
+    """
+    registry = load_registry()
+    entry = next((s for s in registry if s["name"] == name), None)
+    if not entry:
+        return {"error": f"Skill '{name}' not found in registry."}
+
+    stats = entry.get("stats", {})
+    uses = stats.get("uses", 0)
+    approvals = stats.get("approvals", 0)
+    rejections = stats.get("rejections", 0)
+
+    # Count learnings from SKILL.md
+    learnings_count = 0
+    skill_file = _SKILLS_DIR / name / "SKILL.md"
+    if skill_file.exists():
+        content = skill_file.read_text(encoding="utf-8")
+        section_header = "## Edge Cases & Learnings"
+        if section_header in content:
+            section = content[content.index(section_header):]
+            # Count lines starting with "- ["
+            learnings_count = sum(
+                1 for line in section.splitlines() if line.strip().startswith("- [")
+            )
+
+    return {
+        "uses": uses,
+        "approvals": approvals,
+        "rejections": rejections,
+        "approval_rate": round(approvals / uses, 2) if uses > 0 else 0.0,
+        "last_used": stats.get("last_used"),
+        "learnings_count": learnings_count,
+    }
+
+
+def record_skill_use(name: str, approved: bool | None = None) -> None:
+    """Record that a skill was used. Called when feedback comes in.
+
+    Updates the skill's stats in REGISTRY.json:
+    - Increments uses count
+    - If approved is True/False, increments approvals/rejections
+    - Updates last_used timestamp
+    """
+    registry = load_registry()
+    entry = next((s for s in registry if s["name"] == name), None)
+    if not entry:
+        logger.warning("record_skill_use: skill '%s' not in registry", name)
+        return
+
+    stats = entry.setdefault("stats", {
+        "uses": 0, "approvals": 0, "rejections": 0, "last_used": None,
+    })
+    stats["uses"] = stats.get("uses", 0) + 1
+    stats["last_used"] = datetime.now().isoformat(timespec="seconds")
+
+    if approved is True:
+        stats["approvals"] = stats.get("approvals", 0) + 1
+    elif approved is False:
+        stats["rejections"] = stats.get("rejections", 0) + 1
+
+    _save_registry(registry)
+
+
+def get_skills_for_routing(max_tokens: int = 500) -> str:
+    """Get a compact skill summary optimized for routing decisions.
+
+    Returns a tighter format than get_skill_summary():
+    - name | description | approval_rate | uses
+    Sorted by usage frequency (most used first).
+    Only includes active skills.
+    """
+    skills = load_registry()
+    active = [s for s in skills if s.get("status", "active") == "active"]
+    if not active:
+        return ""
+
+    # Sort by usage frequency (most used first)
+    def _uses(s):
+        return s.get("stats", {}).get("uses", 0)
+
+    active.sort(key=_uses, reverse=True)
+
+    lines = []
+    char_count = 0
+    for s in active:
+        stats = s.get("stats", {})
+        uses = stats.get("uses", 0)
+        approvals = stats.get("approvals", 0)
+        rate = f"{approvals / uses:.0%}" if uses > 0 else "n/a"
+        line = f"{s['name']} | {s['description']} | {rate} | {uses} uses"
+        # Rough token estimate: 1 token ~= 4 chars
+        if char_count + len(line) > max_tokens * 4:
+            break
+        lines.append(line)
+        char_count += len(line) + 1
+
+    return "\n".join(lines)
