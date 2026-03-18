@@ -71,14 +71,15 @@ def _default_state() -> dict:
 # ---------------------------------------------------------------------------
 
 
-def can_post(min_gap_minutes: int = 120, max_posts_per_day: int = 6) -> tuple[bool, str]:
+def can_post(min_gap_minutes: int = 120, max_posts_per_day: int = 6, ignore_paused: bool = False) -> tuple[bool, str]:
     """Check if a post is allowed right now.
 
     Returns (allowed, reason) where reason explains why posting is blocked.
+    When ignore_paused=True, skips the pause check (for user-scheduled posts).
     """
     state = _read_state()
 
-    if state.get("paused"):
+    if state.get("paused") and not ignore_paused:
         return False, "Auto-posting is paused"
 
     # Check daily limit

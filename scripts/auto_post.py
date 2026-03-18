@@ -357,10 +357,11 @@ async def process_scheduled_item(
 
     schedule_queue.mark_generating(item_id)
 
-    # Rate limit check
+    # Rate limit check — user-scheduled posts bypass the pause flag
+    # (pausing only affects predefined auto-post slots, not explicit user requests)
     min_gap = global_config.get("min_gap_minutes", 120)
     max_posts = global_config.get("max_posts_per_day", 6)
-    allowed, reason = auto_state.can_post(min_gap, max_posts)
+    allowed, reason = auto_state.can_post(min_gap, max_posts, ignore_paused=True)
     if not allowed and not dry_run:
         logger.info("Skipping scheduled %s: %s", item_id, reason)
         # Don't mark as failed — leave as generating so it retries next cycle
