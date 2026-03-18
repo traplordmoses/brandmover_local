@@ -368,6 +368,16 @@ async def run_unified(
     return result
 
 
+async def run(
+    request: str | None = None,
+    message: str | None = None,
+    **kwargs,
+) -> UnifiedResult:
+    """Alias for run_unified — accepts both 'request' and 'message' kwargs."""
+    msg = request or message or ""
+    return await run_unified(message=msg, **kwargs)
+
+
 def _tool_description(tool_name: str, tool_input: dict) -> str:
     """Brief human-readable description of a tool call.
 

@@ -266,16 +266,12 @@ async def _handle_unified(
                 "turns": result.turns_used, "time": result.total_time,
             })
         else:
-            text = result.final_text or "I processed your request but didn't generate a draft."
+            text = result.response_text or "I processed your request but didn't generate a draft."
             max_len = 3900
             if len(text) > max_len:
                 text = text[:max_len] + "..."
-            footer = (
-                f"\n\n<i>({result.turns_used} turns, {result.total_time:.1f}s"
-                f"{', tools: ' + ', '.join(result.tool_calls_made) if result.tool_calls_made else ''})</i>"
-            )
             await update.message.reply_text(
-                f"{_esc(text)}{footer}",
+                _esc(text),
                 parse_mode="HTML",
             )
 
@@ -674,16 +670,12 @@ async def _handle_agent_mode(update: Update, request: str, user_id: int | None =
                 pass
 
         if not result.draft:
-            text = result.final_text or "I processed your request but didn't generate a draft."
+            text = result.response_text or "I processed your request but didn't generate a draft."
             max_len = 3900
             if len(text) > max_len:
                 text = text[:max_len] + "..."
-            footer = (
-                f"\n\n<i>({result.turns_used} turns, {result.total_time:.1f}s"
-                f"{', tools: ' + ', '.join(result.tool_calls_made) if result.tool_calls_made else ''})</i>"
-            )
             await update.message.reply_text(
-                f"{_esc(text)}{footer}",
+                _esc(text),
                 parse_mode="HTML",
             )
             return

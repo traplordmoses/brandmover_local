@@ -148,6 +148,57 @@ class TestParseTime:
         expected = (self._now() + timedelta(days=4)).replace(hour=15, minute=0)
         assert abs(ts - expected.timestamp()) < 1
 
+    # --- Month + day formats ---
+
+    def test_month_day_before_time(self):
+        # "march 26 3:33pm" — now is March 2
+        ts, display = schedule_queue.parse_time("march 26 3:33pm", now=self._now())
+        assert ts is not None
+        expected = datetime(2026, 3, 26, 15, 33, 0, tzinfo=timezone.utc)
+        assert abs(ts - expected.timestamp()) < 1
+
+    def test_month_day_at_time(self):
+        # "march 26 at 3:33pm"
+        ts, display = schedule_queue.parse_time("march 26 at 3:33pm", now=self._now())
+        assert ts is not None
+        expected = datetime(2026, 3, 26, 15, 33, 0, tzinfo=timezone.utc)
+        assert abs(ts - expected.timestamp()) < 1
+
+    def test_abbreviated_month_day(self):
+        # "mar 26 3pm"
+        ts, display = schedule_queue.parse_time("mar 26 3pm", now=self._now())
+        assert ts is not None
+        expected = datetime(2026, 3, 26, 15, 0, 0, tzinfo=timezone.utc)
+        assert abs(ts - expected.timestamp()) < 1
+
+    def test_time_before_month_day(self):
+        # "3:33pm march 26"
+        ts, display = schedule_queue.parse_time("3:33pm march 26", now=self._now())
+        assert ts is not None
+        expected = datetime(2026, 3, 26, 15, 33, 0, tzinfo=timezone.utc)
+        assert abs(ts - expected.timestamp()) < 1
+
+    def test_slash_date(self):
+        # "3/26 3:33pm"
+        ts, display = schedule_queue.parse_time("3/26 3:33pm", now=self._now())
+        assert ts is not None
+        expected = datetime(2026, 3, 26, 15, 33, 0, tzinfo=timezone.utc)
+        assert abs(ts - expected.timestamp()) < 1
+
+    def test_month_day_ordinal(self):
+        # "march 26th 3pm"
+        ts, display = schedule_queue.parse_time("march 26th 3pm", now=self._now())
+        assert ts is not None
+        expected = datetime(2026, 3, 26, 15, 0, 0, tzinfo=timezone.utc)
+        assert abs(ts - expected.timestamp()) < 1
+
+    def test_month_day_past_wraps_to_next_year(self):
+        # "january 5 3pm" when now is March 2 → should be Jan 5 2027
+        ts, display = schedule_queue.parse_time("january 5 3pm", now=self._now())
+        assert ts is not None
+        expected = datetime(2027, 1, 5, 15, 0, 0, tzinfo=timezone.utc)
+        assert abs(ts - expected.timestamp()) < 1
+
 
 # ---------------------------------------------------------------------------
 # parse_schedule_command tests

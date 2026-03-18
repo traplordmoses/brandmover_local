@@ -269,6 +269,52 @@ _WEEKDAYS = {
     "sunday": 6, "sun": 6,
 }
 
+_MONTHS = {
+    "january": 1, "jan": 1, "february": 2, "feb": 2,
+    "march": 3, "mar": 3, "april": 4, "apr": 4,
+    "may": 5, "june": 6, "jun": 6, "july": 7, "jul": 7,
+    "august": 8, "aug": 8, "september": 9, "sep": 9, "sept": 9,
+    "october": 10, "oct": 10, "november": 11, "nov": 11,
+    "december": 12, "dec": 12,
+}
+
+
+def _parse_month_day(text: str, now: datetime) -> datetime | None:
+    """Try to parse 'March 26', 'mar 26', '3/26', 'march 26th' into a date.
+
+    Returns a timezone-aware datetime (date only, time not set) or None.
+    """
+    text = re.sub(r"(\d+)(st|nd|rd|th)\b", r"\1", text)  # strip ordinals
+
+    # "March 26" / "mar 26"
+    m = re.match(r"([a-z]+)\s+(\d{1,2})$", text)
+    if m and m.group(1) in _MONTHS:
+        month = _MONTHS[m.group(1)]
+        day = int(m.group(2))
+        year = now.year
+        try:
+            target = datetime(year, month, day, tzinfo=now.tzinfo)
+        except ValueError:
+            return None
+        if target.date() < now.date():
+            target = target.replace(year=year + 1)
+        return target
+
+    # "3/26" or "03/26"
+    m = re.match(r"(\d{1,2})/(\d{1,2})$", text)
+    if m:
+        month, day = int(m.group(1)), int(m.group(2))
+        year = now.year
+        try:
+            target = datetime(year, month, day, tzinfo=now.tzinfo)
+        except ValueError:
+            return None
+        if target.date() < now.date():
+            target = target.replace(year=year + 1)
+        return target
+
+    return None
+
 
 def _get_local_tz():
     """Get the configured local timezone for interpreting user-provided times."""
@@ -293,6 +339,8 @@ def parse_time(text: str, now: datetime | None = None) -> tuple[float | None, st
     - "3pm", "3:30pm", "15:00"
     - "tomorrow 3pm", "tomorrow at 15:00"
     - "monday 9am", "friday at 3:30pm"
+    - "march 26 3:33pm", "mar 26 at 3pm", "3:33pm march 26"
+    - "3/26 3:33pm", "3:33pm 3/26"
     - "2026-03-05 14:00", "2026-03-05T14:00"
     - "today 5pm", "5pm today"
 
@@ -338,6 +386,61 @@ def parse_time(text: str, now: datetime | None = None) -> tuple[float | None, st
         except ValueError:
             return None, f"Could not parse date: {text}"
 
+    # --- Pattern 3: Month+day with time ---
+    # "march 26 3:33pm", "mar 26 at 3pm", "3:33pm march 26", "3/26 3:33pm"
+    # Split into date part and time part, try both orderings.
+    _month_day_time = re.match(
+        r"([a-z]+\s+\d{1,2}(?:st|nd|rd|th)?)\s+(?:at\s+)?(\d{1,2}(?::\d{2})?\s*(?:am|pm))",
+        text,
+    )
+    if not _month_day_time:
+        # Try "3:33pm march 26" (time first)
+        _mdt_rev = re.match(
+            r"(\d{1,2}(?::\d{2})?\s*(?:am|pm))\s+([a-z]+\s+\d{1,2}(?:st|nd|rd|th)?)",
+            text,
+        )
+        if _mdt_rev:
+            _date_val, _time_val = _mdt_rev.group(2), _mdt_rev.group(1)
+            _month_day_time = type("M", (), {
+                "group": lambda self, n, d=_date_val, t=_time_val: [None, d, t][n],
+            })()
+    if not _month_day_time:
+        # Try "3/26 3:33pm" (slash date)
+        _month_day_time = re.match(
+            r"(\d{1,2}/\d{1,2})\s+(?:at\s+)?(\d{1,2}(?::\d{2})?\s*(?:am|pm))",
+            text,
+        )
+    if not _month_day_time:
+        # Try "3:33pm 3/26" (time first, slash date)
+        _mdt_slash = re.match(
+            r"(\d{1,2}(?::\d{2})?\s*(?:am|pm))\s+(\d{1,2}/\d{1,2})",
+            text,
+        )
+        if _mdt_slash:
+            _date_val, _time_val = _mdt_slash.group(2), _mdt_slash.group(1)
+            _month_day_time = type("M", (), {
+                "group": lambda self, n, d=_date_val, t=_time_val: [None, d, t][n],
+            })()
+    if _month_day_time:
+        date_part = _month_day_time.group(1)
+        time_part = _month_day_time.group(2)
+        parsed_date = _parse_month_day(date_part, now)
+        if parsed_date is not None:
+            # Parse the time component
+            tm = re.match(r"(\d{1,2})(?::(\d{2}))?\s*(am|pm)", time_part)
+            if tm:
+                h = int(tm.group(1))
+                mn = int(tm.group(2) or 0)
+                ap = tm.group(3)
+                if ap == "pm" and h < 12:
+                    h += 12
+                elif ap == "am" and h == 12:
+                    h = 0
+                target = parsed_date.replace(hour=h, minute=mn, second=0, microsecond=0)
+                if target <= now:
+                    target = target.replace(year=target.year + 1)
+                return target.timestamp(), target.strftime(_display_fmt)
+
     # --- Extract time-of-day component ---
     time_match = re.search(r"(\d{1,2})(?::(\d{2}))?\s*(am|pm)?", text)
     if not time_match:
@@ -348,8 +451,14 @@ def parse_time(text: str, now: datetime | None = None) -> tuple[float | None, st
 
     # Check for trailing text after the time portion — may be a date keyword
     trailing = text[time_match.end():].strip()
-    if trailing and trailing not in ("today", "tomorrow") and trailing not in _WEEKDAYS:
-        return None, f"Could not parse: unexpected text after time"
+    # Reject trailing text that isn't a recognized date component
+    if trailing:
+        trailing_clean = trailing.lstrip("at").strip()
+        is_known = trailing_clean in ("today", "tomorrow") or trailing_clean in _WEEKDAYS
+        is_month_day = _parse_month_day(trailing_clean, now) is not None if trailing_clean else False
+        if not is_known and not is_month_day:
+            return None, f"Could not parse: unexpected text after time"
+        trailing = trailing_clean
 
     hour = int(time_match.group(1))
     minute = int(time_match.group(2) or 0)
@@ -398,10 +507,20 @@ def parse_time(text: str, now: datetime | None = None) -> tuple[float | None, st
         )
 
     else:
-        return None, (
-            f"Could not understand date \"{date_text}\". "
-            "Try: \"today\", \"tomorrow\", or a weekday name."
-        )
+        # Try month+day: "march 26", "mar 26", "3/26", "march 26th"
+        parsed_date = _parse_month_day(date_text, now)
+        if parsed_date is not None:
+            target = parsed_date.replace(
+                hour=hour, minute=minute, second=0, microsecond=0,
+            )
+            if target <= now:
+                # Date is today but time passed — push to next year
+                target = target.replace(year=target.year + 1)
+        else:
+            return None, (
+                f"Could not understand date \"{date_text}\". "
+                "Try: \"today\", \"tomorrow\", a weekday name, or \"March 26\"."
+            )
 
     return target.timestamp(), target.strftime(_display_fmt)
 
