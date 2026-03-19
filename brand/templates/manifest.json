@@ -1,0 +1,94 @@
+[
+  {
+    "id": "946183fa",
+    "name": "gameboy",
+    "path": "brand/templates/template_1772380793.png",
+    "width": 600,
+    "height": 1000,
+    "regions": [
+      {
+        "type": "image",
+        "x": 47,
+        "y": 32,
+        "width": 306,
+        "height": 306,
+        "description": "Main screen display area - primary content space"
+      }
+    ],
+    "aspect_ratio": "9:16",
+    "content_types": ["brand_asset"],
+    "analysis_notes": "Game Boy Color-style handheld device frame with translucent purple shell. The large white rectangular screen area is the primary content placement zone. Physical gaming controls (D-pad, A/B buttons, speaker) are part of the decorative frame and should not be covered."
+  },
+  {
+    "id": "802dcda6",
+    "name": "announcement",
+    "path": "brand/templates/generated_802dcda6.png",
+    "width": 1280,
+    "height": 720,
+    "regions": [
+      {
+        "type": "text",
+        "x": 90,
+        "y": 50,
+        "width": 450,
+        "height": 300,
+        "description": "Main headline text area"
+      },
+      {
+        "type": "image",
+        "x": 640,
+        "y": 150,
+        "width": 400,
+        "height": 400,
+        "description": "Featured image or logo placeholder"
+      },
+      {
+        "type": "logo",
+        "x": 90,
+        "y": 600,
+        "width": 200,
+        "height": 50,
+        "description": "FOID Foundation brand logo"
+      }
+    ],
+    "aspect_ratio": "16:9",
+    "content_types": ["announcement"],
+    "analysis_notes": "Generated from reference. Layout: split-panel with text left, logo/image right"
+  },
+  {
+    "id": "de7a7bf9",
+    "name": "meme",
+    "path": "brand/templates/template_1772417606.png",
+    "width": 1200,
+    "height": 700,
+    "regions": [
+      {
+        "type": "image",
+        "x": 0,
+        "y": 0,
+        "width": 1200,
+        "height": 700,
+        "description": "Full canvas background image"
+      },
+      {
+        "type": "text",
+        "x": 0,
+        "y": 0,
+        "width": 1200,
+        "height": 105,
+        "description": "Top text centered across top 15%"
+      },
+      {
+        "type": "text",
+        "x": 0,
+        "y": 595,
+        "width": 1200,
+        "height": 105,
+        "description": "Bottom text centered across bottom 15%"
+      }
+    ],
+    "aspect_ratio": "16:9",
+    "content_types": ["meme"],
+    "analysis_notes": "Abstract blue flowing background with light rays and bubble effects creates an ethereal, underwater or cosmic atmosphere suitable for overlaying content"
+  }
+]
