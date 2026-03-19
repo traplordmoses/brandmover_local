@@ -386,9 +386,10 @@ async def process_scheduled_item(
         return False
 
     # --- Exact-copy shortcut: bypass agent entirely for verbatim posts ---
+    # Matches: "Post this exact copy:", "Post this exact text:", "Post this exact text, no image:"
     import re as _re
     _exact_match = _re.search(
-        r"post this exact copy[^:]*:\s*\n+(.*)",
+        r"post this exact (?:copy|text)[^:]*:\s*\n*(.*)",
         prompt, _re.IGNORECASE | _re.DOTALL,
     )
     if _exact_match:
