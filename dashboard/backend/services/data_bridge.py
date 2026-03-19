@@ -248,15 +248,15 @@ def list_brand_documents() -> list[dict]:
 
 
 def read_brand_document(rel_path: str) -> str | None:
-    full = _PROJECT_ROOT / rel_path
-    if not full.exists() or not str(full).startswith(str(BRAND_DIR)):
+    full = (_PROJECT_ROOT / rel_path).resolve()
+    if not full.exists() or not full.is_relative_to(BRAND_DIR.resolve()):
         return None
     return full.read_text(encoding="utf-8")
 
 
 def write_brand_document(rel_path: str, content: str) -> bool:
-    full = _PROJECT_ROOT / rel_path
-    if not str(full).startswith(str(BRAND_DIR)):
+    full = (_PROJECT_ROOT / rel_path).resolve()
+    if not full.is_relative_to(BRAND_DIR.resolve()):
         return False
     full.parent.mkdir(parents=True, exist_ok=True)
     full.write_text(content, encoding="utf-8")

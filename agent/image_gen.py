@@ -207,6 +207,23 @@ def _strip_contradictions(text: str, locked: list[str]) -> str:
     return text
 
 
+_MAX_CACHED_IMAGES = 200
+
+def _evict_image_cache() -> None:
+    """Remove oldest cached images when cache exceeds limit."""
+    if not _IMAGE_CACHE_DIR.exists():
+        return
+    files = sorted(_IMAGE_CACHE_DIR.iterdir(), key=lambda f: f.stat().st_mtime)
+    excess = len(files) - _MAX_CACHED_IMAGES
+    if excess > 0:
+        for f in files[:excess]:
+            try:
+                f.unlink()
+            except OSError:
+                pass
+        logger.info("Evicted %d old cached images", excess)
+
+
 async def cache_image(url: str) -> str:
     """Download a Replicate image to local cache and return the local path.
 
@@ -236,6 +253,7 @@ async def cache_image(url: str) -> str:
         resp = await client.get(url)
         resp.raise_for_status()
         local_path.write_bytes(resp.content)
+        _evict_image_cache()
         logger.info("Cached image: %s → %s", url[:80], local_path.name)
     except httpx.HTTPError as e:
         logger.warning("Failed to cache image %s: %s", url[:80], e)
@@ -404,6 +422,39 @@ def _build_input(
     return base
 
 
+async def _poll_prediction(poll_url: str, headers: dict, label: str = "image") -> str | None:
+    """Poll a Replicate prediction until completion. Returns image URL or None."""
+    from agent._client import get_httpx
+    client = get_httpx()
+    poll_delay = 1.0
+    max_delay = 10.0
+    total_waited = 0.0
+    max_wait = 180.0
+
+    while total_waited < max_wait:
+        await asyncio.sleep(poll_delay)
+        total_waited += poll_delay
+        poll_resp = await client.get(poll_url, headers=headers)
+        poll_resp.raise_for_status()
+        poll_data = poll_resp.json()
+
+        status = poll_data.get("status")
+        if status == "succeeded":
+            image_url = _extract_url(poll_data.get("output"))
+            if image_url:
+                logger.info("%s generated: %s", label, image_url[:120])
+                image_url = await cache_image(image_url)
+                return image_url
+        elif status in ("failed", "canceled"):
+            logger.error("%s generation %s: %s", label, status, poll_data.get("error"))
+            return None
+
+        poll_delay = min(poll_delay * 1.5, max_delay)
+
+    logger.error("%s generation timed out after %.0fs polling", label, total_waited)
+    return None
+
+
 async def generate_image(
     prompt: str,
     content_type: str = "announcement",
@@ -493,39 +544,13 @@ async def generate_image(
                 image_url = await cache_image(image_url)
                 return image_url
 
-        # Otherwise poll for completion with exponential backoff
+        # Otherwise poll for completion
         poll_url = data.get("urls", {}).get("get")
         if not poll_url:
             logger.error("No poll URL in Replicate response")
             return None
 
-        poll_delay = 1.0
-        max_delay = 10.0
-        total_waited = 0.0
-        max_wait = 180.0  # 3 minutes
-
-        while total_waited < max_wait:
-            await asyncio.sleep(poll_delay)
-            total_waited += poll_delay
-            poll_resp = await client.get(poll_url, headers=headers)
-            poll_resp.raise_for_status()
-            poll_data = poll_resp.json()
-
-            status = poll_data.get("status")
-            if status == "succeeded":
-                image_url = _extract_url(poll_data.get("output"))
-                if image_url:
-                    logger.info("Image generated: %s", image_url[:120])
-                    image_url = await cache_image(image_url)
-                    return image_url
-            elif status in ("failed", "canceled"):
-                logger.error("Image generation %s: %s", status, poll_data.get("error"))
-                return None
-
-            poll_delay = min(poll_delay * 1.5, max_delay)
-
-        logger.error("Image generation timed out after %.0fs polling", total_waited)
-        return None
+        return await _poll_prediction(poll_url, headers, label="Image")
 
     except httpx.HTTPError as e:
         logger.error("Image generation failed (HTTP): %s", e)
@@ -617,33 +642,7 @@ async def generate_img2img(
             logger.error("No poll URL in Replicate img2img response")
             return None
 
-        poll_delay = 1.0
-        max_delay = 10.0
-        total_waited = 0.0
-        max_wait = 180.0
-
-        while total_waited < max_wait:
-            await asyncio.sleep(poll_delay)
-            total_waited += poll_delay
-            poll_resp = await client.get(poll_url, headers=headers)
-            poll_resp.raise_for_status()
-            poll_data = poll_resp.json()
-
-            status = poll_data.get("status")
-            if status == "succeeded":
-                image_url = _extract_url(poll_data.get("output"))
-                if image_url:
-                    logger.info("img2img generated: %s", image_url[:120])
-                    image_url = await cache_image(image_url)
-                    return image_url
-            elif status in ("failed", "canceled"):
-                logger.error("img2img %s: %s", status, poll_data.get("error"))
-                return None
-
-            poll_delay = min(poll_delay * 1.5, max_delay)
-
-        logger.error("img2img timed out after %.0fs polling", total_waited)
-        return None
+        return await _poll_prediction(poll_url, headers, label="img2img")
 
     except httpx.HTTPError as e:
         logger.error("img2img generation failed (HTTP): %s", e)

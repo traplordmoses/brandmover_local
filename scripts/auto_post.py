@@ -63,19 +63,101 @@ async def _notify_telegram(message: str) -> None:
     if not settings.TELEGRAM_BOT_TOKEN or not settings.TELEGRAM_ALLOWED_USER_ID:
         return
     try:
-        import httpx
+        from agent._client import get_httpx
+        client = get_httpx()
         url = f"https://api.telegram.org/bot{settings.TELEGRAM_BOT_TOKEN}/sendMessage"
         payload = {
             "chat_id": settings.TELEGRAM_ALLOWED_USER_ID,
             "text": message,
-            "parse_mode": "HTML",
         }
-        async with httpx.AsyncClient(timeout=15) as client:
-            resp = await client.post(url, json=payload)
-            if resp.status_code != 200:
-                logger.warning("Telegram notification failed: HTTP %s", resp.status_code)
+        resp = await client.post(url, json=payload)
+        if resp.status_code != 200:
+            logger.warning("Telegram notification failed: HTTP %s", resp.status_code)
     except Exception as e:
         logger.error("Telegram notification failed: %s", type(e).__name__)
+
+
+# ---------------------------------------------------------------------------
+# Shared generation helpers (CQ-16)
+# ---------------------------------------------------------------------------
+
+async def _run_agent_with_retries(
+    prompt: str,
+    label: str,
+    *,
+    retry_delay: int = _RETRY_DELAY_SECONDS,
+) -> "engine.AgentResult | None":
+    """Run the agent with retry logic.  Returns the result or None on failure."""
+    result = None
+    for attempt in range(_MAX_RETRIES + 1):
+        try:
+            result = await engine.run_agent(request=prompt)
+            if result.draft:
+                return result
+            logger.warning(
+                "Agent returned no draft for %s (attempt %d/%d)",
+                label, attempt + 1, _MAX_RETRIES + 1,
+            )
+        except Exception as e:
+            logger.error(
+                "Agent failed for %s (attempt %d/%d): %s",
+                label, attempt + 1, _MAX_RETRIES + 1, e,
+            )
+        if attempt < _MAX_RETRIES:
+            logger.info("Retrying in %ds...", retry_delay)
+            await asyncio.sleep(retry_delay)
+    return None
+
+
+async def _save_and_notify_draft(
+    result: "engine.AgentResult",
+    prompt: str,
+    slot_name: str,
+    *,
+    bot=None,
+    extra_save_kwargs: dict | None = None,
+) -> None:
+    """Save an agent result as a pending draft and notify via Telegram."""
+    caption = result.draft.get("caption", "")
+    image_url = result.image_url
+
+    save_kwargs = dict(
+        caption=caption,
+        hashtags=result.draft.get("hashtags", []),
+        image_url=image_url,
+        alt_text=result.draft.get("alt_text", ""),
+        image_prompt=result.draft.get("image_prompt", ""),
+        original_request=prompt,
+        image_urls=result.image_urls if len(result.image_urls) > 1 else None,
+        auto_slot=slot_name,
+        conversation_history=result.conversation_history,
+    )
+    if extra_save_kwargs:
+        save_kwargs.update(extra_save_kwargs)
+
+    await state.async_save_pending(**save_kwargs)
+
+    if image_url:
+        await asyncio.to_thread(
+            state.save_last_generated,
+            image_url,
+            result.draft.get("content_type", "default"),
+        )
+
+    if bot:
+        from bot.handlers import send_auto_draft
+        await send_auto_draft(bot, result.draft, image_url, slot_name)
+    else:
+        notification = (
+            f"<b>Auto-Draft Ready</b>  [slot: <code>{slot_name}</code>]\n\n"
+            f"{caption}\n\n"
+            f"/approve to post to X\n"
+            f"/reject <i>feedback</i> to revise\n"
+            f"/cancel to discard"
+        )
+        await _notify_telegram(notification)
+
+    logger.info("Draft queued for approval: slot=%s", slot_name)
 
 
 # ---------------------------------------------------------------------------
@@ -144,26 +226,8 @@ async def process_slot(
     logger.info("Prompt built for %s (%d chars, context=%d chars)",
                 slot_name, len(prompt), len(context_block))
 
-    # Run the agent (same pipeline as manual Telegram requests)
-    result = None
-    for attempt in range(_MAX_RETRIES + 1):
-        try:
-            result = await engine.run_agent(request=prompt)
-            if result.draft:
-                break
-            logger.warning(
-                "Agent returned no draft for %s (attempt %d/%d)",
-                slot_name, attempt + 1, _MAX_RETRIES + 1,
-            )
-        except Exception as e:
-            logger.error(
-                "Agent failed for %s (attempt %d/%d): %s",
-                slot_name, attempt + 1, _MAX_RETRIES + 1, e,
-            )
-
-        if attempt < _MAX_RETRIES:
-            logger.info("Retrying in %ds...", _RETRY_DELAY_SECONDS)
-            await asyncio.sleep(_RETRY_DELAY_SECONDS)
+    # Run the agent with retries
+    result = await _run_agent_with_retries(prompt, slot_name)
 
     if not result or not result.draft:
         logger.error("Failed to generate content for %s after %d attempts", slot_name, _MAX_RETRIES + 1)
@@ -179,7 +243,12 @@ async def process_slot(
 
     # --- Preference engine scoring ---
     try:
-        score_result = await preference_engine.score_draft(result.draft, prompt)
+        # Check for cached score on the draft to avoid redundant API calls
+        if "_cached_score" in result.draft:
+            score_result = result.draft["_cached_score"]
+        else:
+            score_result = await preference_engine.score_draft(result.draft, prompt)
+            result.draft["_cached_score"] = score_result
         logger.info(
             "Preference score for %s: %.1f (%s)",
             slot_name, score_result.score, score_result.reasoning[:80],
@@ -200,6 +269,7 @@ async def process_slot(
             retry_result = await engine.run_agent(request=retry_prompt)
             if retry_result and retry_result.draft:
                 retry_score = await preference_engine.score_draft(retry_result.draft, prompt)
+                retry_result.draft["_cached_score"] = retry_score
                 logger.info(
                     "Retry preference score for %s: %.1f", slot_name, retry_score.score,
                 )
@@ -247,41 +317,11 @@ async def process_slot(
             )
         return True
 
-    # --- Save as pending draft (same state the manual flow uses) ---
-    await state.async_save_pending(
-        caption=caption,
-        hashtags=result.draft.get("hashtags", []),
-        image_url=image_url,
-        alt_text=result.draft.get("alt_text", ""),
-        image_prompt=result.draft.get("image_prompt", ""),
-        original_request=prompt,
-        image_urls=result.image_urls if len(result.image_urls) > 1 else None,
-        auto_slot=slot_name,
-        auto_event_ids=event_ids if event_ids else None,
-        conversation_history=result.conversation_history,
+    # --- Save as pending draft and notify ---
+    await _save_and_notify_draft(
+        result, prompt, slot_name, bot=bot,
+        extra_save_kwargs={"auto_event_ids": event_ids if event_ids else None},
     )
-
-    # Save last generated for /edit support
-    if image_url:
-        await asyncio.to_thread(state.save_last_generated, image_url, result.draft.get("content_type", "default"))
-
-    # --- Send draft to Telegram for review ---
-    if bot:
-        # In-process mode: use the bot instance + full compositor
-        from bot.handlers import send_auto_draft
-        await send_auto_draft(bot, result.draft, image_url, slot_name)
-    else:
-        # Standalone mode: send via raw HTTP
-        notification = (
-            f"<b>Auto-Draft Ready</b>  [slot: <code>{slot_name}</code>]\n\n"
-            f"{caption}\n\n"
-            f"/approve to post to X\n"
-            f"/reject <i>feedback</i> to revise\n"
-            f"/cancel to discard"
-        )
-        await _notify_telegram(notification)
-
-    logger.info("Draft queued for approval: slot=%s", slot_name)
     return True
 
 
@@ -364,25 +404,14 @@ async def process_scheduled_item(
     allowed, reason = auto_state.can_post(min_gap, max_posts, ignore_paused=True)
     if not allowed and not dry_run:
         logger.info("Skipping scheduled %s: %s", item_id, reason)
-        # Don't mark as failed — leave as generating so it retries next cycle
-        # Reset back to pending so it's picked up again
-        items = schedule_queue._read_queue()
-        for i in items:
-            if i["id"] == item_id:
-                i["status"] = "pending"
-                break
-        schedule_queue._write_queue(items)
+        # Don't mark as failed — reset back to pending so it's picked up again
+        schedule_queue.reset_to_pending(item_id)
         return False
 
     # Don't queue if there's already a pending draft awaiting review
     if await state.async_has_pending() and not dry_run:
         logger.info("Skipping scheduled %s: a draft is already pending approval", item_id)
-        items = schedule_queue._read_queue()
-        for i in items:
-            if i["id"] == item_id:
-                i["status"] = "pending"
-                break
-        schedule_queue._write_queue(items)
+        schedule_queue.reset_to_pending(item_id)
         return False
 
     # --- Exact-copy shortcut: bypass agent entirely for verbatim posts ---
@@ -435,24 +464,8 @@ async def process_scheduled_item(
         logger.info("Exact-copy draft queued for approval: %s", item_id)
         return True
 
-    # Run the agent with the user's prompt
-    result = None
-    for attempt in range(_MAX_RETRIES + 1):
-        try:
-            result = await engine.run_agent(request=prompt)
-            if result.draft:
-                break
-            logger.warning(
-                "Agent returned no draft for scheduled %s (attempt %d/%d)",
-                item_id, attempt + 1, _MAX_RETRIES + 1,
-            )
-        except Exception as e:
-            logger.error(
-                "Agent failed for scheduled %s (attempt %d/%d): %s",
-                item_id, attempt + 1, _MAX_RETRIES + 1, e,
-            )
-        if attempt < _MAX_RETRIES:
-            await asyncio.sleep(60)  # shorter retry delay for user-scheduled
+    # Run the agent with retries (shorter delay for user-scheduled items)
+    result = await _run_agent_with_retries(prompt, f"scheduled:{item_id}", retry_delay=60)
 
     if not result or not result.draft:
         schedule_queue.mark_failed(item_id, "Could not generate content")
@@ -465,7 +478,6 @@ async def process_scheduled_item(
         return False
 
     caption = result.draft.get("caption", "")
-    image_url = result.image_url
 
     # Duplicate check
     if auto_state.is_duplicate_caption(caption):
@@ -482,40 +494,11 @@ async def process_scheduled_item(
         schedule_queue.mark_done(item_id)
         return True
 
-    # Save as pending draft
-    await state.async_save_pending(
-        caption=caption,
-        hashtags=result.draft.get("hashtags", []),
-        image_url=image_url,
-        alt_text=result.draft.get("alt_text", ""),
-        image_prompt=result.draft.get("image_prompt", ""),
-        original_request=prompt,
-        image_urls=result.image_urls if len(result.image_urls) > 1 else None,
-        auto_slot=slot_name,
-        conversation_history=result.conversation_history,
-    )
-
-    if image_url:
-        await asyncio.to_thread(state.save_last_generated, image_url, result.draft.get("content_type", "default"))
+    # Save as pending draft and notify
+    await _save_and_notify_draft(result, prompt, slot_name, bot=bot)
 
     # Mark as done (recurrence handled inside mark_done)
     schedule_queue.mark_done(item_id)
-
-    # Send draft to Telegram for review
-    if bot:
-        from bot.handlers import send_auto_draft
-        await send_auto_draft(bot, result.draft, image_url, slot_name)
-    else:
-        notification = (
-            f"<b>Scheduled Draft Ready</b>  [<code>{item_id}</code>]\n\n"
-            f"{caption}\n\n"
-            f"/approve to post to X\n"
-            f"/reject <i>feedback</i> to revise\n"
-            f"/cancel to discard"
-        )
-        await _notify_telegram(notification)
-
-    logger.info("Scheduled draft queued for approval: %s", item_id)
     return True
 
 
@@ -523,45 +506,49 @@ async def process_scheduled_item(
 # Cron / daemon runners
 # ---------------------------------------------------------------------------
 
-async def run_cron(
-    dry_run: bool = False,
-    force_slot: str | None = None,
+async def _process_scheduled_items(
+    global_config: dict,
+    dry_run: bool,
     bot=None,
 ) -> int:
-    """Single cron run: check schedule + user queue, process due items.
+    """Process user-scheduled queue items.  Returns number of drafts generated.
 
-    Returns number of drafts generated.
+    User-scheduled posts are explicit user requests, not auto-pilot.
+    They fire regardless of pause state -- pausing only affects predefined slots.
     """
-    schedule = scheduler.load_schedule()
-    global_config = schedule.get("global", {})
-    slots = schedule.get("slots", {})
+    drafts_made = 0
+    due_items = schedule_queue.get_due_items(window_seconds=SCHEDULER_INTERVAL_SECONDS)
+    if not due_items:
+        return 0
+
+    for item in due_items:
+        if await state.async_has_pending() and not dry_run:
+            logger.info("User queue: pending draft exists, deferring")
+            break
+        success = await process_scheduled_item(
+            item, global_config,
+            dry_run=dry_run or settings.AUTO_POST_DRY_RUN,
+            bot=bot,
+        )
+        if success:
+            drafts_made += 1
+            if not dry_run:
+                break
+
+    return drafts_made
+
+
+async def _process_slot_posts(
+    schedule: dict,
+    global_config: dict,
+    slots: dict,
+    dry_run: bool,
+    force_slot: str | None,
+    bot=None,
+) -> int:
+    """Process predefined time slots or content planner posts.  Returns drafts generated."""
     drafts_made = 0
 
-    # --- 1. Process user-scheduled queue items (always, even if auto-post is paused) ---
-    # User-scheduled posts are explicit user requests, not auto-pilot.
-    # They fire regardless of pause state — pausing only affects predefined slots.
-    due_items = schedule_queue.get_due_items(window_seconds=SCHEDULER_INTERVAL_SECONDS)
-    if due_items and not force_slot:
-        for item in due_items:
-            if await state.async_has_pending() and not dry_run:
-                logger.info("User queue: pending draft exists, deferring")
-                break
-            success = await process_scheduled_item(
-                item, global_config,
-                dry_run=dry_run or settings.AUTO_POST_DRY_RUN,
-                bot=bot,
-            )
-            if success:
-                drafts_made += 1
-                if not dry_run:
-                    break
-
-    # If a user-scheduled draft was generated, skip predefined slots this cycle
-    if drafts_made and not dry_run:
-        return drafts_made
-
-    # --- 2. Process predefined time slots (or content planner) ---
-    # When CONTENT_PLANNER_ENABLED, use the planner instead of slot-based scheduling.
     if settings.CONTENT_PLANNER_ENABLED and not force_slot:
         planned = content_planner.get_next_planned_post()
         if planned and not auto_state.is_paused():
@@ -569,7 +556,6 @@ async def run_cron(
                 "Content planner: next post %s/%s (%s)",
                 planned.date, planned.time_slot, planned.content_type,
             )
-            # Build a slot_config compatible dict from the planned post
             planner_slot_name = f"planner:{planned.content_type}_{planned.time_slot}"
             planner_slot_config = {
                 "type": planned.content_type,
@@ -593,10 +579,11 @@ async def run_cron(
         # Fallback: original slot-based scheduling
         if not slots:
             logger.debug("No predefined slots in schedule.json")
+            due_slots: list[str] = []
         elif force_slot:
             if force_slot not in slots:
                 logger.error("Unknown slot: %s (available: %s)", force_slot, list(slots.keys()))
-                return drafts_made
+                return 0
             due_slots = [force_slot]
             logger.info("Forcing slot: %s", force_slot)
         else:
@@ -609,11 +596,11 @@ async def run_cron(
         # Check if auto-posting is enabled and not paused (for predefined slots)
         if not settings.AUTO_POST_ENABLED and not dry_run and not force_slot:
             logger.debug("Auto-posting disabled — skipping predefined slots")
-            return drafts_made
+            return 0
 
         if auto_state.is_paused() and not force_slot:
             logger.debug("Auto-posting paused — skipping predefined slots")
-            return drafts_made
+            return 0
 
         for slot_name in due_slots:
             slot_config = slots[slot_name]
@@ -627,10 +614,14 @@ async def run_cron(
                 if not dry_run:
                     break
 
-    # --- 3. Periodic housekeeping ---
+    return drafts_made
+
+
+async def _run_housekeeping(bot=None) -> None:
+    """Run periodic housekeeping tasks (content plan, metrics, digests, etc.)."""
     schedule_queue.prune_old()
 
-    # --- 3a. Daily content plan update ---
+    # Daily content plan update
     if settings.CONTENT_PLANNER_ENABLED:
         try:
             from datetime import datetime, timezone as _tz
@@ -642,7 +633,7 @@ async def run_cron(
         except Exception as e:
             logger.debug("Content plan daily update failed: %s", e)
 
-    # --- 3b. Periodic performance metrics refresh ---
+    # Periodic performance metrics refresh
     if settings.PERFORMANCE_TRACKING_ENABLED:
         try:
             from agent.performance import refresh_recent_metrics
@@ -652,7 +643,7 @@ async def run_cron(
         except Exception as e:
             logger.debug("Performance metrics refresh failed: %s", e)
 
-    # --- 3c. Daily preference cluster refresh ---
+    # Daily preference cluster refresh
     global _last_cluster_refresh_date
     try:
         from datetime import datetime, timezone
@@ -664,14 +655,14 @@ async def run_cron(
     except Exception as e:
         logger.debug("Preference cluster refresh failed: %s", e)
 
-    # --- 4. Daily self-review check ---
+    # Daily self-review check
     try:
         from agent.self_review_scheduler import maybe_trigger_daily_review
         await maybe_trigger_daily_review()
     except Exception as e:
         logger.debug("Self-review daily check failed: %s", e)
 
-    # --- 4b. Daily digest ---
+    # Daily digest
     try:
         from agent.digest import maybe_trigger_daily_digest
         daily_sent = await maybe_trigger_daily_digest(bot=bot)
@@ -680,7 +671,7 @@ async def run_cron(
     except Exception as e:
         logger.debug("Daily digest check failed: %s", e)
 
-    # --- 4c. Weekly digest (Sundays) ---
+    # Weekly digest (Sundays)
     try:
         from agent.digest import maybe_trigger_weekly_digest
         digest_sent = await maybe_trigger_weekly_digest(bot=bot)
@@ -689,14 +680,14 @@ async def run_cron(
     except Exception as e:
         logger.debug("Weekly digest check failed: %s", e)
 
-    # --- 4d. Health check ---
+    # Health check
     try:
         from agent.health_monitor import maybe_run_health_check
         await maybe_run_health_check(bot=bot)
     except Exception as e:
         logger.debug("Health check failed: %s", e)
 
-    # --- 5. Topic bank refresh (every TOPIC_BANK_REFRESH_INTERVAL_HOURS) ---
+    # Topic bank refresh (every TOPIC_BANK_REFRESH_INTERVAL_HOURS)
     try:
         import time as _time
         from agent.topic_bank import load_bank, seed_bank_if_empty
@@ -710,14 +701,13 @@ async def run_cron(
     except Exception as e:
         logger.debug("Topic bank refresh failed: %s", e)
 
-    # --- 6. Auto preference extraction (every PREF_EXTRACTION_INTERVAL_HOURS) ---
+    # Auto preference extraction (every PREF_EXTRACTION_INTERVAL_HOURS)
     if settings.PREF_EXTRACTION_ENABLED:
         try:
             from agent.pref_extractor import extract_preferences
             new_prefs = await extract_preferences()
             if new_prefs:
                 logger.info("Auto-extracted %d new preferences: %s", len(new_prefs), new_prefs)
-                # Notify via Telegram
                 msg = "<b>Auto-learned preferences</b>\n\n"
                 for p in new_prefs:
                     msg += f"\u2022 {p}\n"
@@ -725,6 +715,36 @@ async def run_cron(
                 await _notify_telegram(msg)
         except Exception as e:
             logger.debug("Preference extraction failed: %s", e)
+
+
+async def run_cron(
+    dry_run: bool = False,
+    force_slot: str | None = None,
+    bot=None,
+) -> int:
+    """Single cron run: check schedule + user queue, process due items.
+
+    Returns number of drafts generated.
+    """
+    schedule = scheduler.load_schedule()
+    global_config = schedule.get("global", {})
+    slots = schedule.get("slots", {})
+
+    # 1. Process user-scheduled queue items
+    drafts_made = 0
+    if not force_slot:
+        drafts_made = await _process_scheduled_items(global_config, dry_run, bot=bot)
+        # If a user-scheduled draft was generated, skip predefined slots this cycle
+        if drafts_made and not dry_run:
+            return drafts_made
+
+    # 2. Process predefined time slots (or content planner)
+    drafts_made += await _process_slot_posts(
+        schedule, global_config, slots, dry_run, force_slot, bot=bot,
+    )
+
+    # 3. Periodic housekeeping
+    await _run_housekeeping(bot=bot)
 
     return drafts_made
 

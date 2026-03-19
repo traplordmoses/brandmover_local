@@ -1379,6 +1379,7 @@ async def _handle_update_plan_item(
 # ---------------------------------------------------------------------------
 # AST-based code validation for execute_code sandbox
 # Uses an allowlist for imports and blocklists for dangerous builtins/attrs.
+# -- Future upgrade: consider RestrictedPython for a more robust sandbox.
 # ---------------------------------------------------------------------------
 
 _ALLOWED_MODULES = frozenset({
@@ -1387,7 +1388,7 @@ _ALLOWED_MODULES = frozenset({
     'textwrap', 'string', 'functools', 'itertools', 'operator',
     'decimal', 'fractions', 'statistics', 'copy', 'enum', 'abc',
     'struct', 'hashlib', 'uuid', 'pprint',
-    'pathlib', 'io', 'base64', 'html', 'urllib',
+    'base64', 'html',
 })
 
 _BLOCKED_NAMES = frozenset({
@@ -1438,6 +1439,13 @@ def _validate_code_ast(code: str) -> str | None:
         if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load):
             if node.id in _BLOCKED_NAMES:
                 return f"Blocked name reference: {node.id}"
+
+        # Block subscript access with blocked attr names as string keys
+        # e.g. obj['__builtins__'] or obj["__globals__"]
+        if isinstance(node, ast.Subscript):
+            if isinstance(node.slice, ast.Constant) and isinstance(node.slice.value, str):
+                if node.slice.value in _BLOCKED_ATTRS:
+                    return f"Blocked string key access: ['{node.slice.value}']"
 
         # Block dangerous attribute access
         if isinstance(node, ast.Attribute):
@@ -1499,6 +1507,7 @@ async def _handle_execute_code(
             env={
                 **{k: v for k, v in os.environ.items() if k in _SAFE_ENV_KEYS},
                 "PYTHONDONTWRITEBYTECODE": "1",
+                "PYTHONNOUSERSITE": "1",
             },
         )
         stdout = proc.stdout[:10000] if proc.stdout else ""
@@ -2350,6 +2359,10 @@ async def _handle_git_info(
     # Sanitize args: allow only safe git ref patterns (alphanumeric, ~, ^, ., -, /)
     if args and not re.match(r'^[a-zA-Z0-9_.~^/\-]+$', args):
         return json.dumps({"error": "Invalid args: only alphanumeric, ~, ^, ., -, / allowed"})
+
+    # SECURITY (SEC-10): Block colon in show refs to prevent git show HEAD:.env attacks
+    if action == "show" and ":" in (args or ""):
+        return json.dumps({"error": "Colon not allowed in git show ref (prevents file content access)"})
 
     tracker.log_api(f"git_info:{action}")
 

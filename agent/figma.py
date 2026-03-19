@@ -6,6 +6,8 @@ Supports template import via parse_figma_url + get_node_children_detailed.
 
 import logging
 import re
+import time
+from typing import Any
 
 import httpx
 
@@ -14,6 +16,27 @@ from config import settings
 logger = logging.getLogger(__name__)
 
 _BASE_URL = "https://api.figma.com/v1"
+
+# ---------------------------------------------------------------------------
+# TTL-based cache for Figma API responses
+# ---------------------------------------------------------------------------
+
+_figma_cache: dict[str, tuple[float, Any]] = {}
+_FIGMA_CACHE_TTL = 300  # 5 minutes
+
+
+def _get_cached(cache_key: str) -> Any | None:
+    """Return cached result if still valid, else None."""
+    if cache_key in _figma_cache:
+        ts, result = _figma_cache[cache_key]
+        if time.time() - ts < _FIGMA_CACHE_TTL:
+            return result
+    return None
+
+
+def _set_cached(cache_key: str, result: Any) -> None:
+    """Store result in cache with current timestamp."""
+    _figma_cache[cache_key] = (time.time(), result)
 
 # ---------------------------------------------------------------------------
 # URL parsing
@@ -76,6 +99,11 @@ async def get_file_styles() -> dict:
     if not _is_configured():
         return {"error": "Figma not configured. Set FIGMA_ACCESS_TOKEN in .env to enable design integration."}
 
+    cache_key = f"styles:{_file_key()}"
+    cached = _get_cached(cache_key)
+    if cached is not None:
+        return cached
+
     try:
         resp = await _client().get(
             f"{_BASE_URL}/files/{_file_key()}/styles",
@@ -94,7 +122,9 @@ async def get_file_styles() -> dict:
             })
 
         logger.info("Fetched %d styles from Figma file %s", len(styles), _file_key())
-        return {"styles": styles, "count": len(styles)}
+        result = {"styles": styles, "count": len(styles)}
+        _set_cached(cache_key, result)
+        return result
 
     except httpx.HTTPStatusError as e:
         logger.error("Figma API error: %s %s", e.response.status_code, e.response.text[:200])
@@ -110,6 +140,11 @@ async def get_design_tokens(node_id: str | None = None) -> dict:
         return {"error": "Figma not configured. Set FIGMA_ACCESS_TOKEN in .env to enable design integration."}
 
     node_id = node_id or settings.FIGMA_NODE_ID
+
+    cache_key = f"tokens:{_file_key()}:{node_id}"
+    cached = _get_cached(cache_key)
+    if cached is not None:
+        return cached
 
     try:
         resp = await _client().get(
@@ -155,6 +190,7 @@ async def get_design_tokens(node_id: str | None = None) -> dict:
             }
 
         logger.info("Fetched design tokens for node %s", node_id)
+        _set_cached(cache_key, tokens)
         return tokens
 
     except httpx.HTTPStatusError as e:
@@ -172,6 +208,11 @@ async def get_node_screenshot(node_id: str | None = None) -> dict:
 
     node_id = node_id or settings.FIGMA_NODE_ID
 
+    cache_key = f"screenshot:{_file_key()}:{node_id}"
+    cached = _get_cached(cache_key)
+    if cached is not None:
+        return cached
+
     try:
         resp = await _client().get(
             f"{_BASE_URL}/images/{_file_key()}",
@@ -186,7 +227,9 @@ async def get_node_screenshot(node_id: str | None = None) -> dict:
 
         if url:
             logger.info("Got screenshot for node %s", node_id)
-            return {"node_id": node_id, "image_url": url}
+            result = {"node_id": node_id, "image_url": url}
+            _set_cached(cache_key, result)
+            return result
         else:
             return {"error": f"No image returned for node {node_id}"}
 
@@ -204,6 +247,11 @@ async def get_node_metadata(node_id: str | None = None) -> dict:
         return {"error": "Figma not configured. Set FIGMA_ACCESS_TOKEN in .env to enable design integration."}
 
     node_id = node_id or settings.FIGMA_NODE_ID
+
+    cache_key = f"metadata:{_file_key()}:{node_id}"
+    cached = _get_cached(cache_key)
+    if cached is not None:
+        return cached
 
     try:
         resp = await _client().get(
@@ -236,6 +284,7 @@ async def get_node_metadata(node_id: str | None = None) -> dict:
             metadata["total_children"] = len(children)
 
         logger.info("Fetched metadata for node %s: %s (%s)", node_id, metadata["name"], metadata["type"])
+        _set_cached(cache_key, metadata)
         return metadata
 
     except httpx.HTTPStatusError as e:
@@ -292,6 +341,11 @@ async def get_node_children_detailed(file_key: str, node_id: str) -> list[dict]:
     """
     if not _is_configured():
         return []
+
+    cache_key = f"children:{file_key}:{node_id}"
+    cached = _get_cached(cache_key)
+    if cached is not None:
+        return cached
 
     try:
         resp = await _client().get(
@@ -358,6 +412,7 @@ async def get_node_children_detailed(file_key: str, node_id: str) -> list[dict]:
             children.append(entry)
 
         logger.info("Fetched %d children for %s/%s", len(children), file_key, node_id)
+        _set_cached(cache_key, children)
         return children
 
     except Exception as e:

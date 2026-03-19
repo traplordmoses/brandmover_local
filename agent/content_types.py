@@ -5,6 +5,31 @@ Single source of truth used by image generation routing, compositor profiles,
 tool definitions, and the agent skill prompt.
 """
 
+import re
+
+# AI buzzword regex — shared across engine.py and self_review.py
+AI_WORDS_PATTERN = re.compile(
+    r"\b(?:"
+    r"revolutionizing|leveraging|cutting-edge|seamlessly|dive into|unlock|"
+    r"reimagining|redefining|supercharging|turbocharging|"
+    r"game-?changing|groundbreaking|trailblazing|pioneering|"
+    r"next-?gen(?:eration)?|best-in-class|world-class|state-of-the-art|"
+    r"harness(?:ing)?|empower(?:ing)?|elevat(?:e|ing)|"
+    r"robust|scalable|synerg(?:y|ies|istic)|holistic|"
+    r"ecosystem|paradigm|disruptive|innovative|"
+    r"transformative|comprehensive|streamlin(?:e|ed|ing)|"
+    r"architected|architecting|architecturally|"
+    r"self-sustaining|human-driven|autonomous(?:ly)?|"
+    r"delve|unpack|navigate the|landscape|"
+    r"at the forefront|at the intersection|on the cutting edge|"
+    r"excited to announce|thrilled to share|proud to|"
+    r"double down|move the needle|low-hanging fruit|"
+    r"north star|deep dive|circle back|"
+    r"the result is|it's worth noting|importantly"
+    r")\b",
+    re.IGNORECASE,
+)
+
 # --- Content types that the agent/pipeline can produce ---
 # These are the values used in draft["content_type"], image_gen routing,
 # and compositor profile selection.

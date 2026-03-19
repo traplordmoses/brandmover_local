@@ -28,6 +28,10 @@ logger = logging.getLogger(__name__)
 
 _HISTORY_FILE = _STATE_DIR / "generation_history.json"
 
+# mtime-based cache to avoid re-reading the full history file every call
+_caption_cache: list[str] = []
+_caption_cache_mtime: float = 0.0
+
 # Stopwords — common English words that carry little semantic signal.
 # Kept deliberately small (~30) to avoid over-filtering short social captions.
 _STOPWORDS = frozenset({
@@ -89,25 +93,35 @@ def _tfidf_cosine(text_a: str, text_b: str) -> float:
 def _load_recent_captions(lookback: int) -> list[str]:
     """Load the last `lookback` captions from generation_history.json.
 
-    Falls back gracefully if the file is missing or malformed.
+    Uses mtime-based caching to avoid re-reading and parsing the full
+    history file on every call. Falls back gracefully if the file is
+    missing or malformed.
     """
+    global _caption_cache, _caption_cache_mtime
+
     if not _HISTORY_FILE.exists():
         return []
     try:
+        mtime = _HISTORY_FILE.stat().st_mtime
+        if mtime == _caption_cache_mtime and _caption_cache:
+            return _caption_cache[-lookback:]
+
         entries = json.loads(_HISTORY_FILE.read_text(encoding="utf-8"))
     except (json.JSONDecodeError, OSError) as e:
         logger.warning("dedup: failed to read generation_history.json: %s", e)
         return []
 
-    # Take the last `lookback` entries, extract the prompt/caption text
-    recent = entries[-lookback:] if lookback < len(entries) else entries
+    # Extract all captions and cache them; slice at query time
     captions = []
-    for entry in recent:
+    for entry in entries:
         # Prefer 'prompt' (the generated caption), fall back to 'original_request'
         text = entry.get("prompt") or entry.get("original_request") or ""
         if text.strip():
             captions.append(text)
-    return captions
+
+    _caption_cache = captions
+    _caption_cache_mtime = mtime
+    return captions[-lookback:]
 
 
 def check_duplicate(

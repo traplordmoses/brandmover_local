@@ -611,7 +611,8 @@ async def trigger_training(
     logger.info("LoRA training started: %s (prediction=%s)", version_name, prediction_id)
 
     # Launch background polling task
-    asyncio.create_task(_background_poll(prediction_id, version_name, bot, chat_id))
+    task = asyncio.create_task(_background_poll(prediction_id, version_name, bot, chat_id))
+    task.add_done_callback(lambda t: logger.error("Background poll failed: %s", t.exception()) if not t.cancelled() and t.exception() else None)
     logger.info("Background poll task launched for %s", prediction_id)
 
     return {

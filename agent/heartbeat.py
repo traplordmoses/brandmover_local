@@ -36,6 +36,19 @@ def _pick_content_type_by_mix() -> str:
 
 logger = logging.getLogger(__name__)
 
+# ---------------------------------------------------------------------------
+# Notification callback — set by bot layer during startup to avoid importing
+# bot.handlers from agent/ (ARCH-04 boundary fix).
+# Signature: async def notifier(bot, draft: dict, image_url: str|None, slot: str)
+# ---------------------------------------------------------------------------
+_notifier_callback = None
+
+
+def set_notifier(fn):
+    """Register the notification callback. Called once during bot startup."""
+    global _notifier_callback
+    _notifier_callback = fn
+
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 HEARTBEAT_LOG_PATH = _PROJECT_ROOT / "state" / "heartbeat_log.jsonl"
 
@@ -394,6 +407,10 @@ def _prune_log(max_lines: int = 500) -> None:
         pass
 
 
+# Prune heartbeat log on module load to avoid unbounded growth between restarts
+_prune_log()
+
+
 def get_recent_heartbeat_entries(n: int = 5) -> list[dict]:
     """Read the last N heartbeat log entries."""
     if not HEARTBEAT_LOG_PATH.exists():
@@ -527,9 +544,13 @@ async def heartbeat_tick(bot=None) -> bool:
                         result.draft.get("content_type", "default"),
                     )
 
-                if bot:
-                    from bot.handlers import send_auto_draft
-                    await send_auto_draft(bot, result.draft, result.image_url, "proactive")
+                if bot and _notifier_callback:
+                    await _notifier_callback(bot, result.draft, result.image_url, "proactive")
+                elif bot:
+                    logger.warning(
+                        "Heartbeat: notifier callback not registered — "
+                        "call agent.heartbeat.set_notifier() during bot startup"
+                    )
                 else:
                     from scripts.auto_post import _notify_telegram
                     await _notify_telegram(

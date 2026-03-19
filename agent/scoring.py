@@ -220,8 +220,6 @@ def score_draft(draft: dict, assertions: list[Assertion] | None = None, threshol
 # Telegram-friendly report formatter
 # ---------------------------------------------------------------------------
 
-_GRADE_EMOJI = {"A": "A", "B": "B", "C": "C", "D": "D", "F": "F"}
-
 # Bar characters for visual score display
 _BAR_FULL = "\u2588"   # █
 _BAR_EMPTY = "\u2591"  # ░

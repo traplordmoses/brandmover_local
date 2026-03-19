@@ -41,9 +41,16 @@ import json
 import logging
 import re
 import time
+import warnings
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Awaitable
+
+warnings.warn(
+    "agent.unified_brain is deprecated. Use agent.engine (AGENT_MODE=agent) instead.",
+    DeprecationWarning,
+    stacklevel=2,
+)
 
 import anthropic
 
@@ -378,52 +385,4 @@ async def run(
     return await run_unified(message=msg, **kwargs)
 
 
-def _tool_description(tool_name: str, tool_input: dict) -> str:
-    """Brief human-readable description of a tool call.
-
-    Used for the progress callback (on_tool_call) so the Telegram UI can show
-    the user what's happening: "Generating brand image...", "Fetching URL...", etc.
-    Each description is a short present-tense phrase with the most relevant parameter.
-    """
-    descs = {
-        # ── Base tools (from agent/tools.py) ──
-        "read_brand_guidelines": "Loading brand guidelines and references...",
-        "read_references": "Checking available reference materials...",
-        "check_figma_design": f"Checking Figma design ({tool_input.get('action', 'styles')})...",
-        "generate_image": "Generating brand image...",
-        "read_feedback_history": "Reviewing feedback history...",
-        "log_resource_usage": "Logging resources used...",
-        "img2img": f"Generating image from reference: {tool_input.get('reference_image_path', 'auto')}...",
-        "execute_openclaw_script": f"Running {tool_input.get('script_name', 'script')}...",
-        # ── Unified-only tools (from agent/unified_tools.py) ──
-        "get_pending_draft": "Checking pending draft...",
-        "revise_draft": f"Revising draft: {tool_input.get('feedback', '?')[:60]}...",
-        "check_auto_post_status": "Checking auto-post schedule...",
-        "web_fetch": f"Fetching {tool_input.get('url', 'URL')[:60]}...",
-        "save_session_plan": "Saving content plan...",
-        "get_session_plan": "Checking session plan...",
-        "update_plan_item": f"Updating plan item #{tool_input.get('item_id', '?')}...",
-        "execute_code": f"Running script: {tool_input.get('description', 'computation')}...",
-        "register_draft": f"Registering {Path(tool_input.get('image_path', '')).name if tool_input.get('image_path') else '?'} as draft...",
-        "send_file": f"Sending file: {Path(tool_input.get('file_path', '')).name if tool_input.get('file_path') else '?'}...",
-        "read_state_file": f"Reading {tool_input.get('file_path', 'file')}...",
-        "run_self_review": "Analyzing performance and updating preferences...",
-        "start_autonomous_plan": "Working through plan autonomously...",
-        "show_queued_draft": f"Loading draft #{tool_input.get('item_id', '?')} for review...",
-        "approve_draft": "Approving draft...",
-        "post_approved": "Posting approved draft to X...",
-        "schedule_post": f"Scheduling post for {tool_input.get('time_description', '?')}...",
-        "list_scheduled_posts": "Checking scheduled posts...",
-        "cancel_scheduled_post": f"Cancelling scheduled post {tool_input.get('item_id', '?')}...",
-        # ── New tools (screenshot, image editing, notes, git, channel, snippets) ──
-        "take_screenshot": f"Capturing screenshot of {tool_input.get('url', 'page')[:50]}...",
-        "edit_image": f"Editing image: {len(tool_input.get('operations', []))} operation(s)...",
-        "save_note": f"Saving note: {tool_input.get('key', '?')}...",
-        "get_notes": f"Retrieving note(s){': ' + tool_input.get('key', '') if tool_input.get('key') else ''}...",
-        "git_info": f"Git {tool_input.get('action', 'info')}...",
-        "read_telegram_channel": "Reading channel messages...",
-        "save_snippet": f"Saving snippet: {tool_input.get('label', '?')[:40]}...",
-        "list_snippets": "Listing saved snippets...",
-        "use_snippet": f"Loading snippet {tool_input.get('id', '?')}...",
-    }
-    return descs.get(tool_name, f"Executing {tool_name}...")
+from agent.tools import tool_description as _tool_description  # noqa: E402

@@ -1,0 +1,81 @@
+{
+  "output_path": "output/blofin_mcp_promo.mp4",
+  "width": 1080,
+  "height": 1920,
+  "fps": 25,
+  "total_duration_seconds": 15.0,
+
+  "text_card": {
+    "title": "BLOFIN\nMCP",
+    "subtitle": "// Example conversation with AI",
+    "conversation": [
+      {
+        "role": "You",
+        "text": "What's the current BTC-USDT price?"
+      },
+      {
+        "role": "AI",
+        "text": "Using get_tickers for BTC-USDT...\n    BTC-USDT is currently trading at $70,402.10\n    24h High: $70,927.60 | 24h Low: $69,204.30"
+      },
+      {
+        "role": "You",
+        "text": "Place a limit buy order for 0.1 BTC at $68,000"
+      },
+      {
+        "role": "AI",
+        "text": "Using place_order...\n    Order placed successfully!\n    Order ID: 1000121126300\n    Type: Limit Buy | Price: $68,000 | Size: 0.1"
+      }
+    ],
+    "typing_speed_cps": 35,
+    "card_x": 60,
+    "card_y": 380,
+    "card_width": 960,
+    "card_height": 700,
+    "card_corner_radius": 24,
+    "title_font_size": 96,
+    "subtitle_font_size": 22,
+    "body_font_size": 22,
+    "role_font_size": 22,
+    "card_bg_color": "rgba(30,30,30,0.55)",
+    "card_border_color": "rgba(255,255,255,0.12)",
+    "title_color": "#FFFFFF",
+    "subtitle_color": "rgba(255,255,255,0.5)",
+    "role_color_you": "#FFFFFF",
+    "role_color_ai": "#FFFFFF",
+    "body_color": "rgba(255,255,255,0.85)",
+    "indent_color": "rgba(255,255,255,0.75)"
+  },
+
+  "background": {
+    "style": "liquid_metal",
+    "primary_color": "amber gold",
+    "secondary_color": "warm orange",
+    "mood": "cinematic, dark, luxurious, moody studio lighting",
+    "duration_seconds": 5.0,
+    "provider": "fal",
+    "model": null
+  },
+
+  "brand": {
+    "logo_path": "assets/blofin_logo_white.png",
+    "logo_x": 130,
+    "logo_y": 1000,
+    "logo_height": 28,
+    "prefix_text": "//",
+    "prefix_x": 88,
+    "prefix_y": 1000
+  },
+
+  "audio": {
+    "audio_path": null,
+    "volume": 0.8,
+    "fade_in_seconds": 0.5,
+    "fade_out_seconds": 1.0
+  },
+
+  "font_bold": "fonts/Inter-Bold.ttf",
+  "font_regular": "fonts/Inter-Regular.ttf",
+  "font_mono": null,
+  "title_hold_seconds": 1.5,
+  "end_hold_seconds": 2.0
+}

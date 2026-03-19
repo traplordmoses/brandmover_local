@@ -10,6 +10,7 @@ import logging
 import os
 import re
 import time
+import dataclasses
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -82,6 +83,10 @@ class BrandConfig:
     variation_aggressiveness: float = 0.6   # 0.0 (consistent) to 1.0 (max variety)
     preferred_skeletons: list[str] = field(default_factory=list)
     excluded_skeletons: list[str] = field(default_factory=list)
+
+
+# Known field names — used to filter parsed dicts before spreading into BrandConfig
+_BRAND_CONFIG_FIELDS = {f.name for f in dataclasses.fields(BrandConfig)}
 
 
 # ---------------------------------------------------------------------------
@@ -545,10 +550,10 @@ def get_config(path: Path | None = None) -> BrandConfig:
         raw_hash=hashlib.md5(raw.encode()).hexdigest(),
         parsed_at=time.time(),
         source_path=str(src),
-        **layout,
-        **effects,
-        **compositor,
-        **diversity,
+        **{k: v for k, v in layout.items() if k in _BRAND_CONFIG_FIELDS},
+        **{k: v for k, v in effects.items() if k in _BRAND_CONFIG_FIELDS},
+        **{k: v for k, v in compositor.items() if k in _BRAND_CONFIG_FIELDS},
+        **{k: v for k, v in diversity.items() if k in _BRAND_CONFIG_FIELDS},
     )
     _cached_mtime = mtime
     # config.json overrides (v8) — takes precedence over ## COMPOSITOR in guidelines.md

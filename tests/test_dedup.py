@@ -74,5 +74,5 @@ class TestCheckDuplicateInList:
         result = check_duplicate_in_list(
             "Hello world test caption", existing, threshold=0.5
         )
-        if result["is_duplicate"]:
-            assert "Hello world" in result["similar_to"]
+        assert result["is_duplicate"] is True
+        assert "Hello world" in result["similar_to"]

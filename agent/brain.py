@@ -26,6 +26,12 @@ import httpx
 
 from config import settings
 
+warnings.warn(
+    "agent.brain is deprecated. Use agent.engine (AGENT_MODE=agent) instead.",
+    DeprecationWarning,
+    stacklevel=2,
+)
+
 logger = logging.getLogger(__name__)
 
 _DEPRECATION_MSG = (
@@ -399,6 +405,8 @@ async def _call_anthropic(
     return response.content[0].text, usage
 
 
+# NOTE: This client is separate from _client.py's shared client.
+# Will be removed when brain.py is deleted (see ARCH-06).
 _openai_client: "openai.AsyncOpenAI | None" = None
 
 

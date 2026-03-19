@@ -148,6 +148,23 @@ def load_skill(name: str) -> dict | None:
     }
 
 
+_DANGEROUS_SCRIPT_PATTERNS = [
+    r'\bimport\s+os\b', r'\bimport\s+subprocess\b', r'\bimport\s+shutil\b',
+    r'__import__', r'\beval\s*\(', r'\bexec\s*\(', r'\bopen\s*\(',
+    r'\bos\.system\b', r'\bos\.popen\b', r'\bsubprocess\.',
+]
+
+
+def _validate_script_safety(code: str, filename: str) -> str | None:
+    """Check script code for dangerous patterns. Returns error message or None if safe."""
+    import re as _re
+    for pattern in _DANGEROUS_SCRIPT_PATTERNS:
+        match = _re.search(pattern, code)
+        if match:
+            return f"Script '{filename}' contains blocked pattern: {match.group()}"
+    return None
+
+
 def create_skill(
     name: str,
     description: str,
@@ -191,6 +208,7 @@ def create_skill(
     (skill_dir / "SKILL.md").write_text(skill_md, encoding="utf-8")
 
     # Write scripts — validate filenames to prevent path traversal
+    # SECURITY: Also validate script content for dangerous patterns (SEC-05)
     if scripts:
         scripts_dir = skill_dir / "scripts"
         scripts_dir.mkdir(exist_ok=True)
@@ -199,6 +217,10 @@ def create_skill(
             if not safe_name or safe_name.startswith(".") or "/" in filename or "\\" in filename:
                 logger.warning("Rejected unsafe script filename: %s", filename)
                 continue
+            safety_error = _validate_script_safety(code, safe_name)
+            if safety_error:
+                shutil.rmtree(skill_dir, ignore_errors=True)
+                return {"success": False, "message": f"Blocked: {safety_error}"}
             (scripts_dir / safe_name).write_text(code, encoding="utf-8")
 
     # Verify resolved path is under _SKILLS_DIR (defense-in-depth)

@@ -212,8 +212,7 @@ class TestGetProfiles:
             with patch("agent.compositor._brand_cfg.get_color_rgb") as mock_color:
                 mock_color.side_effect = lambda role, fallback: cfg.colors[role].rgb if role in cfg.colors else fallback
                 # Clear cache to force rebuild
-                compositor._profiles_cache = None
-                compositor._profiles_hash = ""
+                compositor.invalidate_profiles_cache()
                 profiles = compositor._get_profiles()
                 assert "announcement" in profiles
                 assert "default" in profiles
@@ -222,8 +221,7 @@ class TestGetProfiles:
         cfg = _make_cfg()
         with patch("agent.compositor._brand_cfg.get_config", return_value=cfg):
             with patch("agent.compositor._brand_cfg.get_color_rgb", side_effect=lambda r, f: f):
-                compositor._profiles_cache = None
-                compositor._profiles_hash = ""
+                compositor.invalidate_profiles_cache()
                 profiles1 = compositor._get_profiles()
                 profiles2 = compositor._get_profiles()
                 # Should be same object (cached)
@@ -241,8 +239,7 @@ class TestLayoutMappingsOverride:
 
         with patch("agent.compositor._brand_cfg.get_config", return_value=cfg):
             with patch("agent.compositor._brand_cfg.get_color_rgb", side_effect=lambda r, f: f):
-                compositor._profiles_cache = None
-                compositor._profiles_hash = ""
+                compositor.invalidate_profiles_cache()
 
                 # Check that for content_type "meme", it uses the "engagement" profile
                 profiles = compositor._get_profiles()

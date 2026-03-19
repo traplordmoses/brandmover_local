@@ -18,24 +18,36 @@ class ResourceTracker:
     input_tokens: int = 0
     output_tokens: int = 0
 
+    # Internal sets for O(1) dedup lookups (lists kept for ordered output)
+    _files_set: set[str] = field(default_factory=set, repr=False)
+    _figma_set: set[str] = field(default_factory=set, repr=False)
+    _scripts_set: set[str] = field(default_factory=set, repr=False)
+    _skills_set: set[str] = field(default_factory=set, repr=False)
+    _apis_set: set[str] = field(default_factory=set, repr=False)
+
     def log_file(self, name: str) -> None:
-        if name not in self.files_loaded:
+        if name not in self._files_set:
+            self._files_set.add(name)
             self.files_loaded.append(name)
 
     def log_figma(self, node_id: str) -> None:
-        if node_id not in self.figma_nodes_checked:
+        if node_id not in self._figma_set:
+            self._figma_set.add(node_id)
             self.figma_nodes_checked.append(node_id)
 
     def log_script(self, name: str) -> None:
-        if name not in self.scripts_executed:
+        if name not in self._scripts_set:
+            self._scripts_set.add(name)
             self.scripts_executed.append(name)
 
     def log_skill(self, name: str) -> None:
-        if name not in self.skills_used:
+        if name not in self._skills_set:
+            self._skills_set.add(name)
             self.skills_used.append(name)
 
     def log_api(self, name: str) -> None:
-        if name not in self.apis_called:
+        if name not in self._apis_set:
+            self._apis_set.add(name)
             self.apis_called.append(name)
 
     def add_tokens(self, input_tokens: int, output_tokens: int) -> None:

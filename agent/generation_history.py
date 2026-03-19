@@ -22,15 +22,11 @@ logger = logging.getLogger(__name__)
 _sync_lock = threading.Lock()
 
 _project_root = Path(__file__).resolve().parent.parent
-from agent.paths import STATE_DIR as _STATE_DIR
+from agent.paths import STATE_DIR as _STATE_DIR, migrate_state_file
 _HISTORY_FILE = _STATE_DIR / "generation_history.json"
 
 # Migrate from old location if needed
-_OLD_HISTORY = _project_root / "generation_history.json"
-if _OLD_HISTORY.exists() and not _HISTORY_FILE.exists():
-    _STATE_DIR.mkdir(parents=True, exist_ok=True)
-    import shutil as _shutil
-    _shutil.move(str(_OLD_HISTORY), str(_HISTORY_FILE))
+migrate_state_file(_project_root / "generation_history.json", _HISTORY_FILE)
 
 # ---------------------------------------------------------------------------
 # File I/O — delegated to FileStore
@@ -74,7 +70,15 @@ def _estimate_cost(model_id: str, image_count: int = 1) -> float:
 
 
 _MAX_HISTORY_ENTRIES = 500
-_history_lock = asyncio.Lock()
+
+
+def _maybe_rotate_on_load() -> None:
+    """Rotate on import to clean up if a previous process crashed before rotation."""
+    with _sync_lock:
+        entries = _read_history()
+        if len(entries) > _MAX_HISTORY_ENTRIES:
+            rotated = _maybe_rotate(entries)
+            _write_history(rotated)
 
 
 def _maybe_rotate(entries: list[dict]) -> list[dict]:
@@ -99,6 +103,13 @@ def _maybe_rotate(entries: list[dict]) -> list[dict]:
         archive_count, archive_path.name, len(kept),
     )
     return kept
+
+
+# Rotate on import to clean up if previous process crashed before rotation
+try:
+    _maybe_rotate_on_load()
+except Exception:
+    pass
 
 
 def log_generation(
@@ -253,9 +264,7 @@ def get_approval_analytics() -> dict:
 # ---------------------------------------------------------------------------
 
 async def async_log_generation(*args, **kwargs) -> int:
-    async with _history_lock:
-        return await asyncio.to_thread(log_generation, *args, **kwargs)
+    return await asyncio.to_thread(log_generation, *args, **kwargs)
 
 async def async_update_generation_status(timestamp: float, new_status: str) -> bool:
-    async with _history_lock:
-        return await asyncio.to_thread(update_generation_status, timestamp, new_status)
+    return await asyncio.to_thread(update_generation_status, timestamp, new_status)

@@ -55,6 +55,13 @@ _profiles_cache: dict[str, CompositorProfile] | None = None
 _profiles_hash: str = ""
 
 
+def invalidate_profiles_cache() -> None:
+    """Reset the profiles cache so _get_profiles() rebuilds on next call."""
+    global _profiles_cache, _profiles_hash
+    _profiles_cache = None
+    _profiles_hash = ""
+
+
 def _get_profiles() -> dict[str, CompositorProfile]:
     """Build PROFILES dict from brand config, cached until config changes."""
     global _profiles_cache, _profiles_hash
@@ -138,7 +145,13 @@ def _get_profiles() -> dict[str, CompositorProfile]:
 # Fonts
 # ---------------------------------------------------------------------------
 _FONT_DIR = Path(__file__).resolve().parent.parent / "brand" / "assets" / "fonts"
-_SYSTEM_FONT = "/System/Library/Fonts/Avenir Next.ttc"
+_SYSTEM_FONT_PATHS = [
+    "/System/Library/Fonts/Avenir Next.ttc",                    # macOS
+    "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",          # Debian/Ubuntu
+    "/usr/share/fonts/TTF/DejaVuSans.ttf",                      # Arch Linux
+    "/usr/share/fonts/dejavu-sans-fonts/DejaVuSans.ttf",        # Fedora/RHEL
+]
+_SYSTEM_FONT: str | None = next((p for p in _SYSTEM_FONT_PATHS if Path(p).exists()), None)
 _font_cache: dict[str, ImageFont.FreeTypeFont] = {}
 
 
@@ -198,7 +211,7 @@ def _load_font(style: str, size: int) -> ImageFont.FreeTypeFont:
             font = ImageFont.truetype(str(p), size)
         except Exception as e:
             logger.debug("Font load failed for %s: %s", p, e)
-    if font is None and Path(_SYSTEM_FONT).exists():
+    if font is None and _SYSTEM_FONT is not None:
         try:
             idx = 8 if ("bold" in style or style == "black") else 5
             font = ImageFont.truetype(_SYSTEM_FONT, size, index=idx)
@@ -270,7 +283,7 @@ def _split_title(title: str, style: str, start_size: int, max_w: int,
 # ---------------------------------------------------------------------------
 _LOGO_PNG = Path(__file__).resolve().parent.parent / "brand" / "assets" / "logo.png"
 logger.info("Logo PNG path resolved to: %s (exists=%s)", _LOGO_PNG, _LOGO_PNG.exists())
-_logo_cache: dict[int, tuple] = {}
+_logo_cache: dict[int, tuple[Image.Image, int] | None] = {}
 
 
 def _load_logo_png(height: int):
@@ -280,7 +293,11 @@ def _load_logo_png(height: int):
         logger.warning("Logo PNG not found at %s — place your logo as brand/assets/logo.png", _LOGO_PNG)
         return None
     try:
-        logo = Image.open(_LOGO_PNG).convert("RGBA")
+        raw = Image.open(_LOGO_PNG)
+        raw.load()  # Force read into memory so file handle can be released
+        logo = raw.convert("RGBA")
+        if raw is not logo:
+            raw.close()
         w = int(height * logo.width / logo.height)
         logo = logo.resize((w, height), Image.LANCZOS)
         _logo_cache[height] = (logo, w)
@@ -726,7 +743,11 @@ async def compose_branded_image(
         if image_url:
             raw = await _download_image(image_url)
             if raw:
-                feature_img = Image.open(io.BytesIO(raw)).convert("RGBA")
+                raw_img = Image.open(io.BytesIO(raw))
+                raw_img.load()  # Force read into memory so BytesIO can be GC'd
+                feature_img = raw_img.convert("RGBA")
+                if raw_img is not feature_img:
+                    raw_img.close()
 
         canvas = _create_background(profile)
 
@@ -742,6 +763,9 @@ async def compose_branded_image(
         out.seek(0)
         return out
 
-    except Exception as e:
-        logger.error("Composition failed: %s", e, exc_info=True)
+    except (TypeError, ValueError, AttributeError) as e:
+        logger.warning("Composition failed due to programming error: %s", e, exc_info=True)
+        raise
+    except OSError as e:
+        logger.warning("Composition failed due to I/O error: %s", e, exc_info=True)
         return None

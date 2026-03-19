@@ -51,12 +51,8 @@ _REVIEW_FILE = _STATE_DIR / "last_self_review.json"
 # Default-FAIL quality gate — drafts must prove readiness with evidence
 # ---------------------------------------------------------------------------
 
-# Words that should never appear in captions (AI-sounding language)
-_AI_WORDS = re.compile(
-    r"\b(revolutioniz|leverag|cutting.?edge|seamless|dive into|unlock|empower|"
-    r"game.?chang|elevat|supercharg|turbo.?charg|next.?gen)\w*\b",
-    re.IGNORECASE,
-)
+# AI-sounding words — canonical pattern lives in content_types.py
+from agent.content_types import AI_WORDS_PATTERN as _AI_WORDS
 
 # Hashtag pattern
 _HASHTAG = re.compile(r"#\w+")
@@ -273,12 +269,9 @@ async def run_self_review() -> dict:
 
     raw_text = response.content[0].text.strip()
 
-    # Parse the JSON response
-    # Strip markdown fences if present
-    if raw_text.startswith("```"):
-        raw_text = raw_text.split("\n", 1)[-1]
-        if raw_text.endswith("```"):
-            raw_text = raw_text[:-3].strip()
+    # Parse the JSON response — strip markdown fences if present
+    from agent.tools import strip_json_fences
+    raw_text = strip_json_fences(raw_text)
 
     try:
         review_data = json.loads(raw_text)
@@ -337,13 +330,13 @@ async def run_self_review() -> dict:
         if not involved_skills:
             continue
 
-        is_approved = entry.get("action") == "approved"
+        is_approved = entry.get("accepted", False)
         for sk_name in involved_skills:
             record_skill_use(sk_name, approved=is_approved)
 
             # For rejections, extract learning from feedback and append to skill
             if not is_approved:
-                rejection_reason = entry.get("feedback") or entry.get("reason", "")
+                rejection_reason = entry.get("feedback_text") or entry.get("reason", "")
                 if rejection_reason and len(rejection_reason) > 5:
                     append_skill_learning(
                         sk_name,

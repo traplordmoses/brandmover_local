@@ -17,15 +17,27 @@ from agent import publish_queue
 logger = logging.getLogger(__name__)
 
 
+MAX_IMAGE_BYTES = 10 * 1024 * 1024  # 10MB
+
+
 async def _download_image(url_or_path: str) -> bytes:
     """Download an image from a URL or read from a local file path."""
     if url_or_path.startswith(("http://", "https://")):
         from agent._client import get_httpx
         resp = await get_httpx().get(url_or_path)
         resp.raise_for_status()
-        return resp.content
+        data = resp.content
+        if len(data) > MAX_IMAGE_BYTES:
+            raise ValueError(f"Image too large: {len(data)} bytes (max {MAX_IMAGE_BYTES})")
+        return data
     # Local file path
-    return Path(url_or_path).read_bytes()
+    p = Path(url_or_path)
+    if not p.exists():
+        raise FileNotFoundError(f"Local image not found: {url_or_path}")
+    data = p.read_bytes()
+    if len(data) > MAX_IMAGE_BYTES:
+        raise ValueError(f"Image too large: {len(data)} bytes (max {MAX_IMAGE_BYTES})")
+    return data
 
 
 # Lazy-initialized singleton Tweepy clients

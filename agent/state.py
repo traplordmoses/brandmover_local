@@ -19,14 +19,11 @@ from agent.state_manager import FileStore
 logger = logging.getLogger(__name__)
 
 _project_root = Path(__file__).resolve().parent.parent
-from agent.paths import STATE_DIR as _STATE_DIR
+from agent.paths import STATE_DIR as _STATE_DIR, migrate_state_file
 _STATE_FILE = _STATE_DIR / "state.json"
 
 # Migrate from old location if needed
-_OLD_STATE_FILE = _project_root / "state.json"
-if _OLD_STATE_FILE.exists() and not _STATE_FILE.exists():
-    _STATE_DIR.mkdir(parents=True, exist_ok=True)
-    shutil.move(str(_OLD_STATE_FILE), str(_STATE_FILE))
+migrate_state_file(_project_root / "state.json", _STATE_FILE)
 
 
 def _user_state_file(user_id: int | None = None) -> Path:
@@ -46,8 +43,6 @@ def _user_state_file(user_id: int | None = None) -> Path:
 # Each entry stores (data_dict, last_access_timestamp) for LRU eviction.
 _STATE_CACHE_MAX = 50
 _state_caches: dict[int, tuple[dict, float]] = {}
-# asyncio.Lock for safe concurrent access from handlers + auto-poster
-_state_lock = asyncio.Lock()
 # threading.Lock for sync functions called via asyncio.to_thread or directly
 _sync_lock = threading.RLock()
 
@@ -102,18 +97,33 @@ def _read_state(user_id: int | None = None) -> dict:
 def _write_state(data: dict, user_id: int | None = None) -> None:
     """Write state dict to user's state file and update in-memory cache."""
     uid = _resolve_uid(user_id)
-    _state_caches[uid] = (copy.deepcopy(data), time.monotonic())
-    _evict_state_cache()
     state_file = _user_state_file(user_id)
     state_file.parent.mkdir(parents=True, exist_ok=True)
     tmp_path = state_file.with_suffix(f".tmp_{os.getpid()}_{threading.get_ident()}")
     tmp_path.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
     os.replace(str(tmp_path), str(state_file))
+    # Update cache only after successful disk write
+    with _sync_lock:
+        _state_caches[uid] = (copy.deepcopy(data), time.monotonic())
+        _evict_state_cache()
 
 
 def has_pending(user_id: int | None = None) -> bool:
-    """Check if there is a draft pending approval."""
-    return "pending" in _read_state(user_id)
+    """Check if there is a draft pending approval (lightweight, no deep copy)."""
+    uid = _resolve_uid(user_id)
+    with _sync_lock:
+        if uid in _state_caches:
+            cached_data, _ = _state_caches[uid]
+            return "pending" in cached_data
+    # Fall back to file read without deep copy
+    state_file = _user_state_file(user_id)
+    if not state_file.exists():
+        return False
+    try:
+        data = json.loads(state_file.read_text(encoding="utf-8"))
+        return "pending" in data
+    except (json.JSONDecodeError, OSError):
+        return False
 
 
 def get_pending(user_id: int | None = None) -> dict | None:
@@ -337,18 +347,26 @@ def get_last_generated(user_id: int | None = None) -> tuple[str | None, str]:
 # ---------------------------------------------------------------------------
 
 _3D_PROMPT_FILE = Path(settings.BRAND_FOLDER) / "prompts" / "master_prompt_3d.txt"
+_3d_prompt_cache: tuple[float, str] = (0.0, "")
 
 
 def get_3d_master_prompt() -> str | None:
     """Read the 3D master prompt from brand/prompts/master_prompt_3d.txt.
 
     Returns the file content as a string, or None if the file doesn't exist.
+    Uses mtime-based caching to avoid re-reading unchanged files.
     """
+    global _3d_prompt_cache
     if not _3D_PROMPT_FILE.exists():
         logger.warning("3D master prompt not found: %s", _3D_PROMPT_FILE)
         return None
     try:
-        return _3D_PROMPT_FILE.read_text(encoding="utf-8")
+        mtime = _3D_PROMPT_FILE.stat().st_mtime
+        if mtime == _3d_prompt_cache[0] and _3d_prompt_cache[1]:
+            return _3d_prompt_cache[1]
+        content = _3D_PROMPT_FILE.read_text(encoding="utf-8")
+        _3d_prompt_cache = (mtime, content)
+        return content
     except OSError as e:
         logger.error("Failed to read 3D master prompt: %s", e)
         return None
@@ -488,17 +506,13 @@ def list_profiles() -> list[dict]:
 # ---------------------------------------------------------------------------
 
 async def async_save_pending(*args, **kwargs) -> None:
-    async with _state_lock:
-        await asyncio.to_thread(save_pending, *args, **kwargs)
+    await asyncio.to_thread(save_pending, *args, **kwargs)
 
 async def async_clear_pending(user_id: int | None = None) -> None:
-    async with _state_lock:
-        await asyncio.to_thread(clear_pending, user_id=user_id)
+    await asyncio.to_thread(clear_pending, user_id=user_id)
 
 async def async_has_pending(user_id: int | None = None) -> bool:
-    async with _state_lock:
-        return await asyncio.to_thread(has_pending, user_id=user_id)
+    return await asyncio.to_thread(has_pending, user_id=user_id)
 
 async def async_get_pending(user_id: int | None = None) -> dict | None:
-    async with _state_lock:
-        return await asyncio.to_thread(get_pending, user_id=user_id)
+    return await asyncio.to_thread(get_pending, user_id=user_id)

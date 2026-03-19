@@ -49,3 +49,16 @@ from bot.handlers.media import (      # noqa: F401
 )
 from bot.handlers.admin import _run_onboarding_audit   # noqa: F401
 from bot.handlers.admin import health_command, digest_command  # noqa: F401
+
+# ---------------------------------------------------------------------------
+# Public test-facing aliases — give stable non-underscore names to internals
+# that the test suite depends on. Tests should prefer these over the _-prefixed
+# originals so that refactors of handler internals only need to update this map.
+# ---------------------------------------------------------------------------
+merge_extracted = _merge_extracted
+CallbackProxy = _CallbackProxy
+maybe_compose = _maybe_compose
+route_intent = _route_intent
+can_operate = _can_operate
+authorized = _authorized
+run_onboarding_audit = _run_onboarding_audit

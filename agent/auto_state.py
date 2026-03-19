@@ -17,14 +17,16 @@ from agent.state_manager import FileStore
 
 logger = logging.getLogger(__name__)
 
+_auto_lock = threading.Lock()
+
 _STATE_FILE = Path(settings.AUTO_POST_STATE_FILE)
 
 # Migrate from old location if needed
-_OLD_AUTO_STATE = Path(__file__).resolve().parent.parent / "auto_post_state.json"
-if _OLD_AUTO_STATE.exists() and not _STATE_FILE.exists():
-    _STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
-    import shutil as _shutil
-    _shutil.move(str(_OLD_AUTO_STATE), str(_STATE_FILE))
+from agent.paths import migrate_state_file
+migrate_state_file(
+    Path(__file__).resolve().parent.parent / "auto_post_state.json",
+    _STATE_FILE,
+)
 
 # ---------------------------------------------------------------------------
 # File I/O — delegated to FileStore
@@ -162,36 +164,37 @@ def record_post(
     event_ids: list[str] | None = None,
 ) -> None:
     """Record a successful post."""
-    state = _read_state()
-    now = time.time()
-    today = _today_key()
+    with _auto_lock:
+        state = _read_state()
+        now = time.time()
+        today = _today_key()
 
-    entry = {
-        "slot": slot_name,
-        "date": today,
-        "timestamp": now,
-        "caption": caption[:200],
-        "tweet_url": tweet_url,
-    }
-    state["posts_today"].append(entry)
-    state["last_post_timestamp"] = now
+        entry = {
+            "slot": slot_name,
+            "date": today,
+            "timestamp": now,
+            "caption": caption[:200],
+            "tweet_url": tweet_url,
+        }
+        state["posts_today"].append(entry)
+        state["last_post_timestamp"] = now
 
-    # Track recent captions for duplicate detection (keep last 20)
-    state["recent_captions"].append(caption)
-    state["recent_captions"] = state["recent_captions"][-20:]
+        # Track recent captions for duplicate detection (keep last 20)
+        state["recent_captions"].append(caption)
+        state["recent_captions"] = state["recent_captions"][-20:]
 
-    # Track posted event IDs to avoid re-commenting on the same on-chain events
-    if event_ids:
-        state["posted_event_ids"].extend(event_ids)
-        state["posted_event_ids"] = state["posted_event_ids"][-100:]
+        # Track posted event IDs to avoid re-commenting on the same on-chain events
+        if event_ids:
+            state["posted_event_ids"].extend(event_ids)
+            state["posted_event_ids"] = state["posted_event_ids"][-100:]
 
-    # Auto-prune entries older than 48h
-    cutoff = now - (48 * 3600)
-    state["posts_today"] = [
-        p for p in state["posts_today"] if p.get("timestamp", 0) > cutoff
-    ]
+        # Auto-prune entries older than 48h
+        cutoff = now - (48 * 3600)
+        state["posts_today"] = [
+            p for p in state["posts_today"] if p.get("timestamp", 0) > cutoff
+        ]
 
-    _write_state(state)
+        _write_state(state)
     logger.info("Recorded auto-post: slot=%s, tweet=%s", slot_name, tweet_url)
 
 
@@ -208,13 +211,14 @@ def get_rotation_index(category: str) -> int:
 
 def advance_rotation(category: str, pool_size: int) -> int:
     """Advance rotation index and return the new value."""
-    state = _read_state()
-    indices = state.get("rotation_indices", {})
-    current = indices.get(category, 0)
-    next_idx = (current + 1) % pool_size
-    indices[category] = next_idx
-    state["rotation_indices"] = indices
-    _write_state(state)
+    with _auto_lock:
+        state = _read_state()
+        indices = state.get("rotation_indices", {})
+        current = indices.get(category, 0)
+        next_idx = (current + 1) % pool_size
+        indices[category] = next_idx
+        state["rotation_indices"] = indices
+        _write_state(state)
     return next_idx
 
 
@@ -230,9 +234,10 @@ def is_paused() -> bool:
 
 def set_paused(paused: bool) -> None:
     """Set the paused state."""
-    state = _read_state()
-    state["paused"] = paused
-    _write_state(state)
+    with _auto_lock:
+        state = _read_state()
+        state["paused"] = paused
+        _write_state(state)
     logger.info("Auto-posting %s", "paused" if paused else "resumed")
 
 

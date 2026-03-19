@@ -13,6 +13,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from agent import compositor_config
+from agent.tools import UNSAFE_SHELL_CHARS
 from config import settings
 
 logger = logging.getLogger(__name__)
@@ -119,8 +120,7 @@ async def _run_openclaw_script(script_name: str, args: str = "") -> dict | list 
 
     cmd = ["node", str(script_path)]
     if args:
-        _UNSAFE_CHARS = re.compile(r"[;&|`$(){}!<>\\\n\r\t]")
-        if _UNSAFE_CHARS.search(args):
+        if UNSAFE_SHELL_CHARS.search(args):
             logger.error("Unsafe characters in args for %s", script_name)
             return None
         try:

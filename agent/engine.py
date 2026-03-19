@@ -3,6 +3,7 @@ Core agent engine — Claude tool-use loop.
 Calls Claude with tools, executes tool calls, feeds results back, repeats until done.
 """
 
+import asyncio
 import json
 import logging
 import re
@@ -33,6 +34,7 @@ class AgentResult:
     turns_used: int = 0
     total_time: float = 0.0
     conversation_history: list = field(default_factory=list)
+    _finished: bool = False
 
 
 def _try_parse_draft(text: str) -> dict | None:
@@ -62,28 +64,8 @@ def _try_parse_draft(text: str) -> dict | None:
     return None
 
 
-# AI-sounding words and phrases to strip from captions (case-insensitive)
-_AI_WORDS = re.compile(
-    r"\b(?:"
-    r"revolutionizing|leveraging|cutting-edge|seamlessly|dive into|unlock|"
-    r"reimagining|redefining|supercharging|turbocharging|"
-    r"game-?changing|groundbreaking|trailblazing|pioneering|"
-    r"next-?gen(?:eration)?|best-in-class|world-class|state-of-the-art|"
-    r"harness(?:ing)?|empower(?:ing)?|elevat(?:e|ing)|"
-    r"robust|scalable|synerg(?:y|ies|istic)|holistic|"
-    r"ecosystem|paradigm|disruptive|innovative|"
-    r"transformative|comprehensive|streamlin(?:e|ed|ing)|"
-    r"architected|architecting|architecturally|"
-    r"self-sustaining|human-driven|autonomous(?:ly)?|"
-    r"delve|unpack|navigate the|landscape|"
-    r"at the forefront|at the intersection|on the cutting edge|"
-    r"excited to announce|thrilled to share|proud to|"
-    r"double down|move the needle|low-hanging fruit|"
-    r"north star|deep dive|circle back|"
-    r"the result is|it's worth noting|importantly"
-    r")\b",
-    re.IGNORECASE,
-)
+# AI-sounding words — canonical pattern lives in content_types.py
+from agent.content_types import AI_WORDS_PATTERN as _AI_WORDS
 
 # Em-dash pattern — replace with comma or period
 _EM_DASH = re.compile(r"\s*—\s*")
@@ -137,7 +119,7 @@ def _sanitize_draft(draft: dict) -> dict:
     title = draft.get("title")
     if title and isinstance(title, str):
         words = title.strip().split()
-        if len(words) > 5:
+        if len(words) > 4:
             draft["title"] = " ".join(words[:4])
             logger.warning("Truncated title from %d to 4 words: %r → %r", len(words), title, draft["title"])
 
@@ -145,7 +127,7 @@ def _sanitize_draft(draft: dict) -> dict:
     subtitle = draft.get("subtitle")
     if subtitle and isinstance(subtitle, str):
         words = subtitle.strip().split()
-        if len(words) > 12:
+        if len(words) > 10:
             draft["subtitle"] = " ".join(words[:10])
             logger.warning("Truncated subtitle from %d to 10 words: %r → %r", len(words), subtitle, draft["subtitle"])
 
@@ -398,9 +380,9 @@ async def _run_loop(
                 tool_result = await execute_tool(tool_name, tool_input, tracker)
                 if len(tool_result) > 15000:
                     tool_result = tool_result[:15000] + "\n\n[... truncated to 15000 chars ...]"
-            except Exception:
+            except Exception as e:
                 logger.exception("Tool %s failed", tool_name)
-                tool_result = json.dumps({"error": "tool execution failed — see logs"})
+                tool_result = json.dumps({"error": f"Tool {tool_name} failed: {type(e).__name__}: {str(e)[:200]}"})
 
             log_entry = {
                 "name": tool_name,
@@ -435,7 +417,15 @@ async def _run_loop(
             max_budget,
         )
 
-    # Post-processing
+    result = await _post_process_draft(result, tool_call_log, messages)
+    result._finished = finished  # internal flag for caller
+    return result
+
+
+async def _post_process_draft(
+    result: AgentResult, tool_call_log: list, messages: list
+) -> AgentResult:
+    """Run quality gates, scoring, dedup, risk checks on the draft."""
     result.final_text = result.final_text.strip()
 
     if not result.draft:
@@ -499,7 +489,7 @@ async def _run_loop(
                 result.draft["caption"] = result.draft["thread_posts"][0].get("text", "")
 
         from agent.self_review import draft_quality_gate
-        gate = draft_quality_gate(result.draft)
+        gate = await asyncio.to_thread(draft_quality_gate, result.draft)
         if gate["auto_fixed"]:
             logger.info("Quality gate auto-fixed: %s", gate["auto_fixed"])
         if not gate["passed"]:
@@ -512,7 +502,7 @@ async def _run_loop(
 
         # Weighted quality score
         from agent.scoring import score_draft
-        score = score_draft(result.draft)
+        score = await asyncio.to_thread(score_draft, result.draft)
         result.draft["_quality_score"] = score["total_score"]
         result.draft["_quality_grade"] = score["grade"]
         logger.info("Quality score: %.0f/100 (Grade %s)", score["total_score"], score["grade"])
@@ -521,7 +511,7 @@ async def _run_loop(
         caption = result.draft.get("caption", "")
         if caption:
             from agent.dedup import check_duplicate
-            dedup = check_duplicate(caption)
+            dedup = await asyncio.to_thread(check_duplicate, caption)
             if dedup["is_duplicate"]:
                 logger.warning("Dedup: caption too similar (%.0f%%) to recent post",
                                dedup["max_similarity"] * 100)
@@ -533,7 +523,7 @@ async def _run_loop(
         if draft_format == "thread" and result.draft.get("thread_posts"):
             all_text += " " + " ".join(p.get("text", "") for p in result.draft["thread_posts"])
         from agent.risk_score import score_risk
-        risk = score_risk(all_text)
+        risk = await asyncio.to_thread(score_risk, all_text)
         if risk["risk_level"] != "low":
             result.draft["_risk_level"] = risk["risk_level"]
             result.draft["_risk_flags"] = [f["matched"] for f in risk["flags"]]
@@ -544,7 +534,6 @@ async def _run_loop(
     result.image_urls = _extract_image_urls(tool_call_log)
     result.conversation_history = _trim_conversation(messages)
 
-    result._finished = finished  # internal flag for caller
     return result
 
 
@@ -734,13 +723,16 @@ async def run_agent(
         logger.info("Brand context pre-loaded into system prompt: %d chars", len(brand_context))
 
     # Build the initial user message — wrap in XML delimiters to reduce prompt injection risk
+    # SECURITY: User requests are wrapped in XML tags to mitigate prompt injection.
+    # Destructive actions (post_to_x) already require human approval via the draft flow.
+    # Additional mitigations: AST sandbox on execute_code, SSRF protection on web_fetch.
     user_content = f"<user_request>\n{request}\n</user_request>"
     if revision_context:
         user_content = f"{revision_context}\n\nNew request: <user_request>\n{request}\n</user_request>"
 
     # Inject session memory context (recent posts, rejections, preferences)
     from agent.session import build_session_context, record_run
-    session_context = build_session_context()
+    session_context = await asyncio.to_thread(build_session_context)
     if session_context:
         user_content = f"{session_context}\n\n---\n\n{user_content}"
 
@@ -772,7 +764,8 @@ async def run_agent(
 
     # Record this run in session memory
     try:
-        record_run(
+        await asyncio.to_thread(
+            record_run,
             slot="",
             turns_used=result.turns_used,
             tools_called=result.tool_calls_made,
@@ -853,7 +846,8 @@ async def run_agent_with_history(
     )
 
     try:
-        record_run(
+        await asyncio.to_thread(
+            record_run,
             slot="revision",
             turns_used=result.turns_used,
             tools_called=result.tool_calls_made,
@@ -925,12 +919,11 @@ def _trim_conversation(messages: list[dict]) -> list[dict]:
 
     # Final size check — remove messages in pairs (user+assistant) from the
     # front (after the first pair) to preserve user/assistant alternation.
-    while len(trimmed) > 4:
-        serialized = json.dumps(trimmed, default=str)
-        if len(serialized) <= MAX_HISTORY_SIZE_CHARS:
-            break
+    serialized = json.dumps(trimmed, default=str)
+    while len(serialized) > MAX_HISTORY_SIZE_CHARS and len(trimmed) > 4:
         # Remove the 3rd and 4th messages (oldest pair after the first pair)
         del trimmed[2:4]
+        serialized = json.dumps(trimmed, default=str)
 
     return trimmed
 
@@ -963,18 +956,4 @@ def _cap_conversation_depth(messages: list[dict]) -> list[dict]:
     return [first_msg, summary] + messages[cutoff_idx:]
 
 
-def _tool_description(tool_name: str, tool_input: dict) -> str:
-    """Generate a brief human-readable description of a tool call."""
-    descs = {
-        "read_brand_guidelines": "Loading brand guidelines and references...",
-        "read_references": "Checking available reference materials...",
-        "check_figma_design": f"Checking Figma design ({tool_input.get('action', 'styles')})...",
-        "generate_image": "Generating brand image...",
-        "read_feedback_history": "Reviewing feedback history...",
-        "log_resource_usage": "Logging resources used...",
-        "img2img": f"Generating image from reference: {tool_input.get('reference_image_path', 'auto')}...",
-        "execute_openclaw_script": f"Running {tool_input.get('script_name', 'script')}...",
-        "think": "Reasoning...",
-        "finish": "Submitting final draft...",
-    }
-    return descs.get(tool_name, f"Executing {tool_name}...")
+from agent.tools import tool_description as _tool_description  # noqa: E402

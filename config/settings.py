@@ -31,6 +31,18 @@ load_dotenv(_env_file)
 
 _logger = logging.getLogger(__name__)
 
+
+def _safe_int(env_key: str, default: int) -> int:
+    """Parse an integer env var with a clear error on bad input."""
+    raw = os.getenv(env_key, str(default))
+    try:
+        return int(raw)
+    except ValueError:
+        _logger.warning(
+            "Invalid integer for %s=%r, using default %d", env_key, raw, default
+        )
+        return default
+
 # ── LLM Provider ──
 # Anthropic is the primary provider (Claude for reasoning + generation).
 # OpenAI is used for Whisper (voice transcription).
@@ -51,12 +63,18 @@ IMAGE_MODEL: str = os.getenv("IMAGE_MODEL", "auto")
 # TELEGRAM_ALLOWED_USER_ID: The admin user (full access to all commands).
 # TELEGRAM_OPERATOR_IDS: Additional users who can generate content but not configure.
 TELEGRAM_BOT_TOKEN: str = os.getenv("TELEGRAM_BOT_TOKEN", "")
-TELEGRAM_ALLOWED_USER_ID: int = int(os.getenv("TELEGRAM_ALLOWED_USER_ID", "0"))
+TELEGRAM_ALLOWED_USER_ID: int = _safe_int("TELEGRAM_ALLOWED_USER_ID", 0)
 _raw_operator_ids = os.getenv("TELEGRAM_OPERATOR_IDS", "")
-TELEGRAM_OPERATOR_IDS: list[int] = [
-    int(uid.strip()) for uid in _raw_operator_ids.split(",")
-    if uid.strip().isdigit()
-]
+TELEGRAM_OPERATOR_IDS: list[int] = []
+for _uid in _raw_operator_ids.split(","):
+    _uid = _uid.strip()
+    if not _uid:
+        continue
+    if _uid.isdigit():
+        TELEGRAM_OPERATOR_IDS.append(int(_uid))
+    else:
+        import logging as _log
+        _log.getLogger(__name__).warning("Invalid TELEGRAM_OPERATOR_IDS entry ignored: %r", _uid)
 
 # ── X / Twitter ──
 # Full OAuth 1.0a credentials for tweepy v2.
@@ -80,7 +98,7 @@ STATE_FOLDER: str = os.getenv("STATE_FOLDER", str(_project_root / "state"))
 # Legacy pipeline mode (4-step: analyze → plan → verify → generate).
 # "full" runs all 4 steps, "fast" merges plan+verify into one step.
 PIPELINE_MODE: str = os.getenv("PIPELINE_MODE", "full")
-MAX_REFERENCE_CHARS: int = int(os.getenv("MAX_REFERENCE_CHARS", "50000"))
+MAX_REFERENCE_CHARS: int = _safe_int("MAX_REFERENCE_CHARS", 50000)
 REFERENCES_FOLDER: str = os.getenv("REFERENCES_FOLDER", str(Path(BRAND_FOLDER) / "references"))
 
 # ── Agent Mode ──
@@ -91,15 +109,15 @@ REFERENCES_FOLDER: str = os.getenv("REFERENCES_FOLDER", str(Path(BRAND_FOLDER) /
 # SONNET_MODEL: The main model used for all brain calls. Sonnet for speed+cost.
 # HAIKU_MODEL: Used for lightweight tasks (intent classification, etc.)
 AGENT_MODE: str = os.getenv("AGENT_MODE", "agent")
-AGENT_MAX_TURNS: int = int(os.getenv("AGENT_MAX_TURNS", "15"))
+AGENT_MAX_TURNS: int = _safe_int("AGENT_MAX_TURNS", 15)
 AGENT_MODEL: str = os.getenv("AGENT_MODEL", "claude-sonnet-4-6")
 AGENT_SELF_CRITIQUE: bool = os.getenv("AGENT_SELF_CRITIQUE", "true").lower() in ("true", "1", "yes")
-SONNET_MODEL: str = os.getenv("SONNET_MODEL", "claude-sonnet-4-6")
+SONNET_MODEL: str = os.getenv("SONNET_MODEL", AGENT_MODEL)  # Deprecated: use AGENT_MODEL
 HAIKU_MODEL: str = os.getenv("HAIKU_MODEL", "claude-haiku-4-5-20251001")
 # FEEDBACK_SUMMARIZE_EVERY: After this many feedback entries, auto-trigger
 # Claude to summarize patterns into learned_preferences.md.
-FEEDBACK_SUMMARIZE_EVERY: int = int(os.getenv("FEEDBACK_SUMMARIZE_EVERY", "10"))
-CHAT_MAX_TOKENS: int = int(os.getenv("CHAT_MAX_TOKENS", "600"))
+FEEDBACK_SUMMARIZE_EVERY: int = _safe_int("FEEDBACK_SUMMARIZE_EVERY", 10)
+CHAT_MAX_TOKENS: int = _safe_int("CHAT_MAX_TOKENS", 600)
 # Model fallback — comma-separated fallback chain for agent calls.
 # When primary model fails (429/500/503), tries the next model in the chain.
 AGENT_FALLBACK_MODELS: str = os.getenv("AGENT_FALLBACK_MODELS", "")
@@ -107,7 +125,7 @@ AGENT_FALLBACK_MODELS: str = os.getenv("AGENT_FALLBACK_MODELS", "")
 # ── Discord ──
 # Optional Discord bot for cross-posting content to Discord channels.
 DISCORD_BOT_TOKEN: str = os.getenv("DISCORD_BOT_TOKEN", "")
-DISCORD_GUILD_ID: int = int(os.getenv("DISCORD_GUILD_ID", "0"))
+DISCORD_GUILD_ID: int = _safe_int("DISCORD_GUILD_ID", 0)
 
 # ── Multi-Platform Publishing ──
 # PUBLISH_PLATFORMS: Comma-separated list of platforms to publish to on /approve.

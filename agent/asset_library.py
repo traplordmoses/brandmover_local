@@ -43,24 +43,42 @@ class LibraryEntry:
 # Index I/O
 # ---------------------------------------------------------------------------
 
+_index_cache: list = []
+_index_cache_mtime: float = 0.0
+
+
 def _load_index() -> list[dict]:
+    global _index_cache, _index_cache_mtime
     if not _INDEX_PATH.exists():
         return []
     try:
+        mtime = _INDEX_PATH.stat().st_mtime
+        if mtime == _index_cache_mtime and _index_cache:
+            return _index_cache
         data = json.loads(_INDEX_PATH.read_text(encoding="utf-8"))
         if isinstance(data, list):
-            return data
-        return data.get("entries", [])
+            _index_cache = data
+        else:
+            _index_cache = data.get("entries", [])
+        _index_cache_mtime = mtime
+        return _index_cache
     except (json.JSONDecodeError, OSError):
         return []
 
 
 def _save_index(entries: list[dict]) -> None:
+    global _index_cache, _index_cache_mtime
     _INDEX_PATH.parent.mkdir(parents=True, exist_ok=True)
     _INDEX_PATH.write_text(
         json.dumps({"entries": entries}, indent=2),
         encoding="utf-8",
     )
+    # Update cache after write to stay in sync
+    _index_cache = entries
+    try:
+        _index_cache_mtime = _INDEX_PATH.stat().st_mtime
+    except OSError:
+        _index_cache_mtime = 0.0
 
 
 # ---------------------------------------------------------------------------
@@ -209,9 +227,12 @@ def index_directory() -> int:
     """Scan brand/assets/ recursively and index new image files.
 
     Uses filename heuristics for tagging. Returns the count of newly added files.
+    Reads and writes the index file once (batched) instead of per-file.
     """
     if not _ASSETS_ROOT.exists():
         return 0
+
+    _LIBRARY_DIR.mkdir(parents=True, exist_ok=True)
 
     entries = _load_index()
     # Build set of known original paths for dedup
@@ -244,11 +265,33 @@ def index_directory() -> int:
         if img_path.parent != _ASSETS_ROOT:
             tags.append(img_path.parent.name.lower())
 
-        entry = add(str(img_path), "scanned", content_type, prompt="", tags=tags,
-                   original_path=str(img_path.resolve()))
+        # Copy file into library directory
+        entry_id = uuid.uuid4().hex[:12]
+        src = Path(img_path)
+        ext = src.suffix or ".png"
+        dest_name = f"{entry_id}{ext}"
+        dest = _LIBRARY_DIR / dest_name
+
+        if src.exists():
+            shutil.copy2(str(src), str(dest))
+        else:
+            dest_name = str(img_path)
+
+        entry = LibraryEntry(
+            id=entry_id,
+            path=dest_name,
+            source="scanned",
+            content_type=content_type,
+            prompt="",
+            tags=tags,
+            created_at=time.time(),
+            original_path=abs_str,
+        )
+        entries.append(asdict(entry))
         added += 1
         logger.info("Indexed asset: %s → %s", img_path.name, content_type)
 
     if added:
+        _save_index(entries)
         logger.info("Startup scan: indexed %d new assets", added)
     return added

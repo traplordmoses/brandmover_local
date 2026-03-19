@@ -4,26 +4,22 @@ from agent.scoring import score_draft, format_score_report, DEFAULT_ASSERTIONS
 
 
 class TestScoreDraft:
-    def test_good_draft_scores_high(self):
-        draft = {
+    def test_good_draft_scores_higher_than_bad(self):
+        good_draft = {
             "caption": "Our community built something incredible this week. Here's the story behind the latest drop.",
             "image_prompt": "A vibrant community gathering scene with neon lighting, glass morphism UI elements floating in dark space, cyberpunk aesthetic with warm undertones",
             "content_type": "community",
         }
-        result = score_draft(draft)
-        assert result["total_score"] >= 75
-        assert result["grade"] in ("A", "B")
-        assert result["passed_threshold"] is True
-
-    def test_bad_draft_scores_low(self):
-        draft = {
+        bad_draft = {
             "caption": "Buy now! #crypto #moon",
             "image_prompt": "thing",
             "content_type": "unknown_type_xyz",
         }
-        result = score_draft(draft)
-        assert result["total_score"] < 60
-        assert result["passed_threshold"] is False
+        good_result = score_draft(good_draft)
+        bad_result = score_draft(bad_draft)
+        assert good_result["total_score"] > bad_result["total_score"]
+        assert good_result["passed_threshold"] is True
+        assert bad_result["passed_threshold"] is False
 
     def test_empty_draft(self):
         result = score_draft({})

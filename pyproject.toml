@@ -1,0 +1,15 @@
+[project]
+name = "brandmover"
+version = "1.0.0"
+requires-python = ">=3.11"
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+
+[tool.coverage.run]
+source = ["agent", "bot", "config"]
+omit = ["tests/*", "scripts/*", "eval/*"]
+
+[tool.coverage.report]
+show_missing = true
+skip_empty = true

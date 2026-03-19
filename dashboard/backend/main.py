@@ -1,5 +1,6 @@
 """FastAPI backend for the BrandMover dashboard."""
 
+import os
 import sys
 from pathlib import Path
 
@@ -7,13 +8,31 @@ from pathlib import Path
 _project_root = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(_project_root))
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from dashboard.backend.routes import calendar, status, documents, campaigns, settings
 
 app = FastAPI(title="BrandMover Dashboard API", version="1.0.0")
+
+_DASHBOARD_API_KEY = os.environ.get("DASHBOARD_API_KEY")
+_LOCALHOST_IPS = {"127.0.0.1", "::1"}
+
+
+@app.middleware("http")
+async def auth_middleware(request: Request, call_next):
+    if _DASHBOARD_API_KEY:
+        # API-key mode: every request must carry the correct key
+        if request.headers.get("X-API-Key") != _DASHBOARD_API_KEY:
+            return JSONResponse(status_code=403, content={"detail": "Invalid or missing API key"})
+    else:
+        # No key configured — restrict to localhost only
+        client_ip = request.client.host if request.client else None
+        if client_ip not in _LOCALHOST_IPS:
+            return JSONResponse(status_code=403, content={"detail": "Remote access denied; set DASHBOARD_API_KEY to enable"})
+    return await call_next(request)
 
 app.add_middleware(
     CORSMiddleware,

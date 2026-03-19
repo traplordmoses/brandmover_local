@@ -8,6 +8,8 @@ Tests can mock ``anthropic.AsyncAnthropic`` at the call site and reset
 singletons via :func:`reset` (done automatically by the conftest fixture).
 """
 
+import atexit
+
 import anthropic
 import httpx
 
@@ -58,3 +60,15 @@ async def close() -> None:
     if _anthropic_client is not None:
         await _anthropic_client.close()
         _anthropic_client = None
+
+
+def _cleanup() -> None:
+    """Synchronous cleanup for atexit — closes httpx client on interpreter shutdown."""
+    if _httpx_client is not None:
+        try:
+            _httpx_client.close()
+        except Exception:
+            pass
+
+
+atexit.register(_cleanup)

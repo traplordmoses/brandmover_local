@@ -177,6 +177,11 @@ async def _start_scheduler(app: Application) -> None:
     """Post-init hook: launch the auto-post scheduler and Discord client as background tasks."""
     from scripts.auto_post import run_scheduler_loop
 
+    # Register the heartbeat notifier so agent/ never imports from bot/
+    from agent.heartbeat import set_notifier
+    from bot.handlers import send_auto_draft
+    set_notifier(send_auto_draft)
+
     bot = app.bot
     task = asyncio.create_task(run_scheduler_loop(bot=bot))
     # Store reference so it doesn't get GC'd

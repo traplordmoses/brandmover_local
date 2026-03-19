@@ -29,6 +29,11 @@ def validate_url(url: str) -> None:
     Raises:
         ValueError: If scheme is not http/https, hostname cannot be resolved,
                     or resolved IP is in a blocked private network.
+
+    NOTE: There is a TOCTOU gap between DNS validation here and the actual HTTP
+    request (which resolves DNS independently). A DNS rebinding attack could
+    bypass this check. Full mitigation requires a custom DNS resolver or
+    connect-level callback. Risk is low for this use case (SEC-06).
     """
     parsed = urlparse(url)
     if parsed.scheme not in ("http", "https"):

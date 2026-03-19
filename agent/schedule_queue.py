@@ -70,6 +70,22 @@ def _write_queue(items: list[dict]) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Public helpers
+# ---------------------------------------------------------------------------
+
+
+def reset_to_pending(item_id: str) -> bool:
+    """Reset a queue item's status back to 'pending'. Returns True if found."""
+    items = _read_queue()
+    for item in items:
+        if item.get("id") == item_id and item.get("status") == "generating":
+            item["status"] = "pending"
+            _write_queue(items)
+            return True
+    return False
+
+
+# ---------------------------------------------------------------------------
 # CRUD operations
 # ---------------------------------------------------------------------------
 

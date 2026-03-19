@@ -4,6 +4,7 @@ Stores recent posts, rejections, learned preferences, and last run metadata.
 Loaded at the start of each agent run and injected as context.
 """
 
+import asyncio
 import copy
 import json
 import logging
@@ -260,3 +261,17 @@ def build_session_context() -> str:
         return ""
 
     return "CONTEXT FROM RECENT ACTIVITY:\n\n" + "\n\n".join(sections)
+
+
+# ---------------------------------------------------------------------------
+# Async wrappers — use from async handlers to avoid blocking the event loop
+# ---------------------------------------------------------------------------
+
+async def async_load_session() -> AgentSession:
+    """Async wrapper for load_session."""
+    return await asyncio.to_thread(load_session)
+
+
+async def async_save_session(session: AgentSession) -> None:
+    """Async wrapper for save_session."""
+    await asyncio.to_thread(save_session, session)

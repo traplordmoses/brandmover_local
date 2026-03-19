@@ -20,6 +20,17 @@ from config import settings
 
 logger = logging.getLogger(__name__)
 
+# Regex for detecting unsafe shell metacharacters in user-supplied arguments.
+# Shared with agent.onchain to avoid duplication.
+UNSAFE_SHELL_CHARS = re.compile(r"[;&|`$(){}!<>\\\n\r\t]")
+
+
+def _str_param(d: dict, key: str, default: str = "") -> str:
+    """Extract a string parameter, coercing non-strings."""
+    v = d.get(key, default)
+    return str(v) if v is not None else default
+
+
 # Allowlist of OpenClaw scripts that can be executed
 _OPENCLAW_ALLOWLIST = {
     "read_vault.js",
@@ -404,6 +415,62 @@ TOOL_DEFINITIONS = [
             "required": ["query"],
         },
     },
+    # ── Video promo generation ──
+    {
+        "name": "generate_promo_video",
+        "description": (
+            "Generate a short-form branded promo video (Reels/TikTok/Shorts). "
+            "Composites an AI-generated background with a glassmorphism text card "
+            "featuring typewriter-animated conversation. Outputs a 1080x1920 .mp4."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "title": {
+                    "type": "string",
+                    "description": "Bold title text for the card. Use \\n for line breaks, e.g. 'FOID\\nMCP'.",
+                },
+                "subtitle": {
+                    "type": "string",
+                    "description": "Smaller subtitle below the title, e.g. '// Example conversation with AI'.",
+                },
+                "conversation": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "role": {"type": "string", "description": "Speaker label: 'You', 'AI', etc."},
+                            "text": {"type": "string", "description": "Message text. Use \\n for line breaks."},
+                        },
+                        "required": ["role", "text"],
+                    },
+                    "description": "The demo conversation to animate with typewriter effect.",
+                },
+                "background_style": {
+                    "type": "string",
+                    "enum": ["liquid_metal", "aurora", "particle_field", "smoke", "custom"],
+                    "description": "Background animation style. Default: liquid_metal.",
+                },
+                "background_color": {
+                    "type": "string",
+                    "description": "Primary color for the background, e.g. 'amber gold', 'electric blue'.",
+                },
+                "duration_seconds": {
+                    "type": "number",
+                    "description": "Total video duration in seconds. Default: 15.",
+                },
+                "output_filename": {
+                    "type": "string",
+                    "description": "Output filename (saved to state/outputs/), e.g. 'promo_video.mp4'.",
+                },
+                "fresh_bg": {
+                    "type": "boolean",
+                    "description": "Force new AI background generation even if a cached background exists for this brand+style.",
+                },
+            },
+            "required": ["title", "conversation"],
+        },
+    },
 ]
 
 
@@ -414,17 +481,19 @@ TOOL_DEFINITIONS = [
 async def _handle_read_brand_guidelines(
     input_dict: dict, tracker: ResourceTracker
 ) -> str:
-    context = guidelines.get_brand_context()
-    tracker.log_file("guidelines.md")
-    tracker.log_file("references")
-    tracker.log_api("brand_context")
-    return context
+    """Brand guidelines are pre-loaded in the system prompt — return a pointer."""
+    tracker.log_file("brand/guidelines.md (pre-loaded)")
+    return json.dumps({
+        "status": "Brand guidelines are already loaded in your system prompt above. "
+                  "You have full access to the brand voice, visual style, and content rules. "
+                  "Proceed with generation using the context you already have."
+    })
 
 
 async def _handle_read_references(
     input_dict: dict, tracker: ResourceTracker
 ) -> str:
-    summary = guidelines.get_reference_summary()
+    summary = await asyncio.to_thread(guidelines.get_reference_summary)
     tracker.log_file("reference_inventory")
     return summary
 
@@ -457,7 +526,7 @@ _REFS_DIR = Path(settings.BRAND_FOLDER) / "references"
 async def _handle_generate_image(
     input_dict: dict, tracker: ResourceTracker
 ) -> str:
-    prompt = input_dict.get("prompt", "")
+    prompt = _str_param(input_dict, "prompt")
     if not prompt:
         return json.dumps({"error": "No prompt provided"})
 
@@ -518,7 +587,7 @@ async def _handle_generate_image(
 
         # --- Step 2: Collect reference images (category + logo) ---
         training_dir = Path(settings.BRAND_FOLDER) / "assets" / "brand3d_training"
-        ref_images = _select_3d_refs(training_dir, prompt)
+        ref_images = await asyncio.to_thread(_select_3d_refs, training_dir, prompt)
 
         # Inject logo refs when prompt mentions logo
         _logo_contrast_temps: list[str] = []  # track contrast files for cleanup
@@ -552,59 +621,63 @@ async def _handle_generate_image(
         _N_OPTIONS = 3
         _STAGGER_DELAY = 1.5  # seconds between calls to avoid 429s
 
-        if ref_images:
-            ref_grid = _stitch_grid([str(p) for p in ref_images], max_images=4, label="3d_ref")
-            logger.info("brand_3d: stitched %d refs into grid (lora=%s), generating %d options (staggered %.1fs)", len(ref_images), lora_ready, _N_OPTIONS, _STAGGER_DELAY)
-            tracker.log_api("replicate:flux-kontext-pro (brand_3d + refs x%d)" % _N_OPTIONS)
+        ref_grid = None
+        try:
+            if ref_images:
+                ref_grid = await asyncio.to_thread(_stitch_grid, [str(p) for p in ref_images], 4, "3d_ref")
+                logger.info("brand_3d: stitched %d refs into grid (lora=%s), generating %d options (staggered %.1fs)", len(ref_images), lora_ready, _N_OPTIONS, _STAGGER_DELAY)
+                tracker.log_api("replicate:flux-kontext-pro (brand_3d + refs x%d)" % _N_OPTIONS)
+                results = await _staggered_generate(
+                    [lambda p=final_prompt, g=ref_grid: image_gen.generate_img2img(p, g, strength=0.15) for _ in range(_N_OPTIONS)],
+                    delay=_STAGGER_DELAY,
+                )
+                urls = [r for r in results if isinstance(r, str) and r]
+                if urls:
+                    _state.save_last_generated(urls[0], "brand_3d")
+                    return json.dumps({
+                        "image_url": urls[0],
+                        "image_urls": urls,
+                        "model": "flux-kontext-pro",
+                        "reason": "brand_3d with master prompt + refs" + (" + LoRA" if lora_ready else ""),
+                        "prompt_used": final_prompt[:500],
+                        "lora_ready": lora_ready,
+                        "options_generated": len(urls),
+                    })
+                logger.warning("brand_3d img2img failed (all %d options) — falling back to text-to-image", _N_OPTIONS)
+
+            # Text-to-image fallback (no refs available or img2img failed)
+            # Use flux-1.1-pro (never nano-banana-pro for brand_3d)
+            model_id = "black-forest-labs/flux-1.1-pro"
+            tracker.log_api("replicate:flux-1.1-pro (brand_3d fallback x%d)" % _N_OPTIONS)
             results = await _staggered_generate(
-                [lambda p=final_prompt, g=ref_grid: image_gen.generate_img2img(p, g, strength=0.15) for _ in range(_N_OPTIONS)],
+                [lambda p=final_prompt: image_gen.generate_image(p, content_type="community") for _ in range(_N_OPTIONS)],
                 delay=_STAGGER_DELAY,
             )
-            # Clean up stitched temp file + contrast logo temps
-            try:
-                Path(ref_grid).unlink(missing_ok=True)
-            except Exception as e:
-                logger.debug("Temp cleanup failed for %s: %s", ref_grid, e)
-            for _tmp in _logo_contrast_temps:
-                try:
-                    Path(_tmp).unlink(missing_ok=True)
-                except Exception as e:
-                    logger.debug("Logo temp cleanup failed for %s: %s", _tmp, e)
             urls = [r for r in results if isinstance(r, str) and r]
             if urls:
                 _state.save_last_generated(urls[0], "brand_3d")
                 return json.dumps({
                     "image_url": urls[0],
                     "image_urls": urls,
-                    "model": "flux-kontext-pro",
-                    "reason": "brand_3d with master prompt + refs" + (" + LoRA" if lora_ready else ""),
+                    "model": model_id,
+                    "reason": "brand_3d fallback (flux-1.1-pro)" + (" + LoRA" if lora_ready else ""),
                     "prompt_used": final_prompt[:500],
                     "lora_ready": lora_ready,
                     "options_generated": len(urls),
                 })
-            logger.warning("brand_3d img2img failed (all %d options) — falling back to text-to-image", _N_OPTIONS)
-
-        # Text-to-image fallback (no refs available or img2img failed)
-        # Use flux-1.1-pro (never nano-banana-pro for brand_3d)
-        model_id = "black-forest-labs/flux-1.1-pro"
-        tracker.log_api("replicate:flux-1.1-pro (brand_3d fallback x%d)" % _N_OPTIONS)
-        results = await _staggered_generate(
-            [lambda p=final_prompt: image_gen.generate_image(p, content_type="community") for _ in range(_N_OPTIONS)],
-            delay=_STAGGER_DELAY,
-        )
-        urls = [r for r in results if isinstance(r, str) and r]
-        if urls:
-            _state.save_last_generated(urls[0], "brand_3d")
-            return json.dumps({
-                "image_url": urls[0],
-                "image_urls": urls,
-                "model": model_id,
-                "reason": "brand_3d fallback (flux-1.1-pro)" + (" + LoRA" if lora_ready else ""),
-                "prompt_used": final_prompt[:500],
-                "lora_ready": lora_ready,
-                "options_generated": len(urls),
-            })
-        return json.dumps({"error": "brand_3d image generation failed", "model": model_id, "prompt_used": final_prompt[:500]})
+            return json.dumps({"error": "brand_3d image generation failed", "model": model_id, "prompt_used": final_prompt[:500]})
+        finally:
+            # Clean up stitched temp file + contrast logo temps even on exception
+            if ref_grid:
+                try:
+                    Path(ref_grid).unlink(missing_ok=True)
+                except Exception as e:
+                    logger.debug("Temp cleanup failed for %s: %s", ref_grid, e)
+            for _tmp in _logo_contrast_temps:
+                try:
+                    Path(_tmp).unlink(missing_ok=True)
+                except Exception as e:
+                    logger.debug("Logo temp cleanup failed for %s: %s", _tmp, e)
 
     # 1. Check for active style profile for this content_type
     active_profile = _state.get_active_profile(content_type)
@@ -613,7 +686,7 @@ async def _handle_generate_image(
         if profile_refs:
             # Stitch up to 3 refs into a grid
             if len(profile_refs) >= 3:
-                input_ref = _stitch_grid(profile_refs[:3], label="style")
+                input_ref = await asyncio.to_thread(_stitch_grid, profile_refs[:3], 3, "style")
             else:
                 input_ref = profile_refs[-1]  # most recent single ref
 
@@ -854,7 +927,7 @@ def _build_mascot_prompt(user_prompt: str) -> str:
 async def _handle_img2img(
     input_dict: dict, tracker: ResourceTracker
 ) -> str:
-    prompt = input_dict.get("prompt", "")
+    prompt = _str_param(input_dict, "prompt")
     if not prompt:
         return json.dumps({"error": "No prompt provided"})
 
@@ -872,7 +945,7 @@ async def _handle_img2img(
         if found:
             # Stitch multiple refs into a grid for Kontext (multiple angles in one image)
             if len(found) >= 3:
-                reference_image_path = _stitch_grid(found, max_images=3, label="mascot")
+                reference_image_path = await asyncio.to_thread(_stitch_grid, found, 3, "mascot")
             else:
                 reference_image_path = found[0]
 
@@ -940,13 +1013,16 @@ async def _handle_log_resource_usage(
 async def _handle_think(
     input_dict: dict, tracker: ResourceTracker
 ) -> str:
-    logger.info("Agent thinking: %s", str(input_dict.get("thought", ""))[:200])
+    logger.info("Agent thinking: %s", _str_param(input_dict, "thought")[:200])
     return "ok"
 
 
 async def _handle_finish(
     input_dict: dict, tracker: ResourceTracker
 ) -> str:
+    # Coerce caption to string to guard against non-string tool_input values
+    if "caption" in input_dict:
+        input_dict["caption"] = _str_param(input_dict, "caption")
     return json.dumps({"status": "complete", "draft": input_dict})
 
 
@@ -965,8 +1041,7 @@ async def _handle_execute_openclaw_script(
         return json.dumps({"error": f"Script '{script_name}' not found. Install OpenClaw skills first."})
 
     # Sanitize args — reject shell metacharacters, use shlex for safe splitting
-    _UNSAFE_CHARS = re.compile(r"[;&|`$(){}!<>\\\n\r\t]")
-    if args and _UNSAFE_CHARS.search(args):
+    if args and UNSAFE_SHELL_CHARS.search(args):
         return json.dumps({"error": "Arguments contain unsafe characters. Only alphanumeric, hyphens, underscores, dots, and spaces are allowed."})
 
     cmd = ["node", str(script_path)]
@@ -1110,6 +1185,125 @@ async def _handle_search_memory(
     return json.dumps({"results": results, "count": len(results)}, indent=2)
 
 
+async def _handle_generate_promo_video(
+    input_dict: dict, tracker: ResourceTracker
+) -> str:
+    """Generate a short-form branded promo video with AI background + text card."""
+    from modules.video_promo import (
+        generate_promo_video,
+        VideoPromoConfig,
+        TextCardConfig,
+        BackgroundConfig,
+        BrandOverlay,
+        ConversationLine,
+    )
+    from agent import compositor_config
+
+    title = _str_param(input_dict, "title")
+    if not title:
+        return json.dumps({"error": "title is required"})
+
+    conversation_raw = input_dict.get("conversation", [])
+    if not conversation_raw:
+        return json.dumps({"error": "conversation is required (list of {role, text})"})
+
+    # Build conversation lines
+    conversation = []
+    for line in conversation_raw:
+        if isinstance(line, dict) and "role" in line and "text" in line:
+            conversation.append(ConversationLine(role=line["role"], text=line["text"]))
+        else:
+            return json.dumps({"error": f"Invalid conversation line: {line}"})
+
+    # Pull brand config for defaults
+    try:
+        cfg = compositor_config.get_config()
+    except Exception:
+        cfg = None
+
+    # Resolve paths
+    brand_folder = Path(settings.BRAND_FOLDER)
+    output_dir = Path(settings.STATE_FOLDER) / "outputs"
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    output_filename = _str_param(input_dict, "output_filename", "promo_video.mp4")
+    if not output_filename.endswith(".mp4"):
+        output_filename += ".mp4"
+    output_path = str(output_dir / output_filename)
+
+    # Resolve fonts
+    font_bold = str(brand_folder / "assets" / "fonts" / "Inter-Bold.ttf")
+    font_regular = str(brand_folder / "assets" / "fonts" / "Inter-Regular.ttf")
+
+    # Build brand overlay if logo exists
+    logo_path = brand_folder / "assets" / "logo.png"
+    brand_overlay = None
+    if logo_path.exists():
+        brand_overlay = BrandOverlay(logo_path=str(logo_path))
+
+    # Build config
+    bg_style = _str_param(input_dict, "background_style", "liquid_metal")
+    bg_color = _str_param(input_dict, "background_color", "amber gold")
+    duration = input_dict.get("duration_seconds", 15.0)
+    try:
+        duration = float(duration)
+    except (TypeError, ValueError):
+        duration = 15.0
+
+    brand_name = settings.BRAND_NAME
+    fresh_bg = bool(input_dict.get("fresh_bg", False))
+
+    config = VideoPromoConfig(
+        output_path=output_path,
+        total_duration_seconds=duration,
+        brand_name=brand_name,
+        text_card=TextCardConfig(
+            title=title,
+            subtitle=input_dict.get("subtitle"),
+            conversation=conversation,
+        ),
+        background=BackgroundConfig(
+            style=bg_style,
+            primary_color=bg_color,
+            mood=getattr(cfg, "mood_keywords", None) or "cinematic, dark, luxurious",
+        ),
+        brand=brand_overlay,
+        font_bold=font_bold,
+        font_regular=font_regular,
+    )
+
+    tracker.log_api("generate_promo_video")
+
+    # Check if using cached background
+    from modules.video_promo.background_gen import find_cached_background, BackgroundStyle as _BgStyle
+    try:
+        style_enum = _BgStyle(bg_style)
+        cached = None if fresh_bg else find_cached_background(brand_name, style_enum)
+    except ValueError:
+        cached = None
+    if cached:
+        logger.info("Generating promo video (cached bg): %s", output_path)
+    else:
+        logger.info("Generating promo video (fresh bg via %s): %s",
+                     config.background.provider, output_path)
+
+    try:
+        final_path = await generate_promo_video(config, fresh_bg=fresh_bg)
+        result = {
+            "status": "complete",
+            "video_path": final_path,
+            "duration": duration,
+            "resolution": f"{config.width}x{config.height}",
+            "background_cached": cached is not None,
+        }
+        if fresh_bg:
+            result["fresh_bg"] = True
+        return json.dumps(result)
+    except Exception as e:
+        logger.exception("Promo video generation failed")
+        return json.dumps({"error": f"Video generation failed: {type(e).__name__}: {str(e)[:300]}"})
+
+
 # ---------------------------------------------------------------------------
 # Handler dispatch
 # ---------------------------------------------------------------------------
@@ -1130,7 +1324,81 @@ _HANDLERS = {
     "list_skills": _handle_list_skills,
     "delegate_task": _handle_delegate_task,
     "search_memory": _handle_search_memory,
+    "generate_promo_video": _handle_generate_promo_video,
 }
+
+
+# ---------------------------------------------------------------------------
+# Shared utilities
+# ---------------------------------------------------------------------------
+
+def strip_json_fences(text: str) -> str:
+    """Remove markdown code fences wrapping JSON content.
+
+    Handles patterns like ```json\\n{...}\\n``` and ```\\n{...}\\n```.
+    Returns the unwrapped text, or the original text if no fences found.
+    """
+    text = text.strip()
+    if text.startswith("```"):
+        text = text.split("\n", 1)[-1]
+        if text.endswith("```"):
+            text = text[:-3].strip()
+    return text
+
+
+def tool_description(tool_name: str, tool_input: dict) -> str:
+    """Brief human-readable description of a tool call.
+
+    Used for the progress callback (on_tool_call) so the Telegram UI can show
+    the user what's happening: "Generating brand image...", "Fetching URL...", etc.
+    Each description is a short present-tense phrase with the most relevant parameter.
+    """
+    descs = {
+        # Base tools (from agent/tools.py)
+        "read_brand_guidelines": "Loading brand guidelines and references...",
+        "read_references": "Checking available reference materials...",
+        "check_figma_design": f"Checking Figma design ({tool_input.get('action', 'styles')})...",
+        "generate_image": "Generating brand image...",
+        "read_feedback_history": "Reviewing feedback history...",
+        "log_resource_usage": "Logging resources used...",
+        "img2img": f"Generating image from reference: {tool_input.get('reference_image_path', 'auto')}...",
+        "execute_openclaw_script": f"Running {tool_input.get('script_name', 'script')}...",
+        # Unified-only tools (from agent/unified_tools.py)
+        "get_pending_draft": "Checking pending draft...",
+        "revise_draft": f"Revising draft: {tool_input.get('feedback', '?')[:60]}...",
+        "check_auto_post_status": "Checking auto-post schedule...",
+        "web_fetch": f"Fetching {tool_input.get('url', 'URL')[:60]}...",
+        "save_session_plan": "Saving content plan...",
+        "get_session_plan": "Checking session plan...",
+        "update_plan_item": f"Updating plan item #{tool_input.get('item_id', '?')}...",
+        "execute_code": f"Running script: {tool_input.get('description', 'computation')}...",
+        "register_draft": f"Registering {Path(tool_input.get('image_path', '')).name if tool_input.get('image_path') else '?'} as draft...",
+        "send_file": f"Sending file: {Path(tool_input.get('file_path', '')).name if tool_input.get('file_path') else '?'}...",
+        "read_state_file": f"Reading {tool_input.get('file_path', 'file')}...",
+        "run_self_review": "Analyzing performance and updating preferences...",
+        "start_autonomous_plan": "Working through plan autonomously...",
+        "show_queued_draft": f"Loading draft #{tool_input.get('item_id', '?')} for review...",
+        "approve_draft": "Approving draft...",
+        "post_approved": "Posting approved draft to X...",
+        "schedule_post": f"Scheduling post for {tool_input.get('time_description', '?')}...",
+        "list_scheduled_posts": "Checking scheduled posts...",
+        "cancel_scheduled_post": f"Cancelling scheduled post {tool_input.get('item_id', '?')}...",
+        # New tools (screenshot, image editing, notes, git, channel, snippets)
+        "take_screenshot": f"Capturing screenshot of {tool_input.get('url', 'page')[:50]}...",
+        "edit_image": f"Editing image: {len(tool_input.get('operations', []))} operation(s)...",
+        "save_note": f"Saving note: {tool_input.get('key', '?')}...",
+        "get_notes": f"Retrieving note(s){': ' + tool_input.get('key', '') if tool_input.get('key') else ''}...",
+        "git_info": f"Git {tool_input.get('action', 'info')}...",
+        "read_telegram_channel": "Reading channel messages...",
+        "save_snippet": f"Saving snippet: {tool_input.get('label', '?')[:40]}...",
+        "list_snippets": "Listing saved snippets...",
+        "use_snippet": f"Loading snippet {tool_input.get('id', '?')}...",
+        # Generic
+        "think": "Reasoning...",
+        "finish": "Submitting final draft...",
+        "generate_promo_video": f"Generating promo video: {tool_input.get('title', '?')[:40]}...",
+    }
+    return descs.get(tool_name, f"Executing {tool_name}...")
 
 
 async def execute_tool(

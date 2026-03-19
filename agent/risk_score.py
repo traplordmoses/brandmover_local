@@ -28,8 +28,8 @@ RISK_PATTERNS: dict[str, list[str]] = {
     ],
     "financial_risk": [
         "guaranteed returns", "get rich", "financial advice",
-        "invest now", "100x", "moon", "pump", "rug pull",
-        "not financial advice",
+        "invest now", "100x", "to the moon", "moonshot", "mooning",
+        "pump", "rug pull", "not financial advice",
     ],
     "spam_signals": [
         "click here", "buy now", "limited time", "act fast",

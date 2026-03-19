@@ -46,22 +46,14 @@ _feedback_lock = threading.Lock()
 
 # File paths — all state lives in state/ directory
 _project_root = Path(__file__).resolve().parent.parent
-from agent.paths import STATE_DIR as _STATE_DIR
+from agent.paths import STATE_DIR as _STATE_DIR, migrate_state_file
 _FEEDBACK_FILE = _STATE_DIR / "feedback.json"        # Append-only feedback log
 _PREFERENCES_FILE = _STATE_DIR / "learned_preferences.md"  # Claude-generated summary
 _MAX_FEEDBACK_ENTRIES = 500
 
 # ── Migrate from old locations (pre-refactor) ──
-# Early versions stored these files in the project root. This block
-# automatically moves them to state/ on first run after upgrade.
-for _old, _new in [
-    (_project_root / "feedback.json", _FEEDBACK_FILE),
-    (_project_root / "learned_preferences.md", _PREFERENCES_FILE),
-]:
-    if _old.exists() and not _new.exists():
-        _STATE_DIR.mkdir(parents=True, exist_ok=True)
-        import shutil as _shutil
-        _shutil.move(str(_old), str(_new))
+migrate_state_file(_project_root / "feedback.json", _FEEDBACK_FILE)
+migrate_state_file(_project_root / "learned_preferences.md", _PREFERENCES_FILE)
 
 # ---------------------------------------------------------------------------
 # File I/O — delegated to FileStore
@@ -78,6 +70,15 @@ def _read_feedback() -> list[dict]:
 def _write_feedback(entries: list[dict]) -> None:
     """Write the full feedback log to disk."""
     _store.write(entries)
+
+
+def _maybe_rotate_on_load() -> None:
+    """Rotate on import to clean up if a previous process crashed before rotation."""
+    with _feedback_lock:
+        entries = _read_feedback()
+        if len(entries) > _MAX_FEEDBACK_ENTRIES:
+            rotated = _maybe_rotate(entries)
+            _write_feedback(rotated)
 
 
 def _maybe_rotate(entries: list[dict]) -> list[dict]:
@@ -102,6 +103,13 @@ def _maybe_rotate(entries: list[dict]) -> list[dict]:
         archive_count, archive_path.name, len(kept),
     )
     return kept
+
+
+# Rotate on import to clean up if previous process crashed before rotation
+try:
+    _maybe_rotate_on_load()
+except Exception:
+    pass
 
 
 def log_feedback(
