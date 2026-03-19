@@ -39,9 +39,10 @@ def composite_video(
         "-i", overlay_frame_pattern,
     ]
 
+    # Scale background to FILL the frame (crop, don't letterbox)
     filter_parts = [
-        f"[0:v]scale={config.width}:{config.height}:force_original_aspect_ratio=decrease,"
-        f"pad={config.width}:{config.height}:(ow-iw)/2:(oh-ih)/2,setsar=1[bg]",
+        f"[0:v]scale={config.width}:{config.height}:force_original_aspect_ratio=increase,"
+        f"crop={config.width}:{config.height},setsar=1[bg]",
         "[bg][1:v]overlay=0:0:format=auto[out]",
     ]
     filter_graph = ";".join(filter_parts)

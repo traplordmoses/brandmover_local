@@ -1,0 +1,88 @@
+{
+  "output_path": "state/outputs/foid_prayer_promo.mp4",
+  "width": 1080,
+  "height": 1920,
+  "fps": 25,
+  "total_duration_seconds": 15.0,
+  "brand_name": "foid",
+
+  "text_card": {
+    "title": "FOID\nPRAYER",
+    "subtitle": "// Daily on-chain ritual",
+    "conversation": [
+      {
+        "role": "You",
+        "text": "gm foid, time to pray"
+      },
+      {
+        "role": "Foid_Mommy",
+        "text": "gm anon. your MiFOID is watching. ready?"
+      },
+      {
+        "role": "You",
+        "text": "dear god, i love MiFOID"
+      },
+      {
+        "role": "Foid_Mommy",
+        "text": "Praying on-chain...\n    Prayer #247 recorded\n    Streak: 12 days\n    Bust level: B → B+ (3 more days to C)"
+      },
+      {
+        "role": "You",
+        "text": "how far to double D's?"
+      },
+      {
+        "role": "Foid_Mommy",
+        "text": "You need a 29-day streak for DD status\n    Current: 12 days\n    Top prayer today gets a bonus cup size\n    Keep praying anon, she's counting on you"
+      }
+    ],
+    "typing_speed_cps": 35,
+    "card_width": 960,
+    "card_height": 700,
+    "card_corner_radius": 24,
+    "title_font_size": 84,
+    "subtitle_font_size": 20,
+    "body_font_size": 21,
+    "role_font_size": 20,
+    "card_bg_color": "rgba(255,255,255,0.08)",
+    "card_border_color": "rgba(255,255,255,0.15)",
+    "title_color": "#FFFFFF",
+    "subtitle_color": "rgba(255,255,255,0.45)",
+    "role_color_you": "#3EEEC4",
+    "role_color_ai": "#6B9FD4",
+    "body_color": "rgba(255,255,255,0.88)",
+    "indent_color": "rgba(255,255,255,0.7)"
+  },
+
+  "background": {
+    "style": "aurora",
+    "primary_color": "iridescent blue",
+    "secondary_color": "soft aurora teal",
+    "mood": "ethereal, dreamy, futuristic, Frutiger Aero, Y2K futurism, iridescent soap bubble reflections, frosted glass, soft blue glow",
+    "duration_seconds": 5.0,
+    "provider": "fal",
+    "model": null
+  },
+
+  "brand": {
+    "logo_path": "brand/assets/logo.png",
+    "logo_x": 130,
+    "logo_y": 1000,
+    "logo_height": 28,
+    "prefix_text": "//",
+    "prefix_x": 88,
+    "prefix_y": 1000
+  },
+
+  "audio": {
+    "audio_path": null,
+    "volume": 0.8,
+    "fade_in_seconds": 0.5,
+    "fade_out_seconds": 1.0
+  },
+
+  "font_bold": "brand/assets/fonts/Inter-Bold.ttf",
+  "font_regular": "brand/assets/fonts/Inter-Regular.ttf",
+  "font_mono": null,
+  "title_hold_seconds": 1.5,
+  "end_hold_seconds": 2.0
+}

@@ -82,9 +82,13 @@ STYLE_PROMPTS: dict[BackgroundStyle, str] = {
         "No other objects. {mood}. 4K quality, shallow depth of field, studio lighting."
     ),
     BackgroundStyle.AURORA: (
-        "Soft flowing {primary_color} aurora borealis ribbons gently undulating against a deep "
-        "dark background. Ethereal, dreamy motion. Subtle color shifts between {primary_color} "
-        "and {secondary_color}. {mood}. No text, no objects, abstract only."
+        "Extremely soft defocused {primary_color} and {secondary_color} light slowly drifting "
+        "through darkness. Out of focus bokeh orbs and gentle gradients. The light is diffused like "
+        "looking through frosted glass at a distant aurora. Smooth, dreamy, hypnotic motion. "
+        "Soft gaussian blur on everything. No sharp edges, no ribbons, no objects. "
+        "Colors bleed softly into each other — {primary_color} fading into {secondary_color} "
+        "fading into soft lavender. Everything feels underwater and weightless. "
+        "{mood}. 4K, shallow depth of field, anamorphic lens flare."
     ),
     BackgroundStyle.PARTICLE_FIELD: (
         "Thousands of tiny {primary_color} glowing particles floating and drifting slowly through "

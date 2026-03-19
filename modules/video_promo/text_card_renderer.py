@@ -95,9 +95,30 @@ class TextSpan:
 
 
 @dataclass
+class ChatBubble:
+    """A chat message bubble with its own background."""
+    role: str
+    lines: list[str]  # pre-wrapped text lines
+    x: int
+    y: int
+    width: int
+    height: int
+    is_user: bool  # True = right-aligned user bubble, False = left-aligned AI
+    bg_color: tuple[int, int, int, int]
+    text_color: tuple[int, int, int, int]
+    role_color: tuple[int, int, int, int]
+    font: ImageFont.FreeTypeFont
+    role_font: ImageFont.FreeTypeFont
+    char_start: int = 0
+    char_end: int = 0
+    corner_radius: int = 16
+
+
+@dataclass
 class TextLayout:
     """Pre-calculated layout of all text elements."""
     spans: list[TextSpan] = field(default_factory=list)
+    bubbles: list[ChatBubble] = field(default_factory=list)
     total_typed_chars: int = 0
     cursor_positions: list[tuple[int, int]] = field(default_factory=list)
 
@@ -133,7 +154,7 @@ def wrap_text(text: str, font: ImageFont.FreeTypeFont, max_width: int) -> list[s
 def calculate_layout(config: VideoPromoConfig) -> TextLayout:
     """
     Pre-calculate the full text layout for all elements.
-    Returns a TextLayout with all spans positioned and indexed.
+    Uses centered card with chat-bubble style conversation.
     """
     tc = config.text_card
     layout = TextLayout()
@@ -142,77 +163,135 @@ def calculate_layout(config: VideoPromoConfig) -> TextLayout:
     font_bold = load_font(config.font_bold, tc.title_font_size)
     font_subtitle = load_font(config.font_regular, tc.subtitle_font_size)
     font_body = load_font(config.font_regular, tc.body_font_size)
+    font_role = load_font(config.font_bold, tc.role_font_size)
 
-    # Card interior padding
-    pad_x = 30
-    pad_y = 30
+    # ── Center the card on screen ──
+    card_x = (config.width - tc.card_width) // 2
+    card_y = tc.card_y  # Will be adjusted after measuring content
+
+    pad_x = 36
+    pad_y = 36
     content_width = tc.card_width - (pad_x * 2)
+    bubble_max_width = int(content_width * 0.82)
+    bubble_pad = 14
+    bubble_spacing = 14
+    line_spacing = 5
 
-    # ── Title (always visible) ──
+    # ── Measure total content height first for vertical centering ──
+    # Title height
+    title_text = tc.title.replace("\\n", "\n")  # Handle literal \n from JSON
+    title_lines = title_text.split("\n")
+    single_bbox = font_bold.getbbox("Ag")
+    title_line_h = single_bbox[3] - single_bbox[1] + 12
+    title_height = len(title_lines) * title_line_h
+
+    # Subtitle height
+    sub_height = 0
+    if tc.subtitle:
+        sub_bbox = font_subtitle.getbbox(tc.subtitle)
+        sub_height = (sub_bbox[3] - sub_bbox[1]) + 24
+
+    # Bubble heights
+    total_bubble_h = 0
+    for msg in tc.conversation:
+        wrapped = wrap_text(msg.text, font_body, bubble_max_width - bubble_pad * 2)
+        role_h = tc.role_font_size + 6
+        text_h = len(wrapped) * (tc.body_font_size + line_spacing)
+        total_bubble_h += role_h + text_h + bubble_pad * 2 + bubble_spacing
+
+    total_content_h = pad_y + title_height + 20 + sub_height + total_bubble_h + pad_y
+    # Auto-size card height
+    actual_card_h = max(tc.card_height, total_content_h)
+    # Vertically center the card
+    card_y = max(80, (config.height - actual_card_h) // 2)
+
+    # ── Title (always visible, centered in card) ──
     layout.spans.append(TextSpan(
-        text=tc.title,
-        x=tc.card_x + pad_x,
-        y=tc.card_y + pad_y,
+        text=title_text,
+        x=card_x + pad_x,
+        y=card_y + pad_y,
         font=font_bold,
         color=parse_color(tc.title_color),
         always_visible=True,
     ))
 
-    # Calculate title height for positioning below it
-    title_bbox = font_bold.getbbox(tc.title)
-    title_lines = tc.title.split("\n")
-    title_height = len(title_lines) * (title_bbox[3] - title_bbox[1] + 10)
-    current_y = tc.card_y + pad_y + title_height + 20
+    current_y = card_y + pad_y + title_height + 20
 
     # ── Subtitle (always visible) ──
     if tc.subtitle:
         layout.spans.append(TextSpan(
             text=tc.subtitle,
-            x=tc.card_x + pad_x + 200,
+            x=card_x + pad_x,
             y=current_y,
             font=font_subtitle,
             color=parse_color(tc.subtitle_color),
             always_visible=True,
         ))
-        sub_bbox = font_subtitle.getbbox(tc.subtitle)
-        current_y += (sub_bbox[3] - sub_bbox[1]) + 30
+        current_y += sub_height
 
-    # ── Conversation lines (typewriter animated) ──
+    # ── Chat bubbles ──
     typed_char_index = 0
-    line_spacing = 6
-    message_spacing = 24
 
     for msg in tc.conversation:
-        full_text = f"{msg.role}: {msg.text}"
-        wrapped_lines = wrap_text(full_text, font_body, content_width)
+        is_user = msg.role.lower() in ("you", "user", "me")
+        wrapped = wrap_text(msg.text, font_body, bubble_max_width - bubble_pad * 2)
+        total_text = "\n".join(wrapped)
 
-        for i, line in enumerate(wrapped_lines):
-            y_pos = current_y + (i * (tc.body_font_size + line_spacing))
+        # Measure bubble dimensions
+        role_h = tc.role_font_size + 6
+        text_h = len(wrapped) * (tc.body_font_size + line_spacing)
+        bub_h = role_h + text_h + bubble_pad * 2
+        bub_w = min(bubble_max_width, content_width)
 
-            span = TextSpan(
-                text=line,
-                x=tc.card_x + pad_x + 200,
-                y=y_pos,
-                font=font_body,
-                color=parse_color(tc.body_color),
-                char_start=typed_char_index,
-                char_end=typed_char_index + len(line),
-            )
-            layout.spans.append(span)
+        # Position: user bubbles right-aligned, AI left-aligned
+        if is_user:
+            bub_x = card_x + tc.card_width - pad_x - bub_w
+            bg = (255, 255, 255, 18)  # subtle white tint
+            text_col = parse_color("#FFFFFF")
+            role_col = parse_color("#3EEEC4")  # accent green for user
+        else:
+            bub_x = card_x + pad_x
+            bg = (107, 159, 212, 25)  # subtle blue tint
+            text_col = parse_color("rgba(255,255,255,0.9)")
+            role_col = parse_color("#6B9FD4")  # blue for AI
 
-            # Track cursor positions for each character
-            for ci, char in enumerate(line):
+        bubble = ChatBubble(
+            role=msg.role,
+            lines=wrapped,
+            x=bub_x,
+            y=current_y,
+            width=bub_w,
+            height=bub_h,
+            is_user=is_user,
+            bg_color=bg,
+            text_color=text_col,
+            role_color=role_col,
+            font=font_body,
+            role_font=font_role,
+            char_start=typed_char_index,
+            char_end=typed_char_index + len(total_text),
+        )
+        layout.bubbles.append(bubble)
+
+        # Track cursor positions for each character
+        text_x = bub_x + bubble_pad
+        text_y_start = current_y + bubble_pad + role_h
+        for li, line in enumerate(wrapped):
+            ly = text_y_start + li * (tc.body_font_size + line_spacing)
+            for ci in range(len(line)):
                 partial = line[:ci + 1]
                 bbox = font_body.getbbox(partial)
-                cursor_x = span.x + (bbox[2] - bbox[0])
-                cursor_y = y_pos
-                layout.cursor_positions.append((cursor_x, cursor_y))
-
+                layout.cursor_positions.append((text_x + (bbox[2] - bbox[0]), ly))
             typed_char_index += len(line)
 
-        current_y += len(wrapped_lines) * (tc.body_font_size + line_spacing) + message_spacing
+        current_y += bub_h + bubble_spacing
 
     layout.total_typed_chars = typed_char_index
+
+    # Store computed card geometry for render_frame
+    layout._card_x = card_x
+    layout._card_y = card_y
+    layout._card_h = actual_card_h
 
     return layout
 
@@ -247,12 +326,16 @@ def render_frame(
     img = Image.new("RGBA", (config.width, config.height), (0, 0, 0, 0))
     draw = ImageDraw.Draw(img, "RGBA")
 
+    # Use computed card geometry from layout
+    card_x = getattr(layout, "_card_x", tc.card_x)
+    card_y = getattr(layout, "_card_y", tc.card_y)
+    card_h = getattr(layout, "_card_h", tc.card_height)
+
     # ── Calculate timing ──
     title_hold_frames = int(config.title_hold_seconds * config.fps)
     end_hold_frames = int(config.end_hold_seconds * config.fps)
     typing_frames = total_frames - title_hold_frames - end_hold_frames
 
-    # How many typed characters should be visible at this frame
     if frame_number < title_hold_frames:
         visible_chars = 0
     elif frame_number >= total_frames - end_hold_frames:
@@ -261,11 +344,11 @@ def render_frame(
         typing_progress = (frame_number - title_hold_frames) / max(typing_frames, 1)
         visible_chars = int(typing_progress * layout.total_typed_chars)
 
-    # ── Card fade-in (first 10 frames) ──
-    fade_frames = 10
+    # ── Card fade-in (first 12 frames) ──
+    fade_frames = 12
     card_alpha_mult = min(1.0, frame_number / fade_frames) if fade_frames > 0 else 1.0
 
-    # ── Draw glassmorphism card ──
+    # ── Draw main glassmorphism card ──
     card_bg = parse_color(tc.card_bg_color)
     card_bg_faded = (card_bg[0], card_bg[1], card_bg[2], int(card_bg[3] * card_alpha_mult))
     card_border = parse_color(tc.card_border_color)
@@ -273,32 +356,83 @@ def render_frame(
 
     draw_rounded_rect(
         draw,
-        (tc.card_x, tc.card_y, tc.card_x + tc.card_width, tc.card_y + tc.card_height),
+        (card_x, card_y, card_x + tc.card_width, card_y + card_h),
         radius=tc.card_corner_radius,
         fill=card_bg_faded,
         outline=card_border_faded,
         outline_width=1,
     )
 
-    # ── Draw text spans ──
+    # ── Draw title + subtitle (always visible, fade in with card) ──
     for span in layout.spans:
-        if span.always_visible:
-            alpha = int(span.color[3] * card_alpha_mult)
-            color = (span.color[0], span.color[1], span.color[2], alpha)
+        if not span.always_visible:
+            continue
+        alpha = int(span.color[3] * card_alpha_mult)
+        color = (span.color[0], span.color[1], span.color[2], alpha)
+        for i, line in enumerate(span.text.split("\n")):
+            line_y = span.y + i * (span.font.size + 12)
+            draw.text((span.x, line_y), line, font=span.font, fill=color)
 
-            for i, line in enumerate(span.text.split("\n")):
-                line_y = span.y + i * (span.font.size + 10)
-                draw.text((span.x, line_y), line, font=span.font, fill=color)
-        else:
-            if visible_chars <= span.char_start:
-                continue
+    # ── Draw chat bubbles ──
+    line_spacing = 5
+    for bubble in layout.bubbles:
+        # Skip if no chars from this bubble are visible yet
+        if visible_chars <= bubble.char_start:
+            continue
 
-            chars_to_show = min(visible_chars - span.char_start, len(span.text))
-            if chars_to_show <= 0:
-                continue
+        # How many chars of this bubble are visible
+        bub_visible = min(visible_chars - bubble.char_start, bubble.char_end - bubble.char_start)
+        if bub_visible <= 0:
+            continue
 
-            visible_text = span.text[:chars_to_show]
-            draw.text((span.x, span.y), visible_text, font=span.font, fill=span.color)
+        # Bubble slide-in animation (first 6 frames after appearing)
+        bub_age = visible_chars - bubble.char_start
+        slide_progress = min(1.0, bub_age / 30)  # ~30 chars to fully slide in
+        slide_offset = int((1.0 - slide_progress) * 20)
+        bub_alpha = min(1.0, bub_age / 15) * card_alpha_mult
+
+        bub_y = bubble.y + slide_offset
+
+        # Draw bubble background
+        bg = bubble.bg_color
+        bg_faded = (bg[0], bg[1], bg[2], int(bg[3] * bub_alpha))
+        border_a = int(40 * bub_alpha)
+        border_col = (255, 255, 255, border_a)
+
+        draw_rounded_rect(
+            draw,
+            (bubble.x, bub_y, bubble.x + bubble.width, bub_y + bubble.height),
+            radius=bubble.corner_radius,
+            fill=bg_faded,
+            outline=border_col,
+            outline_width=1,
+        )
+
+        # Draw role label
+        role_alpha = int(bubble.role_color[3] * bub_alpha)
+        role_col = (*bubble.role_color[:3], role_alpha)
+        draw.text(
+            (bubble.x + 14, bub_y + 10),
+            bubble.role,
+            font=bubble.role_font,
+            fill=role_col,
+        )
+
+        # Draw visible text lines
+        text_x = bubble.x + 14
+        text_y = bub_y + 10 + bubble.role_font.size + 6
+        chars_drawn = 0
+        text_alpha = int(bubble.text_color[3] * bub_alpha)
+        text_col = (*bubble.text_color[:3], text_alpha)
+
+        for li, line in enumerate(bubble.lines):
+            ly = text_y + li * (bubble.font.size + line_spacing)
+            remaining = bub_visible - chars_drawn
+            if remaining <= 0:
+                break
+            visible_line = line[:remaining]
+            draw.text((text_x, ly), visible_line, font=bubble.font, fill=text_col)
+            chars_drawn += len(line)
 
     # ── Draw blinking cursor ──
     if 0 < visible_chars < layout.total_typed_chars and layout.cursor_positions:
@@ -307,28 +441,32 @@ def render_frame(
             cx, cy = layout.cursor_positions[cursor_idx]
             blink_cycle = frame_number % 25
             if blink_cycle < 15:
-                cursor_color = parse_color(tc.title_color)
                 cursor_height = tc.body_font_size + 4
                 draw.rectangle(
                     (cx + 2, cy, cx + 4, cy + cursor_height),
-                    fill=(cursor_color[0], cursor_color[1], cursor_color[2], 200),
+                    fill=(255, 255, 255, int(200 * card_alpha_mult)),
                 )
 
-    # ── Draw brand logo / prefix ──
+    # ── Draw brand logo / prefix (bottom center of card) ──
     if config.brand:
         brand = config.brand
+        logo_y = card_y + card_h - 50
+
         if brand.prefix_text:
-            prefix_font = load_font(config.font_regular, 22)
-            prefix_color = parse_color("rgba(255,255,255,0.5)")
-            draw.text((brand.prefix_x, brand.prefix_y), brand.prefix_text, font=prefix_font, fill=prefix_color)
+            prefix_font = load_font(config.font_regular, 18)
+            prefix_color = (255, 255, 255, int(100 * card_alpha_mult))
+            draw.text((card_x + 36, logo_y), brand.prefix_text, font=prefix_font, fill=prefix_color)
 
         if os.path.exists(brand.logo_path):
             logo = Image.open(brand.logo_path).convert("RGBA")
             logo.load()
-            scale = brand.logo_height / logo.height
-            new_size = (int(logo.width * scale), brand.logo_height)
+            target_h = max(brand.logo_height, 24)
+            scale = target_h / logo.height
+            new_size = (int(logo.width * scale), target_h)
             logo = logo.resize(new_size, Image.Resampling.LANCZOS)
-            img.paste(logo, (brand.logo_x, brand.logo_y), logo)
+            # Position after prefix text
+            logo_x = card_x + 70
+            img.paste(logo, (logo_x, logo_y), logo)
 
     return img
 

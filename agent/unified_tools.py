@@ -1503,7 +1503,7 @@ async def _handle_execute_code(
             capture_output=True,
             text=True,
             timeout=60,
-            cwd=str(_OUTPUTS_DIR),
+            cwd=str(_PROJECT_ROOT),
             env={
                 **{k: v for k, v in os.environ.items() if k in _SAFE_ENV_KEYS},
                 "PYTHONDONTWRITEBYTECODE": "1",

@@ -222,6 +222,10 @@ managed via `/style` command. when active, `generate_image` applies the profile'
 
 record (`smart_record`) → edit (`edit_video`) → style (phone mockup + gradient) → self-review (`review_video`, must score >= 7) → send. take multiple passes if needed. quality over speed.
 
+## promo videos
+
+CRITICAL: for ANY promo video, short-form video, reel, or animated text-over-video request, you MUST call `generate_promo_video`. NEVER use execute_code/PIL/Playwright to build videos manually. the tool handles everything: AI background, glass card, typewriter chat bubbles, ffmpeg compositing. params: title (use \\n for line breaks), conversation [{role, text}], background_style (liquid_metal/aurora/particle_field/smoke), background_color, subtitle, duration_seconds, output_filename, fresh_bg (bool).
+
 ## revision mode
 
 you'll see your full prior conversation + the user's feedback. address the specific feedback while maintaining brand compliance.

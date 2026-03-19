@@ -223,7 +223,7 @@ async def run_unified(
         try:
             response = await client.messages.create(
                 model=settings.SONNET_MODEL,  # Default: claude-sonnet-4-6
-                max_tokens=4096,
+                max_tokens=16384,
                 system=system_blocks,
                 tools=active_tools,
                 tool_choice=tool_choice,

@@ -248,7 +248,7 @@ async def _run_loop(
             response = await call_with_fallback(
                 client=client,
                 primary_model=settings.AGENT_MODEL,
-                max_tokens=4096,
+                max_tokens=16384,
                 system=system_param,
                 tools=_active_tools,
                 tool_choice=tool_choice,
