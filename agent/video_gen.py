@@ -99,8 +99,7 @@ CRITICAL SCENE VARIETY RULES:
 - stat scenes: use animate 'countUp' for large numbers
 - If the brief describes a visual (bracket, grid, coins), use data_viz or icon_grid
 - narration field: 1-2 sentences of what a voiceover would say (helps pacing)
-- For dark-themed brands: use background 'gradient'
-- For light-themed brands: use background 'clean' or 'dots'
+- Use background 'gradient' for hero/opening scenes, 'clean' for content-heavy scenes, 'dots' for lists/steps
 - Total duration should match the brief. Default ~20 seconds if unspecified.
 - durationFrames per scene: 50-90 frames (1.5-3 seconds). Keep it snappy.
 </rules>
@@ -253,9 +252,9 @@ type Scene =
 </schema>
 
 <example_1>
-Brief: "15 second promo for BloFin MCP launch"
-Brand: BloFin, primary=#00D26A, accent=#00D26A, bg=#0a0f0a (dark), font=Inter
-Format: square (1080x1080), Theme: dark
+Brief: "15 second promo for FOID Foundation — the permanent yearbook for internet culture"
+Brand: FOID Foundation, primary=#6B9FD4, accent=#FFD700, bg=#5B8FC4 (light), font=Orbitron
+Format: square (1080x1080), Theme: light
 
 Output:
 {
@@ -265,73 +264,62 @@ Output:
     "fps": 30,
     "durationInSeconds": 16,
     "brand": {
-      "name": "BloFin",
-      "primaryColor": "#00D26A",
-      "accentColor": "#00D26A",
-      "backgroundColor": "#0a0f0a",
+      "name": "FOID Foundation",
+      "primaryColor": "#6B9FD4",
+      "accentColor": "#FFD700",
+      "backgroundColor": "#5B8FC4",
       "textColor": "#FFFFFF",
-      "fontFamily": "Inter"
+      "fontFamily": "Orbitron"
     }
   },
   "scenes": [
     {
       "type": "title",
-      "label": "INTRODUCING",
-      "headline": "BloFin MCP",
+      "label": "WELCOME TO",
+      "headline": "FOID",
       "background": "gradient",
-      "narration": "Introducing BloFin MCP.",
+      "narration": "Welcome to FOID.",
       "durationFrames": 75
     },
     {
       "type": "tagline",
-      "supertext": "MODEL CONTEXT PROTOCOL",
+      "supertext": "THE PERMANENT YEARBOOK",
       "lines": [
-        { "text": "Your AI now speaks", "accent": false },
-        { "text": "fluent trading.", "accent": true }
+        { "text": "culture, ritual, identity", "accent": false },
+        { "text": "on chain.", "accent": true }
       ],
       "background": "gradient",
-      "narration": "Your AI now speaks fluent trading.",
+      "narration": "Culture, ritual, identity. On chain.",
       "durationFrames": 90
     },
     {
       "type": "feature_count",
       "count": 3,
-      "subtitle": "tools. One connection.",
-      "narration": "Three powerful tools through a single connection.",
+      "subtitle": "pillars. One culture layer.",
+      "narration": "Three pillars. One permanent culture layer.",
       "durationFrames": 60
     },
     {
-      "type": "chat_demo",
-      "messages": [
-        { "text": "What's the BTC funding rate?", "isUser": true },
-        { "text": "BTC funding rate: +0.0082%\\n4h interval - Next in 1h 23m", "isUser": false, "label": "BLOFIN MCP" },
-        { "text": "Open a 2x long on BTC", "isUser": true },
-        { "text": "Order placed\\nBTC-USDT - Long - 2x - Market", "isUser": false, "label": "BLOFIN MCP" }
-      ],
-      "narration": "Ask about funding rates. Place trades. All through natural conversation.",
-      "durationFrames": 120
-    },
-    {
       "type": "steps",
-      "title": "SETUP IN MINUTES",
+      "title": "THE LOOP",
       "steps": [
-        { "number": "01", "heading": "Get your API key", "detail": "blofin.com - APIs - Create Key - Select MCP" },
-        { "number": "02", "heading": "Connect to Claude", "detail": "Paste config into Claude Desktop - restart" },
-        { "number": "03", "heading": "Start trading", "detail": "Ask anything. Your AI handles the rest." }
+        { "number": "01", "heading": "Pray", "detail": "Daily ritual. Build your streak. Earn voting weight." },
+        { "number": "02", "heading": "Swipe", "detail": "Judge memes. The community decides what gets canonized." },
+        { "number": "03", "heading": "Loreboard", "detail": "Place your mark. The grid remembers forever." }
       ],
-      "narration": "Set up in minutes. Get your key, connect to Claude, and start trading.",
-      "durationFrames": 90
+      "narration": "Pray daily. Swipe to judge. Place your mark on the loreboard.",
+      "durationFrames": 120
     },
     {
       "type": "cta",
       "lines": [
-        { "text": "Trade smarter.", "accent": false },
-        { "text": "Talk to your exchange.", "accent": true }
+        { "text": "the grid remembers.", "accent": false },
+        { "text": "start praying.", "accent": true }
       ],
-      "url": "blofin.com/en/blofin-mcp",
-      "buttonText": "Get Started Free",
+      "url": "foid.fun",
+      "buttonText": "Enter FOID",
       "background": "gradient",
-      "narration": "Trade smarter. Talk to your exchange.",
+      "narration": "The grid remembers. Start praying.",
       "durationFrames": 60
     }
   ]
@@ -547,9 +535,9 @@ def _brand_config_to_theme() -> dict:
     config = get_brand_config()
 
     # Extract primary and accent colors
-    primary_hex = "#72e1ff"  # default
-    accent_hex = "#72e1ff"
-    bg_hex = "#0a0f1a"
+    primary_hex = "#6B9FD4"  # default: FOID iridescent blue
+    accent_hex = "#FFD700"   # default: FOID golden amber
+    bg_hex = "#5B8FC4"       # default: FOID sky blue
 
     if "primary" in config.colors:
         primary_hex = config.colors["primary"].hex
