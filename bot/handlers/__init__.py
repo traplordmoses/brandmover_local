@@ -44,6 +44,8 @@ from bot.handlers.media import (      # noqa: F401
     _merge_extracted,
     _process_bulk_upload,
     _delayed_bulk_process,
+    save_asset_command,
+    remake_command,
 )
 from bot.handlers.admin import _run_onboarding_audit   # noqa: F401
 from bot.handlers.admin import health_command, digest_command  # noqa: F401

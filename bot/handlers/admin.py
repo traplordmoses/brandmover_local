@@ -11,6 +11,9 @@ __all__ = [
     "platforms_command",
     "refs_command",
     "brand_command",
+    "brand_edit_command",
+    "confirm_edit_command",
+    "cancel_edit_command",
     "setup_command",
     "discord_setup_command",
     "onboard_command",
@@ -96,6 +99,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             "/review \u2014 Run a self-review of agent performance\n"
             "/style \u2014 Manage visual style profiles\n"
             "/brand \u2014 Show active brand config\n"
+            "/brand_edit <i>instruction</i> \u2014 Edit guidelines via natural language\n"
             "/setup \u2014 Bootstrap guidelines from a PDF upload\n"
             "/cancel \u2014 Clear pending draft\n"
             "/schedule <i>time prompt</i> \u2014 Schedule a post for a specific time\n"
@@ -228,6 +232,90 @@ async def brand_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         lines.append(f"\n<i>Parsed {ts} from {_esc(summary['source_path'])}</i>")
 
     await update.message.reply_text("\n".join(lines), parse_mode="HTML")
+
+
+# ---------------------------------------------------------------------------
+# /brand_edit, /confirm_edit, /cancel_edit
+# ---------------------------------------------------------------------------
+
+
+async def brand_edit_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Edit brand guidelines through natural language.
+    Usage: /brand_edit make the tone more casual
+    """
+    user_id = update.effective_user.id
+    if not _authorized(user_id):
+        return
+
+    args = (update.message.text or "").split(maxsplit=1)
+    if len(args) < 2:
+        await update.message.reply_text(
+            "usage: /brand_edit <instruction>\n\n"
+            "examples:\n"
+            "  /brand_edit add color: Sunset Orange #FF6633\n"
+            "  /brand_edit make the tone more casual\n"
+            "  /brand_edit change tagline to 'culture lives here'\n"
+            "  /brand_edit add 'the loreboard is alive' to brand phrases\n"
+            "  /brand_edit remove 'revolutionizing' from the never-use list\n"
+            "  /brand_edit update the posting cadence to 3-5 posts per day"
+        )
+        return
+
+    instruction = args[1].strip()
+    await update.message.reply_text(f"editing guidelines: {_esc(instruction)}...", parse_mode="HTML")
+
+    from agent.guidelines_editor import apply_edit
+
+    result = await apply_edit(instruction)
+
+    if not result.get("success"):
+        await update.message.reply_text(
+            f"edit failed: {_esc(result.get('error', 'unknown error'))}",
+            parse_mode="HTML",
+        )
+        return
+
+    # Show preview
+    diff_text = result["diff_preview"][:500]
+    msg = (
+        f"<b>Guidelines Edit Preview</b>\n\n"
+        f"<b>Section:</b> {_esc(result['section_modified'])}\n"
+        f"<b>Change:</b> {_esc(result['change_summary'])}\n\n"
+        f"<pre>{_esc(diff_text)}</pre>\n\n"
+        f"/confirm_edit to apply\n"
+        f"/cancel_edit to discard"
+    )
+
+    context.user_data["_pending_guidelines_edit"] = result["new_content"]
+    await update.message.reply_text(msg, parse_mode="HTML")
+
+
+async def confirm_edit_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Confirm and apply a pending guidelines edit."""
+    user_id = update.effective_user.id
+    if not _authorized(user_id):
+        return
+
+    new_content = context.user_data.get("_pending_guidelines_edit")
+    if not new_content:
+        await update.message.reply_text("no pending edit to confirm.")
+        return
+
+    from agent.guidelines_editor import confirm_edit
+
+    success = await confirm_edit(new_content)
+    context.user_data.pop("_pending_guidelines_edit", None)
+
+    if success:
+        await update.message.reply_text("guidelines updated. changes are live.")
+    else:
+        await update.message.reply_text("failed to write guidelines. check file permissions.")
+
+
+async def cancel_edit_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Cancel a pending guidelines edit."""
+    context.user_data.pop("_pending_guidelines_edit", None)
+    await update.message.reply_text("edit cancelled.")
 
 
 # ---------------------------------------------------------------------------

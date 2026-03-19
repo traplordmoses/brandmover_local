@@ -6,6 +6,8 @@ __all__ = [
     "handle_photo",
     "handle_voice",
     "handle_document",
+    "save_asset_command",
+    "remake_command",
 ]
 
 import asyncio as _aio
@@ -292,6 +294,56 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         except Exception as e:
             logger.warning("Asset upload failed: %s", e)
             await update.message.reply_text(f"Failed to add asset: {_esc(str(e))}", parse_mode="HTML")
+        return
+
+    # --- Brand asset analysis: photos with "add to brand" or "analyze" captions ---
+    caption_lower = (update.message.caption or "").lower().strip()
+    is_asset_intent = any(phrase in caption_lower for phrase in [
+        "add to brand", "add to assets", "brand asset", "add this",
+        "catalog this", "save to library", "analyze this",
+    ])
+
+    if _authorized(user_id) and (is_asset_intent or context.user_data.get("awaiting_asset_analysis")):
+        context.user_data.pop("awaiting_asset_analysis", None)
+        await update.message.reply_text("analyzing image for brand library...")
+
+        try:
+            from agent.asset_ingest import analyze_for_library
+
+            analysis = await analyze_for_library(tmp_path)
+
+            # Format the analysis as a nice Telegram message
+            colors_str = ", ".join(
+                f'{c["name"]} ({c["hex"]})' for c in analysis.get("dominant_colors", [])[:4]
+            )
+            captions_str = "\n".join(
+                f'  \u2022 {c}' for c in analysis.get("suggested_captions", [])
+            )
+            tags_str = ", ".join(analysis.get("recommended_tags", [])[:8])
+
+            msg = (
+                f"<b>Asset Analysis</b>\n\n"
+                f"<b>Category:</b> {_esc(analysis.get('category', 'unknown'))}\n"
+                f"<b>Colors:</b> {_esc(colors_str)}\n"
+                f"<b>Style:</b> {_esc(', '.join(analysis.get('style_keywords', [])[:5]))}\n"
+                f"<b>Brand fit:</b> {_esc(analysis.get('brand_alignment', 'unknown'))}\n"
+                f"<b>Notes:</b> {_esc(analysis.get('brand_alignment_notes', ''))}\n\n"
+                f"<b>Suggested captions:</b>\n{_esc(captions_str)}\n\n"
+                f"<b>Tags:</b> {_esc(tags_str)}\n\n"
+                f"Reply /save_asset to add to the brand library\n"
+                f"Reply /save_asset announcement (or meme, community, etc.) to set content type"
+            )
+
+            # Store analysis for /save_asset command
+            context.user_data["_pending_asset_analysis"] = analysis
+            context.user_data["_pending_asset_path"] = tmp_path
+
+            await update.message.reply_text(msg, parse_mode="HTML")
+        except Exception as e:
+            logger.error("Asset analysis failed: %s", e)
+            await update.message.reply_text(
+                f"Asset analysis failed: {_esc(str(e))}", parse_mode="HTML"
+            )
         return
 
     # --- Priority flag checks (admin only: logo > ingest > brand_check) ---
@@ -694,6 +746,12 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     # Video file handling — save as reference and pass to agent
     is_video = file_name.lower().endswith((".mp4", ".mov", ".webm", ".avi", ".mkv"))
     if is_video:
+        # Check for video style analysis intent
+        caption = (update.message.caption or "").strip().lower()
+        if caption and _is_video_analysis_intent(caption):
+            await _handle_video_style_analysis(update, context, document)
+            return
+
         try:
             _fsize = getattr(document, "file_size", None)
             if isinstance(_fsize, int) and _fsize > 100 * 1024 * 1024:
@@ -874,4 +932,295 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         await update.message.reply_text(
             f"Setup failed: {_esc(str(e))}\n\nTry again with /setup.",
             parse_mode="HTML",
+        )
+
+
+# ---------------------------------------------------------------------------
+# /save_asset command
+# ---------------------------------------------------------------------------
+
+async def save_asset_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Save a previously analyzed image to the brand asset library."""
+    user_id = update.effective_user.id
+    if not _authorized(user_id):
+        return
+
+    analysis = context.user_data.get("_pending_asset_analysis")
+    asset_path = context.user_data.get("_pending_asset_path")
+
+    if not analysis or not asset_path:
+        await update.message.reply_text(
+            "no pending asset to save. upload an image with 'add to brand' caption first."
+        )
+        return
+
+    # Parse optional content type from command args
+    args = (update.message.text or "").split(maxsplit=1)
+    content_type = args[1].strip() if len(args) > 1 else None
+
+    try:
+        from agent.asset_ingest import add_to_library
+
+        entry = await add_to_library(asset_path, analysis, content_type=content_type)
+
+        # Clean up
+        context.user_data.pop("_pending_asset_analysis", None)
+        context.user_data.pop("_pending_asset_path", None)
+
+        await update.message.reply_text(
+            f"saved to brand library.\n\n"
+            f"<b>ID:</b> <code>{entry.get('id', '?')}</code>\n"
+            f"<b>Type:</b> {_esc(entry.get('content_type', 'general'))}\n"
+            f"<b>Tags:</b> {_esc(', '.join(entry.get('tags', [])))}",
+            parse_mode="HTML",
+        )
+    except Exception as e:
+        logger.error("save_asset failed: %s", e)
+        await update.message.reply_text(
+            f"failed to save asset: {_esc(str(e))}", parse_mode="HTML"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Video style reverse-engineering
+# ---------------------------------------------------------------------------
+
+_VIDEO_ANALYSIS_TRIGGERS = [
+    "break this down",
+    "break it down",
+    "analyze style",
+    "analyse style",
+    "reverse engineer",
+    "style breakdown",
+    "video breakdown",
+    "analyze this",
+    "analyse this",
+    "what style is this",
+    "deconstruct",
+    "study this",
+    "break down the style",
+]
+
+
+def _is_video_analysis_intent(caption: str) -> bool:
+    """Check if the caption indicates a video style analysis request."""
+    caption_lower = caption.lower().strip()
+    return any(trigger in caption_lower for trigger in _VIDEO_ANALYSIS_TRIGGERS)
+
+
+async def _handle_video_style_analysis(
+    update: Update, context: ContextTypes.DEFAULT_TYPE, document,
+) -> None:
+    """Handle video upload with style analysis intent."""
+    import os as _os
+
+    file_name = document.file_name or "video.mp4"
+
+    # Size guard
+    _fsize = getattr(document, "file_size", None)
+    if isinstance(_fsize, int) and _fsize > 100 * 1024 * 1024:
+        await update.message.reply_text("Video too large (max 100 MB).")
+        return
+
+    await update.message.reply_text("downloading video for style analysis...")
+    await update.message.chat.send_action("typing")
+
+    # Download to temp
+    tg_file = await document.get_file()
+    safe_name = _os.path.basename(file_name)
+    tmp_fd = tempfile.NamedTemporaryFile(
+        suffix="_" + safe_name, prefix="brandmover_vr_", delete=False,
+    )
+    tmp_path = tmp_fd.name
+    tmp_fd.close()
+
+    try:
+        await tg_file.download_to_drive(tmp_path)
+    except Exception as e:
+        logger.error("Video download failed: %s", e)
+        await update.message.reply_text("couldn't download the video, try again.")
+        return
+
+    try:
+        from agent import video_reverse
+
+        # Step 1: Extract keyframes
+        await update.message.reply_text("extracting keyframes...")
+        await update.message.chat.send_action("typing")
+        frames = await video_reverse.extract_keyframes(tmp_path)
+
+        if not frames:
+            await update.message.reply_text(
+                "couldn't extract frames from this video. "
+                "make sure ffmpeg is installed and the video isn't corrupted."
+            )
+            return
+
+        await update.message.reply_text(
+            f"extracted {len(frames)} frames, analyzing style with Claude Vision..."
+        )
+        await update.message.chat.send_action("typing")
+
+        # Step 2: Analyze with Claude Vision
+        analysis = await video_reverse.analyze_video_style(tmp_path, frames)
+
+        # Step 3: Format and send breakdown
+        breakdown = await video_reverse.format_breakdown(analysis)
+
+        # Split long messages for Telegram's 4096 char limit
+        if len(breakdown) > 4000:
+            parts = _split_html_message(breakdown, 3900)
+            for part in parts:
+                await update.message.reply_text(part, parse_mode="HTML")
+        else:
+            await update.message.reply_text(breakdown, parse_mode="HTML")
+
+        # Step 4: Store analysis for /remake
+        context.user_data["_pending_video_analysis"] = analysis
+        context.user_data["_pending_video_path"] = tmp_path
+
+        await update.message.reply_text(
+            "reply /remake to recreate this in your brand style."
+        )
+
+        # Clean up frame temp files
+        for frame in frames:
+            try:
+                Path(frame).unlink(missing_ok=True)
+            except OSError:
+                pass
+
+    except RuntimeError as e:
+        # ffmpeg not installed
+        await update.message.reply_text(str(e))
+    except Exception as e:
+        logger.error("Video style analysis failed: %s", e)
+        await update.message.reply_text(
+            f"video analysis failed: {_esc(str(e))}", parse_mode="HTML"
+        )
+
+
+def _split_html_message(text: str, max_len: int) -> list[str]:
+    """Split a long HTML message into chunks at line boundaries."""
+    lines = text.split("\n")
+    parts: list[str] = []
+    current: list[str] = []
+    current_len = 0
+
+    for line in lines:
+        line_len = len(line) + 1  # +1 for newline
+        if current_len + line_len > max_len and current:
+            parts.append("\n".join(current))
+            current = []
+            current_len = 0
+        current.append(line)
+        current_len += line_len
+
+    if current:
+        parts.append("\n".join(current))
+
+    return parts
+
+
+async def remake_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /remake — recreate an analyzed video in brand style."""
+    user_id = update.effective_user.id
+    if not _authorized(user_id):
+        return
+
+    analysis = context.user_data.get("_pending_video_analysis")
+    if not analysis:
+        await update.message.reply_text(
+            "no video analysis to remake. upload a video with the caption "
+            '"break this down" first.'
+        )
+        return
+
+    await update.message.reply_text("remapping to your brand style...")
+    await update.message.chat.send_action("typing")
+
+    try:
+        from agent import video_reverse
+
+        # Remap to brand
+        scene_json = await video_reverse.remap_to_brand(analysis)
+
+        # Format preview
+        config = scene_json.get("config", {})
+        brand = config.get("brand", {})
+        scenes = scene_json.get("scenes", [])
+        duration = config.get("durationInSeconds", 0)
+
+        preview_lines = [
+            "<b>Brand-Remapped Video</b>",
+            "",
+            f"<b>Brand:</b> {_esc(brand.get('name', '?'))}",
+            f"<b>Duration:</b> {duration:.1f}s",
+            f"<b>Format:</b> {config.get('width', '?')}x{config.get('height', '?')}",
+            f"<b>Colors:</b> {brand.get('primaryColor', '')} / {brand.get('accentColor', '')} / {brand.get('backgroundColor', '')}",
+            f"<b>Font:</b> {_esc(brand.get('fontFamily', '?'))}",
+            "",
+            f"<b>Scene Plan ({len(scenes)} scenes):</b>",
+        ]
+
+        for i, scene in enumerate(scenes):
+            stype = scene.get("type", "?")
+            frames = scene.get("durationFrames", 0)
+            sec = frames / 30.0 if frames else 0
+
+            # Get a short description based on scene type
+            desc = ""
+            if stype == "title":
+                desc = scene.get("headline", "")
+            elif stype == "tagline":
+                line_texts = [ln.get("text", "") for ln in scene.get("lines", [])]
+                desc = " ".join(line_texts)
+            elif stype == "text_only":
+                desc = scene.get("text", "")
+            elif stype == "stat":
+                desc = f'{scene.get("value", "")}{scene.get("suffix", "")} {scene.get("label", "")}'
+            elif stype == "feature_list":
+                items = scene.get("items", [])
+                desc = f'{len(items)} items'
+            elif stype == "cta":
+                desc = scene.get("buttonText", "")
+            elif stype == "chat_demo":
+                desc = f'{len(scene.get("messages", []))} messages'
+            elif stype == "steps":
+                desc = f'{len(scene.get("items", []))} steps'
+            else:
+                desc = scene.get("narration", "")[:40] if scene.get("narration") else ""
+
+            if desc:
+                desc = f' - {_esc(desc[:50])}'
+            preview_lines.append(f"  {i + 1}. <b>{_esc(stype)}</b> ({sec:.1f}s){desc}")
+
+        preview = "\n".join(preview_lines)
+
+        await update.message.reply_text(preview, parse_mode="HTML")
+
+        # Send the raw JSON as a document for use with /render
+        json_str = json.dumps(scene_json, indent=2)
+        json_bytes = json_str.encode("utf-8")
+
+        import io as _io
+        json_doc = _io.BytesIO(json_bytes)
+        json_doc.name = "brand_video_scenes.json"
+
+        await update.message.reply_document(
+            document=json_doc,
+            caption="scene JSON for /render",
+        )
+
+        # Store for potential /render usage
+        context.user_data["_remake_scene_json"] = scene_json
+
+        await update.message.reply_text(
+            "reply /render to generate this video, or edit the JSON and send it back."
+        )
+
+    except Exception as e:
+        logger.error("Video remake failed: %s", e)
+        await update.message.reply_text(
+            f"remake failed: {_esc(str(e))}", parse_mode="HTML"
         )

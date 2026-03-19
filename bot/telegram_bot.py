@@ -54,6 +54,9 @@ def create_bot() -> Application:
     app.add_handler(CommandHandler("logo", handlers.logo_command))
     app.add_handler(CommandHandler("ingest", handlers.ingest_command))
     app.add_handler(CommandHandler("apply", handlers.apply_command))
+    app.add_handler(CommandHandler("brand_edit", handlers.brand_edit_command))
+    app.add_handler(CommandHandler("confirm_edit", handlers.confirm_edit_command))
+    app.add_handler(CommandHandler("cancel_edit", handlers.cancel_edit_command))
     app.add_handler(CommandHandler("brand_check", handlers.brand_check_command))
     app.add_handler(CommandHandler("train_lora", handlers.train_lora_command))
     app.add_handler(CommandHandler("lora_status", handlers.lora_status_command))
@@ -93,6 +96,8 @@ def create_bot() -> Application:
     app.add_handler(CommandHandler("approval_rate", handlers.approval_rate_command))
     app.add_handler(CommandHandler("health", handlers.health_command))
     app.add_handler(CommandHandler("digest", handlers.digest_command))
+    app.add_handler(CommandHandler("save_asset", handlers.save_asset_command))
+    app.add_handler(CommandHandler("remake", handlers.remake_command))
 
     # Inline button callbacks (e.g. /generate approve/reject buttons)
     app.add_handler(CallbackQueryHandler(handlers.generate_callback, pattern=r"^gen_"))
