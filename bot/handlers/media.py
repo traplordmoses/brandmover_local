@@ -798,11 +798,45 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
     is_pdf = file_name.lower().endswith(".pdf")
 
+    # Accept any file type — save non-PDF files to brand references
     if not is_pdf:
-        await update.message.reply_text(
-            "I can accept PDFs, images, fonts (.ttf/.otf), and videos (.mp4/.mov). "
-            "Send a file to add to your brand references."
-        )
+        try:
+            import os as _os
+            safe_name = _os.path.basename(file_name)
+            if not safe_name:
+                await update.message.reply_text("Invalid filename.")
+                return
+            _fsize = getattr(document, "file_size", None)
+            if isinstance(_fsize, int) and _fsize > 50 * 1024 * 1024:
+                await update.message.reply_text("File too large (max 50 MB).")
+                return
+            refs_dir = Path(settings.BRAND_FOLDER) / "references"
+            refs_dir.mkdir(parents=True, exist_ok=True)
+            save_path = refs_dir / safe_name
+            tg_file = await document.get_file()
+            await tg_file.download_to_drive(str(save_path))
+
+            caption = update.message.caption or ""
+            user_id = update.effective_user.id
+
+            await update.message.reply_text(
+                f"File <b>{_esc(safe_name)}</b> saved to brand references.\n"
+                f"Path: <code>{_esc(str(save_path))}</code>",
+                parse_mode="HTML",
+            )
+
+            # If there's a caption, route it through the agent with file context
+            if caption:
+                synthetic_text = f"[File uploaded: {save_path}]\n\n{caption}"
+                transcript.log_user_message(user_id, synthetic_text)
+                from bot.handlers.generation import _handle_unified, _handle_agent_mode
+                if settings.UNIFIED_BRAIN_ENABLED:
+                    await _handle_unified(update, context, synthetic_text, user_id=user_id)
+                else:
+                    await _handle_agent_mode(update, synthetic_text, user_id=user_id)
+        except Exception as e:
+            logger.error("File upload failed: %s", e)
+            await update.message.reply_text("File upload failed. Check logs.")
         return
 
     # Smart PDF handling — save to references, auto-extract if no guidelines exist

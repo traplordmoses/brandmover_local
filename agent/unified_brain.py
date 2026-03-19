@@ -221,8 +221,10 @@ async def run_unified(
         )
 
         try:
-            response = await client.messages.create(
-                model=settings.SONNET_MODEL,  # Default: claude-sonnet-4-6
+            from agent.model_fallback import call_with_fallback
+            response = await call_with_fallback(
+                client=client,
+                primary_model=settings.SONNET_MODEL,
                 max_tokens=16384,
                 system=system_blocks,
                 tools=active_tools,

@@ -174,8 +174,10 @@ async def handle_casual_chat(message: str, context: ConversationContext) -> str:
             })
         messages.append({"role": "user", "content": f"<user_request>\n{message}\n</user_request>"})
 
-        response = await client.messages.create(
-            model=settings.SONNET_MODEL,
+        from agent.model_fallback import call_with_fallback
+        response = await call_with_fallback(
+            client=client,
+            primary_model=settings.SONNET_MODEL,
             max_tokens=settings.CHAT_MAX_TOKENS,
             system=system_prompt,
             messages=messages,

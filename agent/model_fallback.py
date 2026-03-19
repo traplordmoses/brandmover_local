@@ -52,8 +52,8 @@ def _detect_provider(model: str) -> str:
 
 # Default fallback chains (cross-provider)
 DEFAULT_CHAINS: dict[str, list[str]] = {
-    "agent": ["claude-sonnet-4-6", "claude-haiku-4-5-20251001", "gpt-4o", "gemini-2.0-flash"],
-    "generation": ["claude-sonnet-4-6", "claude-haiku-4-5-20251001", "gpt-4o"],
+    "agent": ["claude-sonnet-4-6", "claude-haiku-4-5-20251001", "gpt-5.4", "gemini-2.0-flash"],
+    "generation": ["claude-sonnet-4-6", "claude-haiku-4-5-20251001", "gpt-5.4"],
     "haiku": ["claude-haiku-4-5-20251001"],
 }
 
@@ -132,13 +132,45 @@ def _normalize_anthropic(response: anthropic.types.Message) -> dict:
     }
 
 
+def _anthropic_tools_to_openai(tools: list[dict]) -> list[dict]:
+    """Convert Anthropic tool definitions to OpenAI function-calling format."""
+    oai_tools = []
+    for tool in tools:
+        oai_tools.append({
+            "type": "function",
+            "function": {
+                "name": tool["name"],
+                "description": tool.get("description", ""),
+                "parameters": tool.get("input_schema", {"type": "object", "properties": {}}),
+            },
+        })
+    return oai_tools
+
+
+def _anthropic_tool_choice_to_openai(tool_choice: dict) -> str | dict | None:
+    """Convert Anthropic tool_choice to OpenAI format."""
+    tc_type = tool_choice.get("type", "auto")
+    if tc_type == "auto":
+        return "auto"
+    if tc_type == "none":
+        return "none"
+    if tc_type == "any":
+        return "required"
+    if tc_type == "tool":
+        return {"type": "function", "function": {"name": tool_choice["name"]}}
+    return "auto"
+
+
 async def _call_openai(model: str, **kwargs) -> dict:
     """Call OpenAI API and return normalized response."""
+    import json as _json
     from config import settings
 
     messages = kwargs.get("messages", [])
     system = kwargs.get("system", "")
     max_tokens = kwargs.get("max_tokens", 4096)
+    tools = kwargs.get("tools", [])
+    tool_choice = kwargs.get("tool_choice", None)
 
     # Convert Anthropic message format to OpenAI format
     oai_messages = []
@@ -151,19 +183,82 @@ async def _call_openai(model: str, **kwargs) -> dict:
             system_text = system
         oai_messages.append({"role": "system", "content": system_text})
 
+    def _block_type(block) -> str:
+        """Get type from a block — works with both dicts and Anthropic SDK objects."""
+        if isinstance(block, dict):
+            return block.get("type", "")
+        return getattr(block, "type", "")
+
+    def _block_attr(block, attr, default=""):
+        """Get attribute from a block — works with both dicts and Anthropic SDK objects."""
+        if isinstance(block, dict):
+            return block.get(attr, default)
+        return getattr(block, attr, default)
+
     for msg in messages:
         role = msg.get("role", "user")
         content = msg.get("content", "")
         if isinstance(content, list):
-            # Convert content blocks to text
             text_parts = []
+            tool_call_blocks = []
+            tool_result_blocks = []
             for block in content:
-                if isinstance(block, dict) and block.get("type") == "text":
-                    text_parts.append(block["text"])
-                elif isinstance(block, dict) and block.get("type") == "tool_result":
-                    text_parts.append(str(block.get("content", "")))
+                btype = _block_type(block)
+                if btype == "text":
+                    text_parts.append(_block_attr(block, "text", ""))
+                elif btype == "tool_use":
+                    tool_call_blocks.append(block)
+                elif btype == "tool_result":
+                    tool_result_blocks.append(block)
+
+            # If this is an assistant message with tool_use blocks, emit as tool_calls
+            if role == "assistant" and tool_call_blocks:
+                oai_msg: dict = {"role": "assistant", "content": "\n".join(text_parts) if text_parts else None}
+                oai_msg["tool_calls"] = [
+                    {
+                        "id": _block_attr(b, "id"),
+                        "type": "function",
+                        "function": {
+                            "name": _block_attr(b, "name"),
+                            "arguments": _json.dumps(_block_attr(b, "input", {})) if isinstance(_block_attr(b, "input", {}), dict) else str(_block_attr(b, "input", {})),
+                        },
+                    }
+                    for b in tool_call_blocks
+                ]
+                oai_messages.append(oai_msg)
+                continue
+
+            # If this is a user message with tool_result blocks, emit as tool messages
+            if tool_result_blocks:
+                if text_parts:
+                    oai_messages.append({"role": "user", "content": "\n".join(text_parts)})
+                for b in tool_result_blocks:
+                    result_content = _block_attr(b, "content", "")
+                    if isinstance(result_content, list):
+                        result_content = "\n".join(
+                            _block_attr(p, "text", "") for p in result_content if _block_type(p) == "text"
+                        )
+                    oai_messages.append({
+                        "role": "tool",
+                        "tool_call_id": _block_attr(b, "tool_use_id", ""),
+                        "content": str(result_content),
+                    })
+                continue
+
             content = "\n".join(text_parts)
         oai_messages.append({"role": role, "content": content})
+
+    body: dict = {
+        "model": model,
+        "messages": oai_messages,
+        "max_completion_tokens": max_tokens,
+    }
+
+    # Add tools if provided
+    if tools:
+        body["tools"] = _anthropic_tools_to_openai(tools)
+        if tool_choice:
+            body["tool_choice"] = _anthropic_tool_choice_to_openai(tool_choice)
 
     client = get_httpx()
     resp = await client.post(
@@ -172,22 +267,43 @@ async def _call_openai(model: str, **kwargs) -> dict:
             "Authorization": f"Bearer {settings.OPENAI_API_KEY}",
             "Content-Type": "application/json",
         },
-        json={
-            "model": model,
-            "messages": oai_messages,
-            "max_tokens": max_tokens,
-        },
+        json=body,
         timeout=120,
     )
+    if resp.status_code != 200:
+        try:
+            error_body = resp.json()
+        except Exception:
+            error_body = resp.text
+        logger.error("OpenAI API error %d: %s", resp.status_code, error_body)
     resp.raise_for_status()
     data = resp.json()
 
     choice = data["choices"][0]
+    msg = choice["message"]
+
+    # Build content blocks — handle both text and tool_calls
+    blocks = []
+    if msg.get("content"):
+        blocks.append({"type": "text", "text": msg["content"]})
+    if msg.get("tool_calls"):
+        for tc in msg["tool_calls"]:
+            try:
+                args = _json.loads(tc["function"]["arguments"])
+            except (_json.JSONDecodeError, TypeError):
+                args = {}
+            blocks.append({
+                "type": "tool_use",
+                "id": tc["id"],
+                "name": tc["function"]["name"],
+                "input": args,
+            })
+
     return {
         "provider": "openai",
         "model": data.get("model", model),
-        "content": [{"type": "text", "text": choice["message"]["content"]}],
-        "stop_reason": choice.get("finish_reason", "end_turn"),
+        "content": blocks,
+        "stop_reason": "tool_use" if msg.get("tool_calls") else choice.get("finish_reason", "end_turn"),
         "usage": data.get("usage", {}),
         "_raw": data,
     }
@@ -317,34 +433,37 @@ async def call_with_fallback(
                     logger.info("Fallback succeeded: %s/%s (after %d failed)", provider, model, i)
                 return response
             else:
-                # Cross-provider fallback — text only (no tool_use).
-                # LIMITATION: Non-Anthropic providers cannot handle Anthropic's
-                # tool_use format, so tools/tool_choice are stripped. This means
-                # the agent loop will receive a text-only response with no
-                # tool_use blocks, causing it to exit on the next iteration.
-                # This is a known degradation — the fallback preserves text
-                # generation but loses agentic tool-calling capability.
+                # Cross-provider fallback with tool-use support for OpenAI.
+                # OpenAI function-calling is converted automatically.
+                # Gemini still strips tools (no conversion implemented).
                 caller = _PROVIDER_CALLERS[provider]
                 had_tools = "tools" in kwargs or "tool_choice" in kwargs
-                fallback_kwargs = {k: v for k, v in kwargs.items() if k not in ("tools", "tool_choice")}
-                if had_tools:
-                    logger.warning(
-                        "ARCH-03: Falling back to %s/%s — tools and tool_choice stripped. "
-                        "Tool-use capability is DEGRADED; agent loop will receive text-only response.",
-                        provider, model,
-                    )
+                if provider == "openai":
+                    # OpenAI supports function calling — pass tools through
+                    fallback_kwargs = dict(kwargs)
+                    logger.info("Falling back to %s/%s with tool-use support", provider, model)
+                else:
+                    # Other providers — strip tools (degraded)
+                    fallback_kwargs = {k: v for k, v in kwargs.items() if k not in ("tools", "tool_choice")}
+                    if had_tools:
+                        logger.warning(
+                            "ARCH-03: Falling back to %s/%s — tools stripped. "
+                            "Tool-use capability is DEGRADED.",
+                            provider, model,
+                        )
                 result = caller(model, **fallback_kwargs)
-                # Handle both sync and async callers
                 if hasattr(result, '__await__'):
                     result = await result
                 if i > 0:
                     logger.info("Fallback succeeded: %s/%s (after %d failed)", provider, model, i)
-                # Wrap in Anthropic-compatible response, noting tool degradation
-                return _wrap_as_anthropic(result, tools_degraded=had_tools)
+                tools_degraded = had_tools and provider != "openai"
+                return _wrap_as_anthropic(result, tools_degraded=tools_degraded)
 
         except anthropic.APIStatusError as e:
             last_error = e
-            if e.status_code in _RETRIABLE_STATUS and i < len(available_models) - 1:
+            # Treat credit-balance errors (400) as retriable so we fall back
+            is_credit_error = e.status_code == 400 and "credit balance" in str(e).lower()
+            if (e.status_code in _RETRIABLE_STATUS or is_credit_error) and i < len(available_models) - 1:
                 logger.warning(
                     "Model %s/%s returned %d — falling back to %s",
                     provider, model, e.status_code, available_models[i + 1],
@@ -366,32 +485,49 @@ async def call_with_fallback(
 
 def _wrap_as_anthropic(result: dict, *, tools_degraded: bool = False) -> anthropic.types.Message:
     """Wrap a normalized provider response as an Anthropic Message for compatibility."""
-    # Extract text from the normalized result
-    text_content = ""
+    content_blocks: list[anthropic.types.TextBlock | anthropic.types.ToolUseBlock] = []
+
     for block in result.get("content", []):
-        if block.get("type") == "text":
-            text_content += block["text"]
+        if block.get("type") == "text" and block.get("text"):
+            text = block["text"]
+            if tools_degraded and not content_blocks:
+                text = (
+                    "[FALLBACK NOTICE: This response was generated by a non-Anthropic provider "
+                    f"({result.get('provider', 'unknown')}/{result.get('model', 'unknown')}) "
+                    "without tool-use capability. The agent cannot call tools in this turn.]\n\n"
+                    + text
+                )
+            content_blocks.append(anthropic.types.TextBlock(type="text", text=text))
+        elif block.get("type") == "tool_use":
+            content_blocks.append(anthropic.types.ToolUseBlock(
+                type="tool_use",
+                id=block["id"],
+                name=block["name"],
+                input=block["input"],
+            ))
 
-    # If tools were stripped during fallback, prepend a note so the engine
-    # loop can detect that this response came from a degraded (no-tool) path.
-    if tools_degraded:
-        text_content = (
-            "[FALLBACK NOTICE: This response was generated by a non-Anthropic provider "
-            f"({result.get('provider', 'unknown')}/{result.get('model', 'unknown')}) "
-            "without tool-use capability. The agent cannot call tools in this turn.]\n\n"
-            + text_content
-        )
+    # Ensure at least one content block
+    if not content_blocks:
+        content_blocks.append(anthropic.types.TextBlock(type="text", text=""))
 
-    # Build a minimal Anthropic-compatible Message
+    # Map stop_reason
+    stop_reason = result.get("stop_reason", "end_turn")
+    if stop_reason == "tool_use":
+        stop_reason = "tool_use"
+    elif stop_reason in ("stop", "end_turn"):
+        stop_reason = "end_turn"
+    else:
+        stop_reason = "end_turn"
+
     return anthropic.types.Message(
         id=f"msg_{result.get('provider', 'fallback')}",
         type="message",
         role="assistant",
-        content=[anthropic.types.TextBlock(type="text", text=text_content)],
+        content=content_blocks,
         model=result.get("model", "unknown"),
-        stop_reason="end_turn",
+        stop_reason=stop_reason,
         usage=anthropic.types.Usage(
-            input_tokens=result.get("usage", {}).get("input_tokens", 0),
-            output_tokens=result.get("usage", {}).get("output_tokens", 0),
+            input_tokens=result.get("usage", {}).get("input_tokens", 0) or 0,
+            output_tokens=result.get("usage", {}).get("output_tokens", 0) or 0,
         ),
     )

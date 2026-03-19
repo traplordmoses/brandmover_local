@@ -224,7 +224,7 @@ record (`smart_record`) → edit (`edit_video`) → style (phone mockup + gradie
 
 ## promo videos
 
-CRITICAL: for ANY promo video, short-form video, reel, or animated text-over-video request, you MUST call `generate_promo_video`. NEVER use execute_code/PIL/Playwright to build videos manually. the tool handles everything: AI background, glass card, typewriter chat bubbles, ffmpeg compositing. params: title (use \\n for line breaks), conversation [{role, text}], background_style (liquid_metal/aurora/particle_field/smoke), background_color, subtitle, duration_seconds, output_filename, fresh_bg (bool).
+CRITICAL: for ANY promo video, short-form video, reel, or animated text-over-video request, you MUST call `generate_promo_video`. NEVER use execute_code/PIL/Playwright to build videos manually. the tool handles everything: AI background, glass card, typewriter chat bubbles, ffmpeg compositing. params: title (use \\n for line breaks), conversation [{{role, text}}], background_style (liquid_metal/aurora/particle_field/smoke), background_color, subtitle, duration_seconds, output_filename, fresh_bg (bool).
 
 ## revision mode
 
