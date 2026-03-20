@@ -742,10 +742,49 @@ async def _handle_agent_mode(update: Update, request: str, user_id: int | None =
 
     except Exception as e:
         logger.error("Agent error: %s", e)
+        import traceback as _tb
+        tb_str = _tb.format_exc()
+
+        # Auto-escalation to Claude Code if enabled
+        escalation_msg = ""
+        if getattr(settings, "CLAUDE_CODE_AUTO_ESCALATE", False):
+            escalation_msg = "\n\nAttempting auto-fix via Claude Code..."
+
         await update.message.reply_text(
-            f"Something went wrong: {_esc(str(e))}\n\nPlease try again.",
+            f"Something went wrong: {_esc(str(e))}{escalation_msg}\n\nPlease try again.",
             parse_mode="HTML",
         )
+
+        # Fire auto-escalation in background
+        if getattr(settings, "CLAUDE_CODE_AUTO_ESCALATE", False):
+            async def _notify(msg: str):
+                try:
+                    await update.message.reply_text(
+                        f"<b>[Auto-Fix]</b> {_esc(msg)}",
+                        parse_mode="HTML",
+                    )
+                except Exception:
+                    pass
+
+            _aio.create_task(
+                _escalate_agent_error(e, tb_str, _notify)
+            )
+
+
+async def _escalate_agent_error(
+    error: Exception, tb_str: str, notify_callback
+) -> None:
+    """Background task: escalate an agent error to Claude Code."""
+    try:
+        from agent.claude_code import escalate_error
+        await escalate_error(
+            error,
+            context="content generation (agent mode)",
+            traceback_str=tb_str,
+            notify_callback=notify_callback,
+        )
+    except Exception as esc_err:
+        logger.error("Auto-escalation failed: %s", esc_err)
 
 
 async def _handle_pipeline_mode(update: Update, request: str, user_id: int | None = None) -> None:

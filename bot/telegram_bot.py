@@ -98,6 +98,7 @@ def create_bot() -> Application:
     app.add_handler(CommandHandler("digest", handlers.digest_command))
     app.add_handler(CommandHandler("save_asset", handlers.save_asset_command))
     app.add_handler(CommandHandler("remake", handlers.remake_command))
+    app.add_handler(CommandHandler("code", handlers.code_command))
 
     # Inline button callbacks (e.g. /generate approve/reject buttons)
     app.add_handler(CallbackQueryHandler(handlers.generate_callback, pattern=r"^gen_"))
@@ -107,6 +108,9 @@ def create_bot() -> Application:
 
     # Template-from-reference inline buttons (Save/Adjust/Discard)
     app.add_handler(CallbackQueryHandler(handlers.tplref_callback, pattern=r"^tplref_"))
+
+    # Claude Code inline buttons (Reload/Diff/Revert)
+    app.add_handler(CallbackQueryHandler(handlers.code_callback, pattern=r"^code_"))
 
     # Voice and audio messages (transcribe → process as text)
     app.add_handler(

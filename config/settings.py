@@ -250,6 +250,17 @@ TELEGRAM_MONITOR_CHANNELS: str = os.getenv("TELEGRAM_MONITOR_CHANNELS", "")
 # When cumulative daily spend reaches this limit, check_cost_budget() returns allowed=False.
 DAILY_COST_BUDGET_USD: float = float(os.getenv("DAILY_COST_BUDGET_USD", "5.0"))
 
+# ── Claude Code CLI Integration ──
+# Enables the /code command for self-repair from Telegram.
+# Requires `claude` CLI installed (claude.ai subscription).
+CLAUDE_CODE_ENABLED: bool = os.getenv("CLAUDE_CODE_ENABLED", "true").lower() in ("true", "1", "yes")
+CLAUDE_CODE_MODEL: str = os.getenv("CLAUDE_CODE_MODEL", "sonnet")
+CLAUDE_CODE_MAX_BUDGET_USD: float = float(os.getenv("CLAUDE_CODE_MAX_BUDGET_USD", "1.00"))
+CLAUDE_CODE_ESCALATION_BUDGET_USD: float = float(os.getenv("CLAUDE_CODE_ESCALATION_BUDGET_USD", "0.50"))
+CLAUDE_CODE_TIMEOUT_SECONDS: int = _safe_int("CLAUDE_CODE_TIMEOUT_SECONDS", 300)
+CLAUDE_CODE_DAILY_LIMIT: int = _safe_int("CLAUDE_CODE_DAILY_LIMIT", 20)
+CLAUDE_CODE_AUTO_ESCALATE: bool = os.getenv("CLAUDE_CODE_AUTO_ESCALATE", "false").lower() in ("true", "1", "yes")
+
 # ── Content Planner ──
 # Rolling 7-day content plan with automatic type balancing.
 # CONTENT_PLANNER_ENABLED: opt-in; when True, auto_post uses the planner

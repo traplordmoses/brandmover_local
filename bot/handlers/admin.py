@@ -41,6 +41,8 @@ __all__ = [
     "done_command",
     "health_command",
     "digest_command",
+    "code_command",
+    "code_callback",
 ]
 
 import asyncio as _aio
@@ -142,6 +144,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             "/platforms \u2014 Show enabled publishing platforms\n"
             "/health \u2014 Show system health status\n"
             "/digest \u2014 Generate daily performance digest\n"
+            "/code <i>instruction</i> \u2014 Run Claude Code to fix/modify the bot\n"
             "/help \u2014 Show this message"
         )
     else:
@@ -1734,3 +1737,258 @@ async def digest_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     except Exception as e:
         logger.error("Digest command failed: %s", e)
         await update.message.reply_text(f"Digest generation failed: {_esc(str(e))}", parse_mode="HTML")
+
+
+# ---------------------------------------------------------------------------
+# /code — Claude Code CLI integration
+# ---------------------------------------------------------------------------
+
+# Per-user lock to prevent concurrent Claude Code runs
+_code_locks: dict[int, _aio.Lock] = {}
+
+
+def _get_code_lock(user_id: int) -> _aio.Lock:
+    if user_id not in _code_locks:
+        _code_locks[user_id] = _aio.Lock()
+    return _code_locks[user_id]
+
+
+async def code_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /code — run Claude Code CLI to modify the bot's own codebase."""
+    uid = update.effective_user.id
+    if not _authorized(uid):
+        return
+
+    if not settings.CLAUDE_CODE_ENABLED:
+        await update.message.reply_text(
+            "Claude Code integration is disabled.\n"
+            "Set <code>CLAUDE_CODE_ENABLED=true</code> in .env to enable.",
+            parse_mode="HTML",
+        )
+        return
+
+    from agent import claude_code
+
+    # Parse subcommands
+    raw_args = update.message.text.split(None, 1)
+    instruction = raw_args[1].strip() if len(raw_args) > 1 else ""
+
+    if not instruction:
+        await update.message.reply_text(
+            "<b>Claude Code</b>\n\n"
+            "Usage:\n"
+            "<code>/code &lt;instruction&gt;</code> — run Claude Code\n"
+            "<code>/code resume &lt;follow-up&gt;</code> — continue last session\n"
+            "<code>/code status</code> — show session info\n\n"
+            "Example:\n"
+            "<code>/code fix the image generation timeout in image_gen.py</code>",
+            parse_mode="HTML",
+        )
+        return
+
+    # /code status
+    if instruction.lower() == "status":
+        session_id = (context.user_data or {}).get("_cc_session_id", "")
+        last_cost = (context.user_data or {}).get("_cc_last_cost", 0)
+        last_files = (context.user_data or {}).get("_cc_files_changed", [])
+        allowed, count = claude_code.check_daily_limit(settings.CLAUDE_CODE_DAILY_LIMIT)
+
+        status_lines = [
+            "<b>Claude Code Status</b>\n",
+            f"Session: <code>{session_id[:12]}...</code>" if session_id else "Session: (none)",
+            f"Last cost: ${last_cost:.3f}" if last_cost else "Last cost: -",
+            f"Files changed: {len(last_files)}",
+            f"Daily usage: {count}/{settings.CLAUDE_CODE_DAILY_LIMIT}",
+            f"Model: {settings.CLAUDE_CODE_MODEL}",
+            f"Auto-escalation: {'on' if settings.CLAUDE_CODE_AUTO_ESCALATE else 'off'}",
+        ]
+        await update.message.reply_text("\n".join(status_lines), parse_mode="HTML")
+        return
+
+    # Check daily limit
+    allowed, count = claude_code.check_daily_limit(settings.CLAUDE_CODE_DAILY_LIMIT)
+    if not allowed:
+        await update.message.reply_text(
+            f"Daily limit reached ({count}/{settings.CLAUDE_CODE_DAILY_LIMIT}). Try again tomorrow.",
+            parse_mode="HTML",
+        )
+        return
+
+    # Check concurrency
+    lock = _get_code_lock(uid)
+    if lock.locked():
+        await update.message.reply_text("A Claude Code session is already running. Please wait.")
+        return
+
+    # Handle resume
+    session_id = None
+    if instruction.lower().startswith("resume"):
+        session_id = (context.user_data or {}).get("_cc_session_id")
+        if not session_id:
+            await update.message.reply_text("No previous session to resume.")
+            return
+        # Strip "resume " prefix to get the follow-up instruction
+        instruction = instruction[6:].strip()
+        if not instruction:
+            instruction = "Continue where you left off."
+
+    # Send initial status
+    status_msg = await update.message.reply_text(
+        "<b>Claude Code</b> is starting...",
+        parse_mode="HTML",
+    )
+
+    _progress_lines: list[str] = []
+    _last_edit_time: float = 0
+
+    async def _on_progress(summary: str):
+        nonlocal _last_edit_time
+        _progress_lines.append(f"> {_esc(summary)}")
+        # Keep only last 8 lines
+        display = _progress_lines[-8:]
+
+        now = time.time()
+        if now - _last_edit_time < 2.5:
+            return  # Throttle Telegram edits
+        _last_edit_time = now
+
+        text = (
+            "<b>Claude Code</b> is working...\n\n"
+            + "\n".join(display)
+        )
+        try:
+            await status_msg.edit_text(text, parse_mode="HTML")
+        except Exception:
+            pass
+        try:
+            await update.message.chat.send_action("typing")
+        except Exception:
+            pass
+
+    async with lock:
+        result = await claude_code.run_claude_code(
+            instruction,
+            model=settings.CLAUDE_CODE_MODEL,
+            max_budget_usd=settings.CLAUDE_CODE_MAX_BUDGET_USD,
+            timeout_seconds=settings.CLAUDE_CODE_TIMEOUT_SECONDS,
+            session_id=session_id,
+            on_progress=_on_progress,
+            user_id=uid,
+        )
+
+    # Store session state
+    if context.user_data is None:
+        context.user_data = {}
+    context.user_data["_cc_session_id"] = result.session_id
+    context.user_data["_cc_last_cost"] = result.cost_usd
+    context.user_data["_cc_files_changed"] = result.files_changed
+
+    # Delete the progress message
+    try:
+        await status_msg.delete()
+    except Exception:
+        pass
+
+    # Build result message
+    duration_s = result.duration_ms // 1000
+    header = (
+        f"<b>Claude Code {'completed' if result.success else 'failed'}</b> "
+        f"({duration_s}s, ${result.cost_usd:.3f}, {result.num_turns} turns)\n"
+    )
+
+    # Files changed section
+    if result.files_changed:
+        files_str = "\n".join(f"  - {_esc(f)}" for f in result.files_changed)
+        header += f"\n<b>Files changed:</b>\n{files_str}\n"
+
+    # Result text
+    output_text = result.result_text or result.error_message
+    if output_text:
+        # Truncate for Telegram
+        max_output = 3000 - len(header)
+        if len(output_text) > max_output:
+            output_text = output_text[:max_output] + "..."
+        header += f"\n<pre>{_esc(output_text)}</pre>"
+
+    # Add inline buttons if files were changed
+    keyboard = None
+    if result.files_changed:
+        # Check syntax before offering reload
+        syntax_errors = await claude_code.validate_syntax(result.files_changed)
+        buttons = []
+        if not syntax_errors:
+            buttons.append(InlineKeyboardButton("Reload Bot", callback_data="code_reload"))
+        else:
+            # Show syntax error warning in the message
+            err_str = "\n".join(syntax_errors)
+            header += f"\n\nSyntax errors detected:\n<pre>{_esc(err_str)}</pre>"
+        buttons.append(InlineKeyboardButton("View Diff", callback_data="code_diff"))
+        buttons.append(InlineKeyboardButton("Revert", callback_data="code_revert"))
+        keyboard = InlineKeyboardMarkup([buttons])
+
+    await update.message.reply_text(
+        header,
+        parse_mode="HTML",
+        reply_markup=keyboard,
+    )
+
+    # If output was very long, send as document
+    if result.result_text and len(result.result_text) > 3000:
+        doc = io.BytesIO(result.result_text.encode("utf-8"))
+        doc.name = "claude_code_output.txt"
+        await update.message.reply_document(
+            document=doc,
+            caption="Full Claude Code output",
+        )
+
+
+async def code_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle inline button callbacks for Claude Code results."""
+    query = update.callback_query
+    uid = query.from_user.id
+    if not _authorized(uid):
+        await query.answer("Unauthorized.")
+        return
+
+    data = query.data
+    files_changed = (context.user_data or {}).get("_cc_files_changed", [])
+
+    if data == "code_reload":
+        import os
+        import sys
+
+        await query.answer("Restarting bot...")
+        await query.message.reply_text("Restarting in 3 seconds...")
+        await _aio.sleep(3)
+        os.execv(sys.executable, [sys.executable] + sys.argv)
+
+    elif data == "code_diff":
+        from agent.claude_code import get_diff
+        diff_text = await get_diff(files_changed)
+        if diff_text and diff_text.strip():
+            # Truncate for Telegram
+            if len(diff_text) > 3800:
+                diff_text = diff_text[:3800] + "\n... (truncated)"
+            await query.answer()
+            await query.message.reply_text(
+                f"<pre>{_esc(diff_text)}</pre>",
+                parse_mode="HTML",
+            )
+        else:
+            await query.answer("No diff available.")
+
+    elif data == "code_revert":
+        from agent.claude_code import revert_files
+        if files_changed:
+            success = await revert_files(files_changed)
+            if success:
+                context.user_data["_cc_files_changed"] = []
+                await query.answer("Reverted!")
+                await query.message.reply_text(
+                    f"Reverted {len(files_changed)} file(s) to last committed state."
+                )
+            else:
+                await query.answer("Revert failed.")
+                await query.message.reply_text("Failed to revert files. Check git status.")
+        else:
+            await query.answer("No files to revert.")
