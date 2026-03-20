@@ -55,10 +55,11 @@ class TestToolDefinitionsStructure:
         "read_feedback_history",
         "log_resource_usage",
         "generate_promo_video",
+        "verify_draft",
     }
 
     def test_tool_count(self):
-        assert len(TOOL_DEFINITIONS) == 16
+        assert len(TOOL_DEFINITIONS) == 17
 
     def test_all_expected_names_present(self):
         actual = set(_tool_names())

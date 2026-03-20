@@ -157,7 +157,7 @@ class TestFallbackOn429:
 class TestCrossProviderFallback:
     @pytest.mark.asyncio
     async def test_tools_stripped_with_warning(self):
-        """Falling back to OpenAI strips tools and logs a warning."""
+        """Falling back to OpenAI passes tools through (full tool-use support)."""
         error_429 = anthropic.APIStatusError(
             message="rate limited",
             response=MagicMock(status_code=429, headers={}),
@@ -168,7 +168,7 @@ class TestCrossProviderFallback:
 
         openai_result = {
             "provider": "openai",
-            "model": "gpt-4o",
+            "model": "gpt-5.4",
             "content": [{"type": "text", "text": "fallback text"}],
             "stop_reason": "stop",
             "usage": {"input_tokens": 10, "output_tokens": 20},
@@ -179,20 +179,18 @@ class TestCrossProviderFallback:
              patch("agent.model_fallback.logger") as mock_logger:
             result = await call_with_fallback(
                 client=mock_client,
-                models=["claude-sonnet-4-6", "gpt-4o"],
+                models=["claude-sonnet-4-6", "gpt-5.4"],
                 messages=[{"role": "user", "content": "hi"}],
                 max_tokens=100,
                 tools=[{"name": "test_tool"}],
             )
 
-        # Should have logged a warning about tools being stripped
-        mock_logger.warning.assert_called()
-        warning_msg = mock_logger.warning.call_args[0][0]
-        assert "tools" in warning_msg.lower() or "ARCH-03" in warning_msg
+        # OpenAI now gets tools passed through — should log info, not warning about stripping
+        mock_logger.info.assert_called()
 
-        # Result should be an Anthropic Message wrapper
+        # Result should be an Anthropic Message wrapper without FALLBACK NOTICE
         assert isinstance(result, anthropic.types.Message)
-        assert "FALLBACK NOTICE" in result.content[0].text
+        assert "fallback text" in result.content[0].text
 
 
 # ---------------------------------------------------------------------------

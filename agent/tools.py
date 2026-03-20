@@ -162,6 +162,26 @@ TOOL_DEFINITIONS = [
         },
     },
     {
+        "name": "verify_draft",
+        "description": (
+            "Check your draft against quality rules BEFORE calling finish. "
+            "Returns a 0-100 score with per-dimension feedback. "
+            "If score < 75, revise and verify again. If >= 75, proceed to finish. "
+            "Always call this before finish to ensure quality."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "caption": {"type": "string", "description": "Draft caption text."},
+                "title": {"type": "string", "description": "Draft title (overlay text)."},
+                "subtitle": {"type": "string", "description": "Draft subtitle."},
+                "image_prompt": {"type": "string", "description": "Draft image prompt."},
+                "content_type": {"type": "string", "description": "Content type."},
+            },
+            "required": ["caption"],
+        },
+    },
+    {
         "name": "log_resource_usage",
         "description": (
             "Record what resources you consulted during this generation. "
@@ -252,13 +272,18 @@ TOOL_DEFINITIONS = [
                 },
                 "report_sections": {
                     "type": "array",
-                    "description": "For custom reports: sections array.",
+                    "description": (
+                        "For custom reports: sections array. Each: {heading, content, type}. "
+                        "type is 'text', 'table', 'stats', or 'rich'. "
+                        "For rich: use semantic HTML with content-block, callout, layer-card, "
+                        "diagram-container, separator classes. Prefer rich for polished reports."
+                    ),
                     "items": {
                         "type": "object",
                         "properties": {
                             "heading": {"type": "string"},
                             "content": {"type": "string"},
-                            "type": {"type": "string", "enum": ["text", "table", "stats"]},
+                            "type": {"type": "string", "enum": ["text", "table", "stats", "rich"]},
                         },
                     },
                 },
@@ -891,16 +916,24 @@ def _select_3d_refs(training_dir: Path, prompt: str, max_refs: int = 3) -> list[
     if not training_dir.is_dir():
         return []
 
+    resolved_root = training_dir.resolve()
     prompt_lower = prompt.lower()
 
     # Auto-discover subdirectories and match keywords from folder names
     for cat_dir in sorted(training_dir.iterdir()):
         if not cat_dir.is_dir() or cat_dir.name.startswith("."):
             continue
+        # Path containment check — prevent symlink escapes
+        if not cat_dir.resolve().is_relative_to(resolved_root):
+            logger.warning("Skipping symlink outside training_dir: %s", cat_dir)
+            continue
         # Split folder name into keywords (e.g. "coins_and_tokens" → ["coins", "tokens"])
         keywords = [w for w in cat_dir.name.lower().replace("_", " ").split() if len(w) > 2 and w != "and"]
         if any(kw in prompt_lower for kw in keywords):
-            pool = sorted(cat_dir.glob("*.png"))
+            pool = [
+                p for p in sorted(cat_dir.glob("*.png"))[:50]
+                if p.resolve().is_relative_to(resolved_root)
+            ]
             if pool:
                 selected = pool[:max_refs]
                 logger.info(
@@ -1029,8 +1062,10 @@ async def _handle_finish(
 async def _handle_execute_openclaw_script(
     input_dict: dict, tracker: ResourceTracker
 ) -> str:
+    from agent.audit_log import audit
     script_name = input_dict.get("script_name", "")
     args = input_dict.get("args", "")
+    audit("execute_openclaw_script", script=script_name, args=args[:200])
 
     # Validate against allowlist
     if script_name not in _OPENCLAW_ALLOWLIST:
@@ -1040,9 +1075,9 @@ async def _handle_execute_openclaw_script(
     if not script_path.exists():
         return json.dumps({"error": f"Script '{script_name}' not found. Install OpenClaw skills first."})
 
-    # Sanitize args — reject shell metacharacters, use shlex for safe splitting
-    if args and UNSAFE_SHELL_CHARS.search(args):
-        return json.dumps({"error": "Arguments contain unsafe characters. Only alphanumeric, hyphens, underscores, dots, and spaces are allowed."})
+    # Sanitize args — allowlist approach: only permit safe characters
+    if args and not re.match(r'^[a-zA-Z0-9\-_.,:\s/=@"\']+$', args):
+        return json.dumps({"error": "Arguments contain unsafe characters. Only alphanumeric, hyphens, underscores, dots, colons, commas, and spaces are allowed."})
 
     cmd = ["node", str(script_path)]
     if args:
@@ -1304,6 +1339,58 @@ async def _handle_generate_promo_video(
         return json.dumps({"error": f"Video generation failed: {type(e).__name__}: {str(e)[:300]}"})
 
 
+async def _handle_verify_draft(input_dict: dict, tracker: ResourceTracker) -> str:
+    """Run quality scoring + brand alignment on a draft before submission."""
+    from agent.scoring import score_draft
+    from agent.brand_alignment import score_brand_alignment
+    from agent.self_review import draft_quality_gate
+
+    draft = {
+        "caption": input_dict.get("caption", ""),
+        "title": input_dict.get("title", ""),
+        "subtitle": input_dict.get("subtitle", ""),
+        "image_prompt": input_dict.get("image_prompt", ""),
+        "content_type": input_dict.get("content_type", ""),
+    }
+
+    # Run all three quality systems
+    quality_score = score_draft(draft)
+    gate = draft_quality_gate(draft)
+
+    try:
+        brand_score = score_brand_alignment(draft)
+    except Exception:
+        brand_score = {"alignment_score": -1, "drift_flags": [], "checks": []}
+
+    # Build actionable feedback
+    issues = []
+    for r in quality_score.get("results", []):
+        if r["score"] < 0.7:
+            issues.append(f"- {r['name']}: {r['detail']} (score: {r['score']:.0%})")
+
+    for check in gate.get("checks", []):
+        if not check.get("passed"):
+            issues.append(f"- HARD RULE FAIL: {check['rule']} — {check.get('detail', '')}")
+
+    if brand_score.get("alignment_score", 100) >= 0:
+        for flag in brand_score.get("drift_flags", []):
+            issues.append(f"- Brand drift: {flag}")
+
+    total_score = quality_score["total_score"]
+    grade = quality_score["grade"]
+    passed = total_score >= 75 and gate.get("passed", False)
+
+    result = {
+        "score": round(total_score),
+        "grade": grade,
+        "passed": passed,
+        "verdict": "READY — proceed to finish" if passed else "NEEDS WORK — revise and verify again",
+        "issues": issues if issues else ["No issues found."],
+        "auto_fixed": gate.get("auto_fixed", []),
+    }
+    return json.dumps(result)
+
+
 # ---------------------------------------------------------------------------
 # Handler dispatch
 # ---------------------------------------------------------------------------
@@ -1325,6 +1412,7 @@ _HANDLERS = {
     "delegate_task": _handle_delegate_task,
     "search_memory": _handle_search_memory,
     "generate_promo_video": _handle_generate_promo_video,
+    "verify_draft": _handle_verify_draft,
 }
 
 

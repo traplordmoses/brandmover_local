@@ -193,9 +193,11 @@ async def _do_approve(update: Update, context: ContextTypes.DEFAULT_TYPE, option
     )
     logger.info("Draft approved (%s), awaiting post/schedule (feedback #%d)", source, count)
 
-    # Fire hooks + transcript
+    # Fire hooks + transcript + audit log
     transcript.log_draft_action(user_id or 0, "approved", caption=pending.get("caption", ""))
     await hooks.emit("draft:approved", {"draft": pending, "user_id": user_id, "source": source})
+    from agent.audit_log import audit
+    audit("approve_draft", user_id=user_id, caption=pending.get("caption", "")[:200], source=source)
 
     # NOTE: Auto-summarize into learned_preferences.md disabled.
     # Preference extraction is now handled by pref_extractor.py -> session.learned_preferences.

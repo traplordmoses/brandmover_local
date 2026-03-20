@@ -315,8 +315,8 @@ class TestSmartPdfHandling:
 
         asyncio.run(_run())
 
-    def test_non_pdf_document_rejected(self):
-        """Non-PDF documents should get a helpful message."""
+    def test_non_pdf_document_accepted(self):
+        """Non-PDF documents should be saved to brand references."""
         async def _run():
             with patch(f"{_MEDIA}._authorized", return_value=True), \
                  patch(f"{_MEDIA}.onboarding") as mock_onboard:
@@ -325,13 +325,18 @@ class TestSmartPdfHandling:
                 update = MagicMock()
                 update.effective_user.id = 123
                 update.message.document.file_name = "notes.txt"
+                update.message.document.file_size = 100
                 update.message.document.mime_type = "text/plain"
                 update.message.reply_text = AsyncMock()
+                update.message.caption = None
+
+                mock_file = AsyncMock()
+                update.message.document.get_file = AsyncMock(return_value=mock_file)
 
                 ctx = _mock_context()
                 await handle_document(update, ctx)
 
                 msg = update.message.reply_text.call_args[0][0]
-                assert "pdf" in msg.lower() or "PDF" in msg
+                assert "saved" in msg.lower() or "references" in msg.lower()
 
         asyncio.run(_run())

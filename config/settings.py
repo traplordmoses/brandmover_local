@@ -230,8 +230,8 @@ TOPIC_BANK_REFRESH_INTERVAL_HOURS: int = int(os.getenv("TOPIC_BANK_REFRESH_INTER
 # ── Auto Preference Extraction ──
 # Periodically analyzes approval/rejection patterns to auto-generate preferences.
 PREF_EXTRACTION_ENABLED: bool = os.getenv("PREF_EXTRACTION_ENABLED", "true").lower() in ("true", "1", "yes")
-PREF_EXTRACTION_MIN_EVENTS: int = int(os.getenv("PREF_EXTRACTION_MIN_EVENTS", "5"))
-PREF_EXTRACTION_INTERVAL_HOURS: int = int(os.getenv("PREF_EXTRACTION_INTERVAL_HOURS", "24"))
+PREF_EXTRACTION_MIN_EVENTS: int = int(os.getenv("PREF_EXTRACTION_MIN_EVENTS", "3"))
+PREF_EXTRACTION_INTERVAL_HOURS: int = int(os.getenv("PREF_EXTRACTION_INTERVAL_HOURS", "2"))
 
 # ── Timezone ──
 # IANA timezone name for interpreting user-provided times (e.g. "America/Chicago").

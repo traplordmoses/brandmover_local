@@ -28,7 +28,9 @@ logger = logging.getLogger(__name__)
 
 # Rate limiting — minimum seconds between generation requests per user
 _RATE_LIMIT_SECONDS = 10
+_DAILY_REQUEST_LIMIT = 200
 _last_request_time: dict[int, float] = {}
+_daily_request_count: dict[int, tuple[int, float]] = {}  # (count, reset_time)
 
 # Tools restricted to admin-only — operators cannot use these
 _ADMIN_ONLY_TOOLS = {"execute_code", "post_approved", "create_skill", "git_info"}
@@ -161,6 +163,11 @@ def _cleanup_stale_entries() -> None:
     for uid in stale:
         del _last_request_time[uid]
 
+    # Remove expired daily counters
+    expired = [uid for uid, (_, reset) in _daily_request_count.items() if now > reset]
+    for uid in expired:
+        del _daily_request_count[uid]
+
     # Remove finished bulk upload tasks
     done = [uid for uid, task in _bulk_upload_tasks.items() if task.done()]
     for uid in done:
@@ -184,10 +191,22 @@ def _rate_limited(user_id: int) -> bool:
     """Check if user is sending requests too fast. Returns True if blocked."""
     _cleanup_stale_entries()
     now = time.time()
+
+    # Per-request cooldown
     last = _last_request_time.get(user_id, 0)
     if now - last < _RATE_LIMIT_SECONDS:
         return True
     _last_request_time[user_id] = now
+
+    # Daily request cap
+    count, reset_time = _daily_request_count.get(user_id, (0, now + 86400))
+    if now > reset_time:
+        _daily_request_count[user_id] = (1, now + 86400)
+    elif count >= _DAILY_REQUEST_LIMIT:
+        return True
+    else:
+        _daily_request_count[user_id] = (count + 1, reset_time)
+
     return False
 
 

@@ -824,16 +824,29 @@ _generate_report_def = {
                 "type": "array",
                 "description": (
                     "For custom reports: list of sections. "
-                    "Each: {heading, content, type} where type is 'text', 'table', or 'stats'. "
+                    "Each: {heading, content, type} where type is 'text', 'table', 'stats', or 'rich'. "
                     "For table: content is JSON {headers: [...], rows: [[...]]}. "
-                    "For stats: content is JSON [{label, value}]."
+                    "For stats: content is JSON [{label, value}]. "
+                    "For rich: content is semantic HTML using these components: "
+                    '<div class="content-block"><p>text with <strong>bold</strong> and <em>highlight</em></p></div> for prose; '
+                    '<div class="callout">key statement</div> for accented callouts; '
+                    '<div class="layer-card layer-N"><div class="layer-label">LABEL</div>'
+                    '<div class="layer-title">Title</div><div class="layer-desc">Description</div></div> '
+                    "where N is 1 (gold), 2 (teal), 3 (blue), or 4 (pink); "
+                    '<div class="diagram-container"><div class="diagram-flow">'
+                    '<div class="diagram-node">A</div><div class="diagram-arrow">\u2192</div>'
+                    '<div class="diagram-node highlight">B</div></div>'
+                    '<div class="diagram-caption">caption</div></div> for flow diagrams; '
+                    '<div class="separator"></div> for visual breaks. '
+                    "Prefer rich over text for polished reports. "
+                    "Only allowlisted tags (div, p, strong, em, span, br, table, tr, th, td, h3, h4, code) and classes are permitted."
                 ),
                 "items": {
                     "type": "object",
                     "properties": {
                         "heading": {"type": "string"},
                         "content": {"type": "string"},
-                        "type": {"type": "string", "enum": ["text", "table", "stats"]},
+                        "type": {"type": "string", "enum": ["text", "table", "stats", "rich"]},
                     },
                 },
             },
@@ -1393,8 +1406,9 @@ _ALLOWED_MODULES = frozenset({
 
 _BLOCKED_NAMES = frozenset({
     'eval', 'exec', 'compile', 'execfile', 'input', '__import__',
-    'getattr', 'setattr', 'delattr', 'globals', 'locals', 'vars',
+    'getattr', 'setattr', 'delattr', 'globals', 'locals', 'vars', 'dir',
     'breakpoint', 'exit', 'quit', 'open', 'importlib',
+    'pickle', 'marshal', 'shelve',
 })
 
 _BLOCKED_ATTRS = frozenset({
@@ -1402,6 +1416,9 @@ _BLOCKED_ATTRS = frozenset({
     '__builtins__', '__import__', '__loader__', '__spec__',
     '__dict__', '__bases__', '__init_subclass__', '__set_name__',
     '__reduce__', '__reduce_ex__', '__getstate__', '__setstate__',
+    '__getattr__', '__getattribute__', '__code__', '__func__',
+    '__wrapped__', '__qualname__',
+    'f_locals', 'f_globals', 'f_code', 'co_code',
     'environ', 'getenv', 'popen', 'system',
     'import_module',
 })

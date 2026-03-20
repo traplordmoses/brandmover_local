@@ -371,6 +371,8 @@ async def _run_loop(
                 result.tool_calls_made.append(tool_name)
 
             logger.info("Agent calling tool: %s (input: %s)", tool_name, str(tool_input)[:200])
+            from agent.audit_log import audit
+            audit("tool_call", tool=tool_name, input_preview=str(tool_input)[:300])
 
             if on_tool_call:
                 brief = _tool_description(tool_name, tool_input)
@@ -735,6 +737,14 @@ async def run_agent(
     session_context = await asyncio.to_thread(build_session_context)
     if session_context:
         user_content = f"{session_context}\n\n---\n\n{user_content}"
+
+    # Inject learned preferences from feedback analysis (Claude-generated summary)
+    # This is separate from session context — it contains the richer LLM-distilled
+    # preference summary from learned_preferences.md + last 10 raw feedback entries.
+    from agent.feedback import get_feedback_context
+    feedback_context = await asyncio.to_thread(get_feedback_context)
+    if feedback_context and "No feedback history" not in feedback_context:
+        user_content = f"{feedback_context}\n\n---\n\n{user_content}"
 
     # Inject structural skeleton instructions if a skeleton_id is provided
     skeleton_context = _build_skeleton_context(request)

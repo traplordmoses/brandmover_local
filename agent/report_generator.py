@@ -331,7 +331,7 @@ body::before {
     text-transform: uppercase;
 }
 
-/* Custom content */
+/* Custom content (legacy plain-text sections) */
 .custom-section {
     background: rgba(13, 27, 42, 0.5);
     backdrop-filter: blur(8px);
@@ -345,6 +345,155 @@ body::before {
     word-wrap: break-word;
     color: #E8F0FF;
     font-family: 'Inter', sans-serif;
+}
+
+/* Content block (rich text container) */
+.content-block {
+    background: rgba(13, 27, 42, 0.5);
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+    border: 1px solid rgba(62, 238, 196, 0.15);
+    border-radius: 8px;
+    padding: 24px;
+    font-size: 14px;
+    line-height: 1.75;
+    color: #E8F0FF;
+    margin-bottom: 16px;
+}
+.content-block p { margin-bottom: 12px; }
+.content-block p:last-child { margin-bottom: 0; }
+.content-block strong { color: #FFFFFF; font-weight: 600; }
+.content-block em { color: #3EEEC4; font-style: normal; font-weight: 600; }
+
+/* Callout (accented key statement) */
+.callout {
+    background: rgba(62, 238, 196, 0.08);
+    border-left: 3px solid #3EEEC4;
+    border-radius: 0 8px 8px 0;
+    padding: 20px 24px;
+    margin-bottom: 16px;
+    color: #E8F0FF;
+    font-size: 15px;
+    line-height: 1.7;
+    font-weight: 500;
+}
+
+/* Layer cards (color-coded side bar) */
+.layer-card {
+    background: rgba(255, 255, 255, 0.06);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    border-radius: 12px;
+    padding: 24px;
+    margin-bottom: 16px;
+    position: relative;
+    overflow: hidden;
+}
+.layer-card::before {
+    content: '';
+    position: absolute;
+    top: 0; left: 0; width: 4px; height: 100%;
+}
+.layer-card.layer-1::before { background: linear-gradient(180deg, #FFD700, #FF8C00); }
+.layer-card.layer-2::before { background: linear-gradient(180deg, #3EEEC4, #4AA8B8); }
+.layer-card.layer-3::before { background: linear-gradient(180deg, #6B9FD4, #8BBAE8); }
+.layer-card.layer-4::before { background: linear-gradient(180deg, #FF6B9D, #C084FC); }
+
+.layer-label {
+    font-family: 'Orbitron', monospace;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    margin-bottom: 8px;
+}
+.layer-1 .layer-label { color: #FFD700; }
+.layer-2 .layer-label { color: #3EEEC4; }
+.layer-3 .layer-label { color: #8BBAE8; }
+.layer-4 .layer-label { color: #FF6B9D; }
+
+.layer-title {
+    font-size: 18px;
+    font-weight: 700;
+    color: #FFFFFF;
+    margin-bottom: 10px;
+}
+.layer-desc {
+    font-size: 14px;
+    color: rgba(255, 255, 255, 0.75);
+    line-height: 1.7;
+}
+
+/* Flow diagrams */
+.diagram-container {
+    background: rgba(13, 27, 42, 0.6);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 12px;
+    padding: 32px 24px;
+    margin-bottom: 16px;
+    text-align: center;
+}
+.diagram-flow {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+.diagram-node {
+    background: rgba(255, 255, 255, 0.08);
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    border-radius: 10px;
+    padding: 14px 18px;
+    font-size: 12px;
+    font-weight: 600;
+    color: #FFFFFF;
+    text-align: center;
+    min-width: 100px;
+}
+.diagram-node.highlight {
+    background: rgba(62, 238, 196, 0.15);
+    border-color: rgba(62, 238, 196, 0.4);
+    color: #3EEEC4;
+}
+.diagram-node.gold {
+    background: rgba(255, 215, 0, 0.12);
+    border-color: rgba(255, 215, 0, 0.35);
+    color: #FFD700;
+}
+.diagram-arrow {
+    color: rgba(255, 255, 255, 0.35);
+    font-size: 18px;
+    font-weight: 300;
+}
+.diagram-caption {
+    margin-top: 16px;
+    font-size: 11px;
+    color: rgba(255, 255, 255, 0.4);
+    font-family: 'Orbitron', monospace;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+}
+
+/* Separator */
+.separator {
+    height: 1px;
+    background: linear-gradient(90deg, transparent, rgba(255,255,255,0.15), transparent);
+    margin: 36px 0;
+}
+
+/* Version badge */
+.report-version {
+    margin-top: 16px;
+    display: inline-block;
+    padding: 4px 14px;
+    border-radius: 20px;
+    background: rgba(62, 238, 196, 0.15);
+    border: 1px solid rgba(62, 238, 196, 0.3);
+    color: #3EEEC4;
+    font-family: 'Orbitron', monospace;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 1.5px;
 }
 
 /* Terminal panel (for data-heavy sections) */
@@ -367,6 +516,9 @@ body::before {
     .stat-pill .num { font-size: 18px; }
     .bar-label { width: 80px; font-size: 11px; }
     .exe-body { padding: 16px; }
+    .diagram-flow { flex-direction: column; }
+    .diagram-arrow { transform: rotate(90deg); }
+    .layer-title { font-size: 16px; }
 }
 """
 
@@ -383,6 +535,91 @@ def _deai(text: str) -> str:
 def _esc(text: str) -> str:
     """HTML-escape text after stripping AI language."""
     return html.escape(_deai(str(text)))
+
+
+_ALLOWED_TAGS = {
+    "div", "p", "h3", "h4", "br", "hr", "span",
+    "table", "thead", "tbody", "tr", "th", "td",
+    "strong", "em", "b", "i", "code",
+}
+
+_ALLOWED_CLASSES = {
+    "content-block", "callout", "section",
+    "layer-card", "layer-1", "layer-2", "layer-3", "layer-4",
+    "layer-label", "layer-title", "layer-desc",
+    "diagram-container", "diagram-flow", "diagram-node", "diagram-arrow", "diagram-caption",
+    "highlight", "gold", "separator", "report-version",
+    "data-table", "card", "card-meta", "card-content",
+    "stats-row", "stat-pill", "terminal-panel",
+    "badge", "badge-green", "badge-red", "badge-blue", "badge-yellow",
+    "badge-gray", "badge-cyan", "badge-pink",
+    "bar-row", "bar-label", "bar-track", "bar-fill",
+    "num", "label", "dots",
+}
+
+_ALLOWED_STYLE_PROPS = {
+    "text-align", "margin-top", "margin-bottom", "font-size",
+    "letter-spacing", "color", "width",
+}
+
+
+def _sanitize_html(content: str) -> str:
+    """Sanitize agent-generated HTML, allowing only safe tags, classes, and attributes."""
+    from bs4 import BeautifulSoup, NavigableString
+
+    soup = BeautifulSoup(content, "html.parser")
+
+    # Strip disallowed tags (keep their children)
+    for tag in list(soup.find_all(True)):
+        if tag.name not in _ALLOWED_TAGS:
+            tag.unwrap()
+
+    # Clean attributes on remaining tags
+    for tag in soup.find_all(True):
+        allowed_attrs = {}
+
+        # class — filter to allowlist
+        if tag.get("class"):
+            safe_classes = [c for c in tag["class"] if c in _ALLOWED_CLASSES]
+            if safe_classes:
+                allowed_attrs["class"] = safe_classes
+
+        # style — filter to allowed properties and validate values
+        if tag.get("style"):
+            import re as _re
+            safe_props = []
+            for part in tag["style"].split(";"):
+                part = part.strip()
+                if ":" in part:
+                    prop, value = part.split(":", 1)
+                    prop = prop.strip().lower()
+                    value = value.strip()
+                    if prop not in _ALLOWED_STYLE_PROPS:
+                        continue
+                    # Block dangerous CSS values
+                    if _re.search(r'(javascript|expression|url\s*\(|@import|behavior|binding)', value, _re.IGNORECASE):
+                        logger.warning("Blocked suspicious CSS value: %s: %s", prop, value)
+                        continue
+                    safe_props.append(f"{prop}: {value}")
+            if safe_props:
+                allowed_attrs["style"] = "; ".join(safe_props)
+
+        # table cell attributes
+        if tag.name in ("td", "th"):
+            for attr in ("colspan", "rowspan"):
+                if tag.get(attr):
+                    allowed_attrs[attr] = tag[attr]
+
+        tag.attrs = allowed_attrs
+
+    # Apply _deai to text nodes only (not attributes)
+    for text_node in list(soup.find_all(string=True)):
+        if isinstance(text_node, NavigableString):
+            cleaned = _deai(str(text_node))
+            if cleaned != str(text_node):
+                text_node.replace_with(cleaned)
+
+    return str(soup)
 
 
 def _badge(text: str, color: str = "gray") -> str:
@@ -632,10 +869,11 @@ def _build_feedback_report(title: str, subtitle: str) -> str:
 def _build_custom_report(title: str, subtitle: str, sections: list[dict]) -> str:
     """Build a report from freeform sections provided by the agent.
 
-    Each section dict: {"heading": "...", "content": "...", "type": "text|table|stats"}
+    Each section dict: {"heading": "...", "content": "...", "type": "text|table|stats|rich"}
     - text: rendered as preformatted text block
     - table: content is a JSON string of {"headers": [...], "rows": [[...], ...]}
     - stats: content is a JSON string of [{"label": "...", "value": "..."}]
+    - rich: semantic HTML with allowlisted tags/classes (content-block, callout, layer-card, etc.)
     """
     html_sections = []
     for sec in sections:
@@ -668,6 +906,15 @@ def _build_custom_report(title: str, subtitle: str, sections: list[dict]) -> str
                 )
             except (json.JSONDecodeError, KeyError):
                 html_sections.append(f'<div class="section"><h2>{heading}</h2><div class="custom-section">{_esc(content)}</div></div>')
+
+        elif sec_type == "rich":
+            sanitized = _sanitize_html(content)
+            if heading:
+                html_sections.append(
+                    f'<div class="section"><h2>{heading}</h2>{sanitized}</div>'
+                )
+            else:
+                html_sections.append(sanitized)
 
         else:
             html_sections.append(
