@@ -43,11 +43,13 @@ __all__ = [
     "digest_command",
     "code_command",
     "code_callback",
+    "design_command",
 ]
 
 import asyncio as _aio
 import io
 import logging
+import os
 import re
 import tempfile
 import time
@@ -145,6 +147,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             "/health \u2014 Show system health status\n"
             "/digest \u2014 Generate daily performance digest\n"
             "/code <i>instruction</i> \u2014 Run Claude Code to fix/modify the bot\n"
+            "/design \u2014 Open the visual Design Studio\n"
             "/help \u2014 Show this message"
         )
     else:
@@ -1992,3 +1995,45 @@ async def code_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
                 await query.message.reply_text("Failed to revert files. Check git status.")
         else:
             await query.answer("No files to revert.")
+
+
+# ---------------------------------------------------------------------------
+# /design — Launch Design Studio Mini App
+# ---------------------------------------------------------------------------
+
+
+async def design_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /design — open the Design Studio Mini App."""
+    uid = update.effective_user.id
+    if not _can_operate(uid):
+        return
+
+    miniapp_url = os.getenv("MINIAPP_URL", "")
+    if not miniapp_url:
+        await update.message.reply_text(
+            "Design Studio is not configured.\n"
+            "Set <code>MINIAPP_URL</code> in .env to the HTTPS URL of your dashboard.\n\n"
+            "For local development:\n"
+            "<code>cloudflared tunnel --url http://localhost:5173</code>\n"
+            "Then set MINIAPP_URL to the tunnel URL + /design",
+            parse_mode="HTML",
+        )
+        return
+
+    # Ensure the URL ends with /design
+    url = miniapp_url.rstrip("/")
+    if not url.endswith("/design"):
+        url += "/design"
+
+    from telegram import WebAppInfo
+
+    keyboard = InlineKeyboardMarkup([[
+        InlineKeyboardButton(
+            "Open Design Studio",
+            web_app=WebAppInfo(url=url),
+        )
+    ]])
+    await update.message.reply_text(
+        "Tap below to open the visual design builder.",
+        reply_markup=keyboard,
+    )

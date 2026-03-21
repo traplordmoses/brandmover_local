@@ -33,6 +33,20 @@ An autonomous AI marketing agent that runs via Telegram. Send a natural language
 - **Diversity tracker** — tracks content structure (hooks, body, CTAs) to prevent repetition
 - **Topic bank** — rotating library of content angles with LRU selection for variety
 
+### Self-Modification
+- **Claude Code CLI** (`/code`) — run Claude Code directly from Telegram to fix, extend, or debug the bot's own codebase
+- **Self-healing** — when the agent hits an error, auto-escalation (`CLAUDE_CODE_AUTO_ESCALATE=true`) spawns Claude Code to diagnose and patch the issue
+- **Session resume** — `/code resume <follow-up>` continues the last Claude Code session with additional instructions
+- **Safety rails** — syntax validation before hot-reload, one-click revert via inline button, daily usage cap, concurrency lock, full audit log
+
+### Design Studio (Telegram Mini App)
+- **Visual design builder** — full-screen Mini App embedded in Telegram (`/design`), also accessible at `/design` in the dashboard
+- **Brand Board** — visual swatches, fonts, style keywords, voice traits; upload reference images for Claude Vision analysis
+- **Design Agent** — conversational AI (Haiku) that refines design briefs before expensive generation, outputs structured JSON specs
+- **Composer** — structured form with content type selector, layout presets (16:9/9:16/1:1), text inputs, JSON spec preview, SSE progress streaming
+- **Templates** — searchable grid gallery, tap to pre-load into the composer
+- **History** — browse past generations with expandable detail cards
+
 ### Infrastructure
 - **Model fallback** — automatic retry with fallback models on API errors
 - **Subagent delegation** — spawn lightweight sub-agents for research and analysis
@@ -45,6 +59,7 @@ An autonomous AI marketing agent that runs via Telegram. Send a natural language
 - **Bot status** — live heartbeat log, activity feed, pause/resume toggle
 - **Brand docs viewer/editor** — review and edit brand guidelines with markdown preview
 - **Campaign overview** — campaign cards with progress bars and slot timelines
+- **Design Studio** — visual design builder (same as the Telegram Mini App, accessible at `/design`)
 - **Settings** — schedule editor, generation stats, cost tracking, learned preferences
 
 ## Quick Start
@@ -91,6 +106,12 @@ cp .env.example .env
 | `IMAGE_MODEL` | `auto` | `auto` routes by content type, or force a specific model |
 | `AUTO_POST_ENABLED` | `false` | Enable scheduled auto-posting |
 | `HEARTBEAT_ENABLED` | `true` | Enable the heartbeat reasoning layer |
+| `CLAUDE_CODE_ENABLED` | `false` | Enable `/code` command for self-modification |
+| `CLAUDE_CODE_AUTO_ESCALATE` | `false` | Auto-spawn Claude Code on agent errors |
+| `CLAUDE_CODE_DAILY_LIMIT` | `10` | Max Claude Code invocations per day |
+| `CLAUDE_CODE_TIMEOUT_SECONDS` | `300` | Timeout per Claude Code session |
+| `MINIAPP_URL` | — | HTTPS URL for the Design Studio Mini App |
+| `DASHBOARD_CORS_ORIGINS` | — | Allowed CORS origins for dashboard/Mini App |
 
 ### 3. Set up your brand
 

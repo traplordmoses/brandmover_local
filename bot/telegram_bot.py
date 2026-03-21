@@ -99,6 +99,7 @@ def create_bot() -> Application:
     app.add_handler(CommandHandler("save_asset", handlers.save_asset_command))
     app.add_handler(CommandHandler("remake", handlers.remake_command))
     app.add_handler(CommandHandler("code", handlers.code_command))
+    app.add_handler(CommandHandler("design", handlers.design_command))
 
     # Inline button callbacks (e.g. /generate approve/reject buttons)
     app.add_handler(CallbackQueryHandler(handlers.generate_callback, pattern=r"^gen_"))

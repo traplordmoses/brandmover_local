@@ -50,6 +50,7 @@ from bot.handlers.media import (      # noqa: F401
 from bot.handlers.admin import _run_onboarding_audit   # noqa: F401
 from bot.handlers.admin import health_command, digest_command  # noqa: F401
 from bot.handlers.admin import code_command, code_callback  # noqa: F401
+from bot.handlers.admin import design_command  # noqa: F401
 
 # ---------------------------------------------------------------------------
 # Public test-facing aliases — give stable non-underscore names to internals
