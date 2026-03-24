@@ -344,6 +344,37 @@ TOOL_DEFINITIONS = [
             "required": ["script_name"],
         },
     },
+    # --- Creative variations ---
+    {
+        "name": "suggest_variations",
+        "description": (
+            "After producing a draft, suggest 1-2 alternative creative directions. "
+            "Each variation should take a meaningfully different approach — different tone, "
+            "hook, or visual concept. Use when the request is ambiguous or when multiple "
+            "strong approaches exist."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "variations": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "approach": {"type": "string", "description": "Brief description of the creative direction"},
+                            "caption": {"type": "string"},
+                            "image_prompt": {"type": "string"},
+                            "content_type": {"type": "string"},
+                            "title": {"type": "string"},
+                            "subtitle": {"type": "string"},
+                        },
+                        "required": ["approach", "caption", "image_prompt"],
+                    },
+                },
+            },
+            "required": ["variations"],
+        },
+    },
     # --- Skills system --- agent-created persistent capabilities
     {
         "name": "use_skill",
@@ -1367,6 +1398,40 @@ async def _handle_generate_promo_video(
         return json.dumps({"error": f"Video generation failed: {type(e).__name__}: {str(e)[:300]}"})
 
 
+async def _handle_suggest_variations(
+    input_dict: dict, tracker: ResourceTracker
+) -> str:
+    """Store creative variations suggested by the agent."""
+    variations = input_dict.get("variations", [])
+    if not variations:
+        return json.dumps({"error": "No variations provided."})
+
+    stored = []
+    for v in variations:
+        approach = v.get("approach", "")
+        caption = v.get("caption", "")
+        if not approach or not caption:
+            continue
+        stored.append({
+            "approach": approach,
+            "caption": caption,
+            "image_prompt": v.get("image_prompt", ""),
+            "content_type": v.get("content_type", ""),
+            "title": v.get("title", ""),
+            "subtitle": v.get("subtitle", ""),
+        })
+
+    if not stored:
+        return json.dumps({"error": "No valid variations (each needs approach + caption)."})
+
+    tracker.log_api("suggest_variations")
+    return json.dumps({
+        "status": "variations_stored",
+        "count": len(stored),
+        "variations": stored,
+    })
+
+
 async def _handle_verify_draft(input_dict: dict, tracker: ResourceTracker) -> str:
     """Run quality scoring + brand alignment on a draft before submission."""
     from agent.scoring import score_draft
@@ -1441,6 +1506,7 @@ _HANDLERS = {
     "search_memory": _handle_search_memory,
     "generate_promo_video": _handle_generate_promo_video,
     "verify_draft": _handle_verify_draft,
+    "suggest_variations": _handle_suggest_variations,
 }
 
 
@@ -1513,6 +1579,7 @@ def tool_description(tool_name: str, tool_input: dict) -> str:
         "think": "Reasoning...",
         "finish": "Submitting final draft...",
         "generate_promo_video": f"Generating promo video: {tool_input.get('title', '?')[:40]}...",
+        "suggest_variations": "Suggesting creative variations...",
     }
     return descs.get(tool_name, f"Executing {tool_name}...")
 

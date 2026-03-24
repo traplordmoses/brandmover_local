@@ -34,6 +34,143 @@ def _pick_content_type_by_mix() -> str:
     weights = list(mix.values())
     return random.choices(types, weights=weights, k=1)[0]
 
+
+def _build_proactive_brief() -> dict:
+    """Build an intelligent creative brief for proactive post generation.
+
+    Gathers signals from:
+    - Content planner: which types are underrepresented this week
+    - Topic bank: which topics haven't been covered recently
+    - Analytics: which content types perform best
+    - Time of day: audience activity patterns
+
+    Returns a dict with keys:
+        suggested_type (str), topic_angle (dict|None), brief (str),
+        reasoning (str)
+    """
+    import datetime as _dt
+
+    brief_parts: list[str] = []
+    reasoning_parts: list[str] = []
+    suggested_type = _pick_content_type_by_mix()
+    topic_angle = None
+
+    # 1. Check underrepresented content types this week
+    try:
+        from agent.scheduling.content_planner import (
+            get_content_type_distribution,
+            identify_gaps,
+            _load_performance_weights,
+        )
+        distribution = get_content_type_distribution(days=7)
+        perf_weights = _load_performance_weights()
+        gaps = identify_gaps(distribution, performance_weights=perf_weights)
+        if gaps:
+            suggested_type = gaps[0]
+            reasoning_parts.append(f"'{gaps[0]}' is most underrepresented this week")
+            if len(gaps) > 1:
+                brief_parts.append(
+                    f"Underrepresented types this week: {', '.join(gaps[:3])}."
+                )
+            else:
+                brief_parts.append(f"'{gaps[0]}' content is underrepresented this week.")
+    except Exception as e:
+        logger.debug("Proactive brief: content planner check failed: %s", e)
+
+    # 2. Check performance data for what's working
+    try:
+        perf_weights = perf_weights if "perf_weights" in dir() else {}
+    except Exception:
+        perf_weights = {}
+
+    try:
+        from agent.publishing.analytics import PERFORMANCE_DATA_FILE
+        if PERFORMANCE_DATA_FILE.exists():
+            perf_data = json.loads(PERFORMANCE_DATA_FILE.read_text(encoding="utf-8"))
+            measured = [p for p in perf_data if p.get("last_checked", 0) > 0]
+            if measured:
+                # Find best-performing content type
+                type_eng: dict[str, list[float]] = {}
+                for p in measured:
+                    ct = p.get("content_type") or "unknown"
+                    type_eng.setdefault(ct, []).append(p.get("engagement_rate", 0.0))
+                type_avgs = {
+                    ct: sum(rates) / len(rates) for ct, rates in type_eng.items() if rates
+                }
+                if type_avgs:
+                    best_ct = max(type_avgs, key=type_avgs.get)
+                    best_avg = type_avgs[best_ct]
+                    brief_parts.append(
+                        f"'{best_ct}' content has been killing it "
+                        f"({best_avg:.1f}% avg engagement)."
+                    )
+                    reasoning_parts.append(f"'{best_ct}' is top performer at {best_avg:.1f}%")
+                    # If the best performer is also underrepresented, definitely suggest it
+                    if best_ct in (gaps if "gaps" in dir() else []):
+                        suggested_type = best_ct
+    except Exception as e:
+        logger.debug("Proactive brief: analytics check failed: %s", e)
+
+    # 3. Check which topics haven't been covered recently
+    try:
+        from agent.scheduling.topic_bank import get_fresh_angles
+        fresh = get_fresh_angles(n=3, use_performance=True)
+        if fresh:
+            topic_angle = fresh[0]
+            angle_text = topic_angle.get("angle", "")
+            lu = topic_angle.get("last_used")
+            if lu:
+                days_ago = (time.time() - lu) / 86400
+                brief_parts.append(
+                    f"You haven't posted about '{angle_text}' in {days_ago:.0f} days."
+                )
+                reasoning_parts.append(f"angle '{angle_text}' unused for {days_ago:.0f} days")
+            else:
+                brief_parts.append(
+                    f"You've never posted about '{angle_text}' — fresh territory."
+                )
+                reasoning_parts.append(f"angle '{angle_text}' never used")
+    except Exception as e:
+        logger.debug("Proactive brief: topic bank check failed: %s", e)
+
+    # 4. Check time of day and day of week for audience patterns
+    try:
+        now = _dt.datetime.now()
+        hour = now.hour
+        day_name = now.strftime("%A")
+
+        if 6 <= hour < 10:
+            time_note = f"It's {day_name} morning — great for educational and announcement content."
+        elif 10 <= hour < 14:
+            time_note = f"It's {day_name} midday — engagement peaks around lunch."
+        elif 14 <= hour < 18:
+            time_note = f"It's {day_name} afternoon — your audience is most active now."
+        elif 18 <= hour < 22:
+            time_note = f"It's {day_name} evening — memes and community posts do well."
+        else:
+            time_note = f"It's late {day_name} — consider scheduling for morning instead."
+
+        brief_parts.insert(0, time_note)
+    except Exception:
+        pass
+
+    # Assemble the creative brief
+    if brief_parts:
+        brief_text = " ".join(brief_parts)
+        suggestion = f"Suggest: a {suggested_type}-focused post"
+        if topic_angle:
+            suggestion += f" about '{topic_angle.get('angle', '')}'"
+        brief_text += f" {suggestion}."
+    else:
+        brief_text = f"Generate a {suggested_type} post."
+
+    return {
+        "suggested_type": suggested_type,
+        "topic_angle": topic_angle,
+        "brief": brief_text,
+        "reasoning": "; ".join(reasoning_parts) if reasoning_parts else "default mix selection",
+    }
+
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
@@ -154,13 +291,17 @@ async def cheap_gate() -> list[dict]:
             if last_ts > 0:
                 hours_since = (time.time() - last_ts) / 3600
                 if hours_since >= settings.HEARTBEAT_PROACTIVE_HOURS:
-                    suggested_type = _pick_content_type_by_mix()
+                    # Build an intelligent creative brief instead of picking a random type
+                    proactive_brief = _build_proactive_brief()
                     signals.append({
                         "type": "proactive",
                         "priority": 3,
                         "data": {
                             "hours_since_last": round(hours_since, 1),
-                            "suggested_content_type": suggested_type,
+                            "suggested_content_type": proactive_brief["suggested_type"],
+                            "proactive_brief": proactive_brief["brief"],
+                            "brief_reasoning": proactive_brief["reasoning"],
+                            "brief_topic_angle": proactive_brief.get("topic_angle"),
                         },
                     })
         except Exception as e:
@@ -246,23 +387,38 @@ async def _claude_reason(signals: list[dict]) -> HeartbeatDecision:
 
     # Build a clean version of signals for Claude (strip non-serializable data)
     clean_signals = []
+    proactive_brief_text = ""
     for sig in signals:
         clean = {"type": sig["type"], "priority": sig["priority"]}
         data = sig.get("data", {})
         # Only include serializable fields
         for k, v in data.items():
-            if k != "item" and k != "slot_config":
+            if k not in ("item", "slot_config", "brief_topic_angle"):
                 clean[k] = v
         clean_signals.append(clean)
+        # Extract the proactive brief if present
+        if sig["type"] == "proactive" and data.get("proactive_brief"):
+            proactive_brief_text = data["proactive_brief"]
+
+    # Build the proactive brief block for the reasoning prompt
+    brief_block = ""
+    if proactive_brief_text:
+        brief_block = (
+            f"\nCREATIVE BRIEF (data-driven recommendation):\n"
+            f"{proactive_brief_text}\n"
+            f"Use this brief to craft a specific, targeted prompt_override for the proactive post.\n"
+        )
 
     reasoning_prompt = (
         f"You are BrandMover's planning agent. Decide what to do right now.\n\n"
         f"{session_context}\n\n"
         f"Active signals:\n{json.dumps(clean_signals, indent=2, default=str)}\n"
-        f"{angles_block}\n"
+        f"{angles_block}"
+        f"{brief_block}\n"
         f"Current time: {current_time}\n\n"
         f"Decide ONE action. Use the decide tool to submit your choice."
-        f"{' For proactive posts, reference a topic angle ID and craft a specific prompt.' if angles_block else ''}"
+        f"{' For proactive posts, use the creative brief to craft a specific prompt_override that incorporates the performance data and topic suggestions.' if brief_block else ''}"
+        f"{' For proactive posts, reference a topic angle ID and craft a specific prompt.' if angles_block and not brief_block else ''}"
     )
 
     decide_tool = {
@@ -380,6 +536,20 @@ def _fallback_decision(signals: list[dict]) -> HeartbeatDecision:
             HeartbeatAction.GENERATE_SCHEDULED,
             reason=f"Fallback: scheduled item {sig['data']['item_id']}",
             scheduled_item=sig["data"].get("item"),
+        )
+    if sig["type"] == "proactive":
+        # Use the creative brief as prompt_override instead of sleeping
+        data = sig.get("data", {})
+        brief = data.get("proactive_brief", "")
+        topic_angle = data.get("brief_topic_angle")
+        topic_angle_id = topic_angle.get("id") if isinstance(topic_angle, dict) else None
+        suggested_type = data.get("suggested_content_type", "engagement")
+        prompt = brief if brief else f"Generate a {suggested_type} post"
+        return HeartbeatDecision(
+            HeartbeatAction.PROACTIVE,
+            reason=f"Fallback proactive: {data.get('brief_reasoning', 'default')}",
+            prompt_override=prompt,
+            topic_angle_id=topic_angle_id,
         )
     return HeartbeatDecision(
         HeartbeatAction.SLEEP,
@@ -579,8 +749,15 @@ async def heartbeat_tick(bot=None) -> bool:
     elif decision.action == HeartbeatAction.REVISE_DRAFT:
         logger.info("Heartbeat: revision requested but not yet implemented")
 
-    # Log the heartbeat decision
-    _log_heartbeat({
+    # Extract the proactive brief from signals for the log
+    proactive_brief_for_log = None
+    for sig in signals:
+        if sig["type"] == "proactive":
+            proactive_brief_for_log = sig["data"].get("proactive_brief")
+            break
+
+    # Log the heartbeat decision (including the creative brief so admin can see reasoning)
+    log_entry = {
         "signals": [s["type"] for s in signals],
         "decision": decision.action.value,
         "reason": decision.reason,
@@ -588,7 +765,12 @@ async def heartbeat_tick(bot=None) -> bool:
         "topic_angle_id": decision.topic_angle_id,
         "used_claude_reasoning": used_claude,
         "action_taken": action_taken,
-    })
+    }
+    if proactive_brief_for_log:
+        log_entry["proactive_brief"] = proactive_brief_for_log
+    if decision.prompt_override and decision.action == HeartbeatAction.PROACTIVE:
+        log_entry["prompt_override"] = decision.prompt_override[:300]
+    _log_heartbeat(log_entry)
 
     # Run periodic maintenance (once per day)
     await daily_maintenance(bot=bot)

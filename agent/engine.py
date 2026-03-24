@@ -27,6 +27,7 @@ class AgentResult:
     """Result of an agent run."""
     final_text: str = ""
     draft: dict = field(default_factory=dict)
+    draft_variations: list[dict] = field(default_factory=list)
     image_url: str | None = None
     image_urls: list[str] = field(default_factory=list)
     resources: ResourceTracker = field(default_factory=ResourceTracker)
@@ -154,6 +155,32 @@ def _extract_image_url(tool_calls_made: list[dict]) -> str | None:
             if url_match:
                 return url_match.group()
     return None
+
+
+def _extract_variations(messages: list) -> list[dict]:
+    """Extract creative variations from suggest_variations tool calls in conversation.
+
+    Scans the message history for tool_result blocks that contain
+    variations_stored payloads (returned by the suggest_variations handler).
+    """
+    variations: list[dict] = []
+    for msg in messages:
+        content = msg.get("content")
+        if not isinstance(content, list):
+            continue
+        for block in content:
+            if not isinstance(block, dict):
+                continue
+            if block.get("type") == "tool_result":
+                raw = block.get("content", "")
+                try:
+                    parsed = json.loads(raw)
+                    if parsed.get("status") == "variations_stored":
+                        for v in parsed.get("variations", []):
+                            variations.append(v)
+                except (json.JSONDecodeError, TypeError):
+                    pass
+    return variations
 
 
 def _extract_image_urls(tool_calls_made: list[dict]) -> list[str]:
@@ -716,6 +743,7 @@ async def run_agent(
     revision_context: str | None = None,
     excluded_tools: set[str] | None = None,
     self_score: bool = False,
+    variations: int = 1,
 ) -> AgentResult:
     """
     Run the goal-oriented agent loop for a content request.
@@ -727,6 +755,9 @@ async def run_agent(
         revision_context: Optional context about a previous draft + feedback for revisions.
         self_score: When True and a draft is produced, run preference_engine.score_draft()
                     and attach the score to the result's draft dict under "_preference_score".
+        variations: Number of creative variations to produce (default 1 = single draft).
+                    When > 1, the agent produces the first draft normally, then is
+                    re-prompted to generate additional meaningfully different approaches.
 
     Returns:
         AgentResult with the final draft and metadata.
@@ -831,6 +862,46 @@ async def run_agent(
         bool(result.image_url),
         finished_via,
     )
+
+    # --- Creative variations mode ---
+    # When variations > 1 and a draft was produced, re-prompt the agent to
+    # generate additional meaningfully different creative approaches.
+    if variations > 1 and result.draft:
+        remaining = variations - 1
+        variation_prompt = (
+            f"Great first draft. Now create {remaining} more MEANINGFULLY DIFFERENT "
+            f"approaches. Each should take a completely different creative angle "
+            f"— different tone, different hook, different visual concept. "
+            f"Don't just rephrase — reimagine. "
+            f"For each variation, call `suggest_variations` with an array of "
+            f"{remaining} variation(s), each with approach, caption, image_prompt, "
+            f"and optionally content_type, title, subtitle."
+        )
+        # Continue the existing conversation so the agent has full context
+        var_messages = list(messages)
+        # If the agent finished via tool, we need to add a proper tool_result
+        # so the conversation is well-formed, then inject the variation prompt
+        if result._finished:
+            # The finish call was the last thing — build a synthetic continuation
+            var_messages.append({"role": "user", "content": variation_prompt})
+        else:
+            var_messages.append({"role": "user", "content": variation_prompt})
+
+        try:
+            var_result = await _run_loop(
+                client, system_prompt, var_messages, tracker,
+                on_tool_call=on_tool_call, on_reasoning=on_reasoning,
+                force_first_tool=False, system_blocks=system_blocks,
+                excluded_tools=excluded_tools,
+            )
+            # Extract variations from the suggest_variations tool call results
+            result.draft_variations = _extract_variations(var_messages)
+            logger.info(
+                "Variations pass complete: %d variations extracted",
+                len(result.draft_variations),
+            )
+        except (anthropic.APIError, Exception) as e:
+            logger.warning("Variations pass failed: %s", e)
 
     # Record this run in session memory
     try:

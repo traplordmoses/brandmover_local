@@ -410,7 +410,7 @@ class TestBuildSystemPrompt:
         # Should still produce a valid prompt
         assert isinstance(result, str)
         assert len(result) > 200
-        assert "brandmover" in result.lower()
+        assert "creative director" in result.lower()
 
     def test_contains_video_workflow_section(self):
         from agent.skill_prompt import build_system_prompt

@@ -72,10 +72,58 @@ def save_bank(bank: TopicBank) -> None:
 # Query & mutation
 # ---------------------------------------------------------------------------
 
-def get_fresh_angles(n: int = 5, category: str | None = None) -> list[dict]:
+def _get_angle_performance(angle: dict) -> float:
+    """Return a performance boost multiplier for an angle based on analytics.
+
+    Checks ``state/performance_data.json`` to see if the content types
+    associated with this angle's category have historically performed well.
+    Returns a multiplier >= 1.0 (higher = better performing category).
+    """
+    # Lazy mapping from topic-bank categories to content types they most
+    # commonly feed into.  An angle in "engagement" category typically
+    # produces meme / engagement content, etc.
+    _CATEGORY_TO_CONTENT_TYPES: dict[str, list[str]] = {
+        "product": ["announcement", "brand_asset"],
+        "education": ["educational", "advice"],
+        "community": ["community", "engagement"],
+        "culture": ["meme", "lifestyle"],
+        "engagement": ["engagement", "meme"],
+    }
+
+    category = angle.get("category", "")
+    related_types = _CATEGORY_TO_CONTENT_TYPES.get(category, [])
+    if not related_types:
+        return 1.0
+
+    try:
+        from agent.scheduling.content_planner import _load_performance_weights
+        weights = _load_performance_weights()
+    except Exception:
+        return 1.0
+
+    if not weights:
+        return 1.0
+
+    # Average the engagement multiplier of related content types
+    relevant = [weights[ct] for ct in related_types if ct in weights]
+    if not relevant:
+        return 1.0
+
+    avg_weight = sum(relevant) / len(relevant)
+    # Clamp to [0.5, 2.0] — we don't want performance to completely dominate freshness
+    return max(0.5, min(2.0, avg_weight))
+
+
+def get_fresh_angles(
+    n: int = 5,
+    category: str | None = None,
+    use_performance: bool = True,
+) -> list[dict]:
     """Return the N least-recently-used non-retired angles.
 
-    Sort: never-used first, then oldest last_used.
+    Sort: never-used first, then oldest last_used.  When *use_performance*
+    is True (default), angles whose categories map to high-engagement content
+    types are boosted in the ranking via ``_get_angle_performance()``.
     """
     bank = load_bank()
     candidates = [
@@ -86,8 +134,18 @@ def get_fresh_angles(n: int = 5, category: str | None = None) -> list[dict]:
 
     def sort_key(a: dict) -> tuple:
         lu = a.get("last_used")
-        # Never-used angles sort first (0), then by timestamp ascending
-        return (0 if lu is None else 1, lu or 0)
+        # Base freshness score: never-used = 0, then ascending by last_used
+        freshness = (0 if lu is None else 1, lu or 0)
+
+        if not use_performance:
+            return freshness
+
+        # Invert performance multiplier so higher performing sorts earlier
+        # (lower sort key = picked sooner).  A multiplier of 2.0 becomes 0.5.
+        perf_multiplier = _get_angle_performance(a)
+        perf_sort = 1.0 / perf_multiplier if perf_multiplier > 0 else 1.0
+
+        return (freshness[0], freshness[1] * perf_sort)
 
     candidates.sort(key=sort_key)
     return candidates[:n]

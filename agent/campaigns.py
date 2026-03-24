@@ -60,6 +60,8 @@ class CampaignSlot:
     copy: str = ""                    # Pre-written post copy (posted as-is)
     angle: str = ""                   # Brief description of this post's angle
     media_note: str = ""              # e.g., "[screenshot of swipe UI]"
+    narrative_role: str = ""          # hook | buildup | climax | resolution | cta
+    emotional_tone: str = ""          # curiosity | excitement | urgency | trust | celebration
     status: str = "pending"           # pending | scheduled | drafted | approved | posted | skipped
     schedule_queue_id: str = ""       # Links to schedule_queue item
     draft_timestamp: float = 0.0
@@ -101,6 +103,235 @@ def _write_campaigns(data: dict) -> None:
     _CAMPAIGNS_FILE.write_text(
         json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8"
     )
+
+
+# ---------------------------------------------------------------------------
+# Narrative arc generation
+# ---------------------------------------------------------------------------
+
+_VALID_NARRATIVE_ROLES = {"hook", "buildup", "climax", "resolution", "cta"}
+_VALID_EMOTIONAL_TONES = {"curiosity", "excitement", "urgency", "trust", "celebration"}
+
+
+async def _generate_narrative_arc(brief: str, num_days: int) -> list[dict]:
+    """Use Claude Haiku to plan the campaign as a story arc.
+
+    Given a campaign brief and duration, generates a structured narrative arc:
+      - Day 1: Hook — grab attention, create curiosity
+      - Day 2-(N-2): Buildup — deepen the narrative, show value
+      - Day N-1: Climax — the big reveal or offer
+      - Day N: Resolution/CTA — close the loop
+
+    Args:
+        brief: Campaign theme/objective.
+        num_days: Number of days in the campaign.
+
+    Returns:
+        List of dicts, one per day, each with keys:
+            day, narrative_role, emotional_tone, angle, content_type, slot_label
+    """
+    from agent.model_fallback import call_with_fallback
+
+    system_prompt = (
+        "You are a campaign strategist. Given a campaign brief and duration, "
+        "plan a narrative arc that tells a story across multiple days.\n\n"
+        "Narrative roles (exactly one per slot):\n"
+        "- hook: Grab attention, create curiosity (Day 1)\n"
+        "- buildup: Deepen the narrative, show value, educate (middle days)\n"
+        "- climax: The big reveal, key announcement, or offer (near the end)\n"
+        "- resolution: Wrap up, social proof, celebrate (last day)\n"
+        "- cta: Call to action, drive conversion (can combine with resolution)\n\n"
+        "Emotional tones (exactly one per slot):\n"
+        "- curiosity: Tease, ask questions, hint at what's coming\n"
+        "- excitement: Energy, hype, momentum\n"
+        "- urgency: Time-limited, FOMO, scarcity\n"
+        "- trust: Social proof, testimonials, credibility\n"
+        "- celebration: Achievement, milestone, gratitude\n\n"
+        "Return a JSON array of objects. Each object has:\n"
+        "  day (int), narrative_role (str), emotional_tone (str), "
+        "  angle (str — one-sentence post direction), "
+        "  content_type (str — e.g. announcement, community, engagement), "
+        "  slot_label (str — morning or evening)\n\n"
+        "Rules:\n"
+        "- Day 1 must be 'hook' with 'curiosity'\n"
+        "- The second-to-last day should be 'climax'\n"
+        "- The last day should be 'resolution' or 'cta'\n"
+        "- For campaigns <= 3 days, compress: hook → climax → cta\n"
+        "- Return ONLY the JSON array, no markdown fences, no explanation."
+    )
+
+    user_msg = (
+        f"Campaign brief: {brief}\n"
+        f"Duration: {num_days} days\n"
+        f"Plan the narrative arc."
+    )
+
+    try:
+        response = await call_with_fallback(
+            messages=[{"role": "user", "content": user_msg}],
+            system=system_prompt,
+            max_tokens=2048,
+            primary_model="claude-haiku-4-5-20251001",
+        )
+
+        # Extract text from response
+        text = ""
+        for block in response.content:
+            if hasattr(block, "text"):
+                text += block.text
+
+        text = text.strip()
+        # Strip markdown fences if present
+        if text.startswith("```"):
+            text = text.split("\n", 1)[-1]
+        if text.endswith("```"):
+            text = text.rsplit("```", 1)[0]
+        text = text.strip()
+
+        arc = json.loads(text)
+        if not isinstance(arc, list):
+            raise ValueError("Expected JSON array")
+
+        # Validate and sanitize each slot
+        sanitized: list[dict] = []
+        for item in arc:
+            role = item.get("narrative_role", "buildup")
+            if role not in _VALID_NARRATIVE_ROLES:
+                role = "buildup"
+            tone = item.get("emotional_tone", "excitement")
+            if tone not in _VALID_EMOTIONAL_TONES:
+                tone = "excitement"
+
+            sanitized.append({
+                "day": item.get("day", len(sanitized) + 1),
+                "narrative_role": role,
+                "emotional_tone": tone,
+                "angle": item.get("angle", ""),
+                "content_type": item.get("content_type", "engagement"),
+                "slot_label": item.get("slot_label", "morning"),
+            })
+
+        logger.info("Generated narrative arc: %d slots for %d-day campaign", len(sanitized), num_days)
+        return sanitized
+
+    except Exception as e:
+        logger.warning("Narrative arc generation failed: %s — using defaults", e)
+        return _default_narrative_arc(brief, num_days)
+
+
+def _default_narrative_arc(brief: str, num_days: int) -> list[dict]:
+    """Deterministic fallback narrative arc when Claude is unavailable."""
+    arc: list[dict] = []
+
+    if num_days <= 0:
+        return arc
+
+    role_map = {
+        1: ("hook", "curiosity"),
+    }
+
+    if num_days == 1:
+        arc.append({
+            "day": 1,
+            "narrative_role": "hook",
+            "emotional_tone": "curiosity",
+            "angle": f"Introduce: {brief[:80]}",
+            "content_type": "announcement",
+            "slot_label": "morning",
+        })
+        return arc
+
+    if num_days == 2:
+        arc.append({
+            "day": 1,
+            "narrative_role": "hook",
+            "emotional_tone": "curiosity",
+            "angle": f"Tease what's coming: {brief[:60]}",
+            "content_type": "announcement",
+            "slot_label": "morning",
+        })
+        arc.append({
+            "day": 2,
+            "narrative_role": "cta",
+            "emotional_tone": "excitement",
+            "angle": f"The reveal + call to action: {brief[:60]}",
+            "content_type": "announcement",
+            "slot_label": "morning",
+        })
+        return arc
+
+    if num_days == 3:
+        arc.append({
+            "day": 1,
+            "narrative_role": "hook",
+            "emotional_tone": "curiosity",
+            "angle": f"Tease what's coming: {brief[:60]}",
+            "content_type": "announcement",
+            "slot_label": "morning",
+        })
+        arc.append({
+            "day": 2,
+            "narrative_role": "climax",
+            "emotional_tone": "excitement",
+            "angle": f"The big reveal: {brief[:60]}",
+            "content_type": "announcement",
+            "slot_label": "morning",
+        })
+        arc.append({
+            "day": 3,
+            "narrative_role": "cta",
+            "emotional_tone": "urgency",
+            "angle": f"Final call to action: {brief[:60]}",
+            "content_type": "engagement",
+            "slot_label": "morning",
+        })
+        return arc
+
+    # 4+ days: hook, buildup..., climax, resolution/cta
+    # Day 1: hook
+    arc.append({
+        "day": 1,
+        "narrative_role": "hook",
+        "emotional_tone": "curiosity",
+        "angle": f"Tease the campaign: {brief[:60]}",
+        "content_type": "announcement",
+        "slot_label": "morning",
+    })
+
+    # Middle days: buildup
+    tones_cycle = ["excitement", "trust", "excitement", "trust"]
+    for i in range(2, num_days - 1):
+        tone = tones_cycle[(i - 2) % len(tones_cycle)]
+        arc.append({
+            "day": i,
+            "narrative_role": "buildup",
+            "emotional_tone": tone,
+            "angle": f"Deepen the narrative (day {i}): {brief[:50]}",
+            "content_type": "community" if i % 2 == 0 else "engagement",
+            "slot_label": "morning",
+        })
+
+    # Second to last: climax
+    arc.append({
+        "day": num_days - 1,
+        "narrative_role": "climax",
+        "emotional_tone": "urgency",
+        "angle": f"The big reveal: {brief[:60]}",
+        "content_type": "announcement",
+        "slot_label": "morning",
+    })
+
+    # Last day: resolution/cta
+    arc.append({
+        "day": num_days,
+        "narrative_role": "cta",
+        "emotional_tone": "celebration",
+        "angle": f"Close the loop — call to action: {brief[:60]}",
+        "content_type": "engagement",
+        "slot_label": "morning",
+    })
+
+    return arc
 
 
 # ---------------------------------------------------------------------------
@@ -157,6 +388,8 @@ def create_campaign(
         slot.setdefault("angle", "")
         slot.setdefault("media_note", "")
         slot.setdefault("content_type", "")
+        slot.setdefault("narrative_role", "")
+        slot.setdefault("emotional_tone", "")
         if slot.get("day", 0) > duration_days:
             duration_days = slot["day"]
 
@@ -181,6 +414,65 @@ def create_campaign(
         "campaign": asdict(campaign),
         "message": f"Campaign '{name}' created with {len(slots)} posts over {duration_days} days.",
     }
+
+
+async def create_campaign_with_arc(
+    name: str,
+    brief: str,
+    num_days: int,
+    start_date: str = "",
+    post_times: dict[str, str] | None = None,
+    kpis: dict[str, str] | None = None,
+) -> dict:
+    """Create a campaign with AI-generated narrative arc.
+
+    Instead of accepting flat slot definitions, this generates a structured
+    story arc using Claude Haiku, then creates the campaign from it.
+
+    Args:
+        name: Unique campaign name.
+        brief: Campaign theme/objective.
+        num_days: Number of days for the campaign.
+        start_date: ISO date (YYYY-MM-DD). Defaults to today.
+        post_times: Mapping of slot_label -> "HH:MM".
+        kpis: Optional KPI targets.
+
+    Returns:
+        {"success": bool, "campaign": dict | None, "message": str}
+    """
+    arc_slots = await _generate_narrative_arc(brief, num_days)
+
+    # Convert arc output to slot dicts with narrative metadata
+    slots: list[dict] = []
+    for arc_item in arc_slots:
+        slot = {
+            "day": arc_item.get("day", len(slots) + 1),
+            "slot_label": arc_item.get("slot_label", "morning"),
+            "content_type": arc_item.get("content_type", "engagement"),
+            "angle": arc_item.get("angle", ""),
+            "narrative_role": arc_item.get("narrative_role", "buildup"),
+            "emotional_tone": arc_item.get("emotional_tone", "excitement"),
+            "prompt": "",
+            "copy": "",
+            "media_note": "",
+        }
+        # Build a generation prompt that embeds narrative context
+        role = slot["narrative_role"]
+        tone = slot["emotional_tone"]
+        angle = slot["angle"]
+        slot["prompt"] = (
+            f"[Narrative role: {role} | Tone: {tone}] {angle}"
+        )
+        slots.append(slot)
+
+    return create_campaign(
+        name=name,
+        brief=brief,
+        slots=slots,
+        start_date=start_date,
+        post_times=post_times,
+        kpis=kpis,
+    )
 
 
 def get_campaign(name: str) -> dict | None:
@@ -403,6 +695,18 @@ def schedule_campaign_posts(campaign_name: str) -> dict:
         angle = slot.get("angle", "")
         media_note = slot.get("media_note", "")
         brief = campaign_data.get("brief", "")
+        narrative_role = slot.get("narrative_role", "")
+        emotional_tone = slot.get("emotional_tone", "")
+
+        # Narrative context line (if present)
+        narrative_ctx = ""
+        if narrative_role or emotional_tone:
+            parts = []
+            if narrative_role:
+                parts.append(f"Role: {narrative_role}")
+            if emotional_tone:
+                parts.append(f"Tone: {emotional_tone}")
+            narrative_ctx = f"\nNarrative: {' | '.join(parts)}"
 
         if copy:
             # Pre-written copy: wrap in a directive so the agent posts it as-is
@@ -421,6 +725,8 @@ def schedule_campaign_posts(campaign_name: str) -> dict:
             )
             if angle:
                 full_prompt += f"\nAngle: {angle}"
+            if narrative_ctx:
+                full_prompt += narrative_ctx
             if media_note:
                 full_prompt += f"\nMedia note: {media_note}"
         else:
@@ -431,6 +737,8 @@ def schedule_campaign_posts(campaign_name: str) -> dict:
             )
             if angle:
                 full_prompt += f"\nAngle: {angle}"
+            if narrative_ctx:
+                full_prompt += narrative_ctx
 
         queue_label = f"{campaign_name} D{day}/{label}"
         item = schedule_queue.add_scheduled(

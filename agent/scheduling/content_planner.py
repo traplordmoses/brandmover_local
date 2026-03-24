@@ -19,6 +19,7 @@ from agent._client import get_anthropic
 from agent.content_types import AGENT_SELECTABLE_TYPES
 from agent.generation_history import get_recent_generations
 from agent.paths import STATE_DIR
+from agent.publishing.analytics import PERFORMANCE_DATA_FILE
 from agent.state_manager import FileStore
 from config import settings
 
@@ -123,6 +124,108 @@ def _today_iso() -> str:
 
 
 # ---------------------------------------------------------------------------
+# Performance-driven weighting
+# ---------------------------------------------------------------------------
+
+def _load_performance_weights() -> dict[str, float]:
+    """Read analytics data and return engagement multipliers per content type.
+
+    Reads ``state/performance_data.json`` (written by
+    ``agent.publishing.analytics``), computes the average engagement rate for
+    each content type, and returns a multiplier dict where 1.0 means average
+    performance.  Types above average get a multiplier >1, types below get <1.
+
+    Returns an empty dict when no measured data is available.
+    """
+    try:
+        if not PERFORMANCE_DATA_FILE.exists():
+            return {}
+        data = json.loads(PERFORMANCE_DATA_FILE.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, IOError, OSError):
+        return {}
+
+    # Only consider posts that have been checked (have real metrics)
+    measured = [p for p in data if p.get("last_checked", 0) > 0]
+    if not measured:
+        return {}
+
+    # Aggregate engagement rates by content_type
+    type_engagement: dict[str, list[float]] = {}
+    for p in measured:
+        ct = p.get("content_type") or "unknown"
+        type_engagement.setdefault(ct, []).append(p.get("engagement_rate", 0.0))
+
+    # Compute per-type average
+    type_avg: dict[str, float] = {}
+    for ct, rates in type_engagement.items():
+        type_avg[ct] = sum(rates) / len(rates) if rates else 0.0
+
+    # Global average across all measured posts
+    all_rates = [p.get("engagement_rate", 0.0) for p in measured]
+    global_avg = sum(all_rates) / len(all_rates) if all_rates else 0.0
+
+    if global_avg <= 0:
+        return {}
+
+    # Compute multiplier: type_avg / global_avg, clamped to [0.3, 3.0]
+    weights: dict[str, float] = {}
+    for ct, avg in type_avg.items():
+        raw = avg / global_avg
+        weights[ct] = max(0.3, min(3.0, round(raw, 2)))
+
+    logger.debug("Performance weights: %s (global avg %.2f%%)", weights, global_avg)
+    return weights
+
+
+def _build_performance_insights(weights: dict[str, float]) -> str:
+    """Build a human-readable performance insight string for the planning prompt.
+
+    Returns an empty string if no weights are available.
+    """
+    if not weights:
+        return ""
+
+    try:
+        if not PERFORMANCE_DATA_FILE.exists():
+            return ""
+        data = json.loads(PERFORMANCE_DATA_FILE.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, IOError, OSError):
+        return ""
+
+    measured = [p for p in data if p.get("last_checked", 0) > 0]
+    if not measured:
+        return ""
+
+    # Compute per-type stats
+    type_stats: dict[str, dict] = {}
+    for p in measured:
+        ct = p.get("content_type") or "unknown"
+        stats = type_stats.setdefault(ct, {"count": 0, "total_eng": 0.0})
+        stats["count"] += 1
+        stats["total_eng"] += p.get("engagement_rate", 0.0)
+
+    lines = ["PERFORMANCE DATA (from real X/Twitter analytics):"]
+    # Sort by average engagement descending
+    ranked = sorted(
+        type_stats.items(),
+        key=lambda x: x[1]["total_eng"] / x[1]["count"] if x[1]["count"] else 0,
+        reverse=True,
+    )
+    best_avg = ranked[0][1]["total_eng"] / ranked[0][1]["count"] if ranked else 0
+    for ct, stats in ranked:
+        avg = stats["total_eng"] / stats["count"] if stats["count"] else 0
+        label = "your best" if avg == best_avg else (
+            "below average" if weights.get(ct, 1.0) < 0.9 else "solid"
+        )
+        lines.append(
+            f"  - '{ct}' has {avg:.1f}% avg engagement ({label}, {stats['count']} posts measured)"
+        )
+
+    lines.append("Weight the plan toward higher-performing content types.")
+    return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
 # File I/O
 # ---------------------------------------------------------------------------
 
@@ -170,14 +273,19 @@ def get_content_type_distribution(days: int = 7) -> dict[str, int]:
 def identify_gaps(
     distribution: dict[str, int],
     target_mix: dict[str, int] | None = None,
+    performance_weights: dict[str, float] | None = None,
 ) -> list[str]:
     """Find underrepresented content types relative to the target mix.
 
     Returns a list of content types sorted by how far below target they are
-    (most underrepresented first).
+    (most underrepresented first).  When *performance_weights* are provided
+    (from ``_load_performance_weights()``), the raw deficit is multiplied by
+    the engagement multiplier so high-performing types bubble up.
     """
     mix = target_mix or _effective_mix()
-    gaps: list[tuple[str, int]] = []
+    if performance_weights is None:
+        performance_weights = _load_performance_weights()
+    gaps: list[tuple[str, float]] = []
     for content_type, target_count in mix.items():
         # Only consider types the agent can actually produce
         if content_type not in AGENT_SELECTABLE_TYPES:
@@ -185,8 +293,10 @@ def identify_gaps(
         actual = distribution.get(content_type, 0)
         deficit = target_count - actual
         if deficit > 0:
-            gaps.append((content_type, deficit))
-    # Sort by largest deficit first
+            # Multiply deficit by engagement weight so proven types get priority
+            weight = performance_weights.get(content_type, 1.0)
+            gaps.append((content_type, deficit * weight))
+    # Sort by weighted deficit (largest first)
     gaps.sort(key=lambda x: x[1], reverse=True)
     return [ct for ct, _ in gaps]
 
@@ -203,7 +313,11 @@ async def generate_plan(days_ahead: int = 7) -> ContentPlan:
     """
     horizon = days_ahead if days_ahead > 0 else settings.PLAN_HORIZON_DAYS
     distribution = get_content_type_distribution(days=7)
-    gaps = identify_gaps(distribution)
+
+    # Load engagement-based performance weights from analytics data
+    perf_weights = _load_performance_weights()
+
+    gaps = identify_gaps(distribution, performance_weights=perf_weights)
 
     # Load brand context for flavor
     brand_context = ""
@@ -232,17 +346,23 @@ async def generate_plan(days_ahead: int = 7) -> ContentPlan:
     if brand_context:
         prompt += f"Brand context (brief):\n{brand_context[:1000]}\n\n"
 
-    # Inject performance context so the planner learns from what works
+    # Inject detailed analytics-based performance insights
+    perf_insights = _build_performance_insights(perf_weights)
+    if perf_insights:
+        prompt += f"\n{perf_insights}\n\n"
+
+    # Also inject the legacy performance context as a fallback
     try:
         from agent.performance import get_performance_context
         perf_context = get_performance_context()
-        if perf_context:
+        if perf_context and not perf_insights:
             prompt += f"\nPerformance insight: {perf_context}\n\n"
     except Exception:
         pass
 
     prompt += (
         "Generate 2-3 posts per day spread across time slots. "
+        "Favor content types with proven high engagement. "
         "Return ONLY a JSON array of objects with keys: "
         '"date", "time_slot", "content_type", "prompt_hint" (a brief topic/angle). '
         "No markdown, no explanation -- just the JSON array."
@@ -388,7 +508,8 @@ async def update_plan_daily() -> ContentPlan:
     if needed_dates:
         logger.info("Extending plan to cover %d new dates", len(needed_dates))
         distribution = get_content_type_distribution(days=7)
-        gaps = identify_gaps(distribution)
+        perf_weights = _load_performance_weights()
+        gaps = identify_gaps(distribution, performance_weights=perf_weights)
         types_pool = gaps if gaps else list(_effective_mix().keys())
         idx = 0
         for date in needed_dates:
