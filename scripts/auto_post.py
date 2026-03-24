@@ -31,6 +31,7 @@ Usage:
 import argparse
 import asyncio
 import logging
+import re
 import sys
 from pathlib import Path
 
@@ -354,6 +355,17 @@ async def process_scheduled_item(
 
     logger.info("Processing scheduled item: %s (%s)", item_id, label)
 
+    # --- Detect campaign / exact-copy items early ---
+    # These bypass rate-limiting and pending-draft gates because they
+    # contain pre-written copy that should not be re-generated.
+    import re as _re
+    is_campaign = "[CAMPAIGN:" in prompt
+    _exact_match = _re.search(
+        r"post this exact (?:copy|text)[^:]*:\s*\n*(.*)",
+        prompt, _re.IGNORECASE | _re.DOTALL,
+    )
+    is_prewritten = bool(_exact_match) or is_campaign
+
     # --- Pre-approved draft: post directly, skip generation ---
     pre_draft = item.get("draft")
     if pre_draft:
@@ -400,6 +412,111 @@ async def process_scheduled_item(
             )
             return False
 
+    # --- Campaign / exact-copy shortcut: bypass agent entirely ---
+    # Must run BEFORE rate-limit and pending-draft gates so pre-written
+    # campaign copy is never blocked or re-generated.
+    if is_prewritten:
+        schedule_queue.mark_generating(item_id)
+
+        # Extract caption from the exact-copy directive
+        if _exact_match:
+            exact_caption = _exact_match.group(1).strip()
+        elif is_campaign:
+            # Fallback: grab everything after the [CAMPAIGN:...] header line
+            lines = prompt.split("\n")
+            copy_start = None
+            for i, line in enumerate(lines):
+                if "exact copy" in line.lower():
+                    copy_start = i + 1
+                    break
+            if copy_start is not None:
+                exact_caption = "\n".join(lines[copy_start:]).strip()
+            else:
+                # No "exact copy" marker — use everything after the campaign tag line
+                after_tag = []
+                past_tag = False
+                for line in lines:
+                    if past_tag:
+                        after_tag.append(line)
+                    elif "[CAMPAIGN:" in line:
+                        past_tag = True
+                exact_caption = "\n".join(after_tag).strip()
+        else:
+            exact_caption = ""
+
+        # Strip any trailing MEDIA TASK block (handled separately if present)
+        media_split = _re.split(r"\n\s*MEDIA TASK:", exact_caption, flags=_re.IGNORECASE)
+        exact_caption = media_split[0].strip()
+
+        # Strip trailing "Media note:" if present
+        if "Media note:" in exact_caption:
+            parts = exact_caption.split("Media note:")
+            exact_caption = parts[0].strip()
+
+        if not exact_caption:
+            logger.warning("Campaign/exact-copy item %s had empty caption, falling through to agent", item_id)
+            schedule_queue.reset_to_pending(item_id)
+        else:
+            campaign_tag = ""
+            if is_campaign:
+                tag_match = _re.search(r"\[CAMPAIGN:\s*([^\]]+)\]", prompt)
+                campaign_tag = tag_match.group(1).strip() if tag_match else ""
+
+            logger.info(
+                "Campaign/exact-copy shortcut for %s%s: %s",
+                item_id,
+                f" (campaign={campaign_tag})" if campaign_tag else "",
+                exact_caption[:80],
+            )
+
+            if dry_run:
+                logger.info("DRY RUN — scheduled=%s (campaign-exact) caption=%s", item_id, exact_caption[:80])
+                schedule_queue.mark_done(item_id)
+                return True
+
+            # Bypass pending-draft gate: warn but proceed
+            if await state.async_has_pending():
+                logger.warning(
+                    "Campaign item %s: a draft is already pending, but campaign "
+                    "posts bypass the pending-draft gate",
+                    item_id,
+                )
+
+            # Save as pending draft with the exact caption — no agent, no image gen
+            await state.async_save_pending(
+                caption=exact_caption,
+                hashtags=[],
+                image_url=None,
+                alt_text="",
+                image_prompt="",
+                original_request=prompt,
+                auto_slot=slot_name,
+            )
+
+            schedule_queue.mark_done(item_id)
+
+            if bot:
+                from bot.handlers import send_auto_draft
+                draft = {
+                    "caption": exact_caption,
+                    "hashtags": [],
+                    "content_type": "announcement",
+                    "_campaign_scheduled": True,
+                }
+                await send_auto_draft(bot, draft, None, slot_name)
+            else:
+                notification = (
+                    f"<b>Scheduled Draft Ready</b>  [<code>{item_id}</code>]\n\n"
+                    f"{exact_caption}\n\n"
+                    f"/approve to post to X\n"
+                    f"/reject <i>feedback</i> to revise\n"
+                    f"/cancel to discard"
+                )
+                await _notify_telegram(notification)
+
+            logger.info("Campaign/exact-copy draft queued for approval: %s", item_id)
+            return True
+
     schedule_queue.mark_generating(item_id)
 
     # Rate limit check — user-scheduled posts bypass the pause flag
@@ -418,56 +535,6 @@ async def process_scheduled_item(
         logger.info("Skipping scheduled %s: a draft is already pending approval", item_id)
         schedule_queue.reset_to_pending(item_id)
         return False
-
-    # --- Exact-copy shortcut: bypass agent entirely for verbatim posts ---
-    # Matches: "Post this exact copy:", "Post this exact text:", "Post this exact text, no image:"
-    import re as _re
-    _exact_match = _re.search(
-        r"post this exact (?:copy|text)[^:]*:\s*\n*(.*)",
-        prompt, _re.IGNORECASE | _re.DOTALL,
-    )
-    if _exact_match:
-        exact_caption = _exact_match.group(1).strip()
-        # Strip any trailing MEDIA TASK block (handled separately if present)
-        media_split = _re.split(r"\n\s*MEDIA TASK:", exact_caption, flags=_re.IGNORECASE)
-        exact_caption = media_split[0].strip()
-
-        logger.info("Exact-copy shortcut for %s: %s", item_id, exact_caption[:80])
-
-        if dry_run:
-            logger.info("DRY RUN — scheduled=%s (exact-copy) caption=%s", item_id, exact_caption[:80])
-            schedule_queue.mark_done(item_id)
-            return True
-
-        # Save as pending draft with the exact caption — no agent, no image gen
-        await state.async_save_pending(
-            caption=exact_caption,
-            hashtags=[],
-            image_url=None,
-            alt_text="",
-            image_prompt="",
-            original_request=prompt,
-            auto_slot=slot_name,
-        )
-
-        schedule_queue.mark_done(item_id)
-
-        if bot:
-            from bot.handlers import send_auto_draft
-            draft = {"caption": exact_caption, "hashtags": [], "content_type": "announcement"}
-            await send_auto_draft(bot, draft, None, slot_name)
-        else:
-            notification = (
-                f"<b>Scheduled Draft Ready</b>  [<code>{item_id}</code>]\n\n"
-                f"{exact_caption}\n\n"
-                f"/approve to post to X\n"
-                f"/reject <i>feedback</i> to revise\n"
-                f"/cancel to discard"
-            )
-            await _notify_telegram(notification)
-
-        logger.info("Exact-copy draft queued for approval: %s", item_id)
-        return True
 
     # Run the agent with retries (shorter delay for user-scheduled items)
     result = await _run_agent_with_retries(prompt, f"scheduled:{item_id}", retry_delay=60)
@@ -527,8 +594,16 @@ async def _process_scheduled_items(
         return 0
 
     for item in due_items:
-        if await state.async_has_pending() and not dry_run:
-            logger.info("User queue: pending draft exists, deferring")
+        # Campaign posts with pre-written copy (or a pre-attached draft)
+        # bypass the pending-draft gate — they must not be deferred.
+        prompt = item.get("prompt", "")
+        has_prewritten = (
+            item.get("draft")
+            or "[CAMPAIGN:" in prompt
+            or bool(re.search(r"post this exact (?:copy|text)", prompt, re.IGNORECASE))
+        )
+        if not has_prewritten and await state.async_has_pending() and not dry_run:
+            logger.info("User queue: pending draft exists, deferring non-campaign item %s", item.get("id"))
             break
         success = await process_scheduled_item(
             item, global_config,
@@ -537,7 +612,7 @@ async def _process_scheduled_items(
         )
         if success:
             drafts_made += 1
-            if not dry_run:
+            if not dry_run and not has_prewritten:
                 break
 
     return drafts_made
