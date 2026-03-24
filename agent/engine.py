@@ -9,6 +9,7 @@ import logging
 import re
 import time
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Callable, Awaitable
 
 import anthropic
@@ -499,7 +500,94 @@ async def _run_loop(
 
     result = await _post_process_draft(result, tool_call_log, messages)
     result._finished = finished  # internal flag for caller
+
+    # --- Skill auto-discovery: log tool patterns and check for repeats ---
+    if result.draft and result.tool_calls_made:
+        try:
+            _log_tool_pattern(
+                request_summary=messages[0].get("content", "")[:200] if messages else "",
+                tools_used=result.tool_calls_made,
+            )
+            suggestion = _check_skill_opportunity()
+            if suggestion:
+                result.draft["_skill_suggestion"] = suggestion
+        except Exception as e:
+            logger.debug("Skill auto-discovery failed: %s", e)
+
     return result
+
+
+def _log_tool_pattern(request_summary: str, tools_used: list[str]) -> None:
+    """Log a tool usage pattern to state/tool_patterns.json for skill discovery."""
+    import time as _t
+    patterns_path = Path(settings.STATE_FOLDER) / "tool_patterns.json"
+    patterns_path.parent.mkdir(parents=True, exist_ok=True)
+
+    entry = {
+        "request_summary": request_summary[:200],
+        "tools_used": tools_used,
+        "timestamp": _t.time(),
+    }
+
+    existing: list[dict] = []
+    if patterns_path.exists():
+        try:
+            existing = json.loads(patterns_path.read_text("utf-8"))
+        except (json.JSONDecodeError, OSError):
+            existing = []
+
+    existing.append(entry)
+    # Keep only the last 50 patterns
+    if len(existing) > 50:
+        existing = existing[-50:]
+
+    try:
+        patterns_path.write_text(json.dumps(existing, indent=2), "utf-8")
+    except OSError as e:
+        logger.debug("Failed to write tool_patterns.json: %s", e)
+
+
+def _check_skill_opportunity() -> str | None:
+    """Check the last 20 tool patterns for repeating sequences.
+
+    If the same tool sequence has been used 3+ times, suggest creating a skill.
+
+    Returns:
+        A suggestion string, or None if no pattern found.
+    """
+    patterns_path = Path(settings.STATE_FOLDER) / "tool_patterns.json"
+    if not patterns_path.exists():
+        return None
+
+    try:
+        all_patterns = json.loads(patterns_path.read_text("utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return None
+
+    # Look at the last 20 patterns
+    recent = all_patterns[-20:]
+    if len(recent) < 3:
+        return None
+
+    # Count tool sequences (normalize by converting to a tuple key)
+    from collections import Counter
+    sequence_counts: Counter[tuple[str, ...]] = Counter()
+    for p in recent:
+        tools = p.get("tools_used", [])
+        if tools:
+            key = tuple(tools)
+            sequence_counts[key] += 1
+
+    # Find the most common sequence
+    most_common_seq, count = sequence_counts.most_common(1)[0]
+    if count >= 3:
+        seq_str = " -> ".join(most_common_seq)
+        return (
+            f"You've used this workflow {count} times: {seq_str}. "
+            f"Consider creating a skill: /skills create <name>"
+        )
+
+    return None
 
 
 async def _post_process_draft(

@@ -14,6 +14,69 @@ from agent.engine import AgentResult, run_agent, run_agent_with_history, OnToolC
 
 logger = logging.getLogger(__name__)
 
+# ---------------------------------------------------------------------------
+# Refinement presets — shorthand flags for common refinement operations
+# ---------------------------------------------------------------------------
+
+REFINEMENT_PRESETS = {
+    "--shorter": "Make the caption significantly shorter. Cut to under 100 characters. Remove filler words.",
+    "--longer": "Expand the caption with more detail. Add context and a stronger narrative.",
+    "--playful": "Rewrite with a more playful, fun, lighthearted tone. Add personality.",
+    "--professional": "Rewrite with a more professional, authoritative tone.",
+    "--urgent": "Rewrite with more urgency and a stronger call to action.",
+    "--add-cta": "Add a clear call to action at the end (e.g., 'Try it now', 'Learn more', 'Join us').",
+    "--add-emoji": "Add 1 well-placed emoji that enhances the message.",
+    "--remove-emoji": "Remove all emojis from the caption.",
+    "--punchy": "Make every sentence hit harder. Shorter. Punchier. No filler.",
+}
+
+# Also accept --tone=<value> syntax
+_TONE_PRESETS = {
+    "playful": REFINEMENT_PRESETS["--playful"],
+    "professional": REFINEMENT_PRESETS["--professional"],
+    "urgent": REFINEMENT_PRESETS["--urgent"],
+    "casual": "Rewrite with a more casual, conversational tone. Like talking to a friend.",
+    "formal": "Rewrite with a more formal, polished tone.",
+}
+
+
+def parse_preset_flags(text: str) -> tuple[str, str]:
+    """Parse preset flags from a refinement instruction.
+
+    Extracts flags like --shorter, --punchy, --tone=playful from the text
+    and returns (remaining_text, combined_instructions).
+
+    Multiple presets are combined. If no presets found, returns original text
+    with empty instructions.
+
+    Returns:
+        (remaining_text, preset_instructions) — preset_instructions is empty
+        if no presets were found.
+    """
+    import re
+
+    instructions: list[str] = []
+    remaining = text
+
+    # Match --tone=<value> first
+    tone_matches = re.findall(r"--tone=(\w+)", remaining)
+    for tone_val in tone_matches:
+        preset_text = _TONE_PRESETS.get(tone_val.lower())
+        if preset_text:
+            instructions.append(preset_text)
+        remaining = remaining.replace(f"--tone={tone_val}", "").strip()
+
+    # Match simple flags like --shorter, --punchy
+    for flag, instruction in REFINEMENT_PRESETS.items():
+        if flag in remaining:
+            instructions.append(instruction)
+            remaining = remaining.replace(flag, "").strip()
+
+    remaining = remaining.strip()
+    combined = " ".join(instructions)
+    return remaining, combined
+
+
 # Tools allowed during refinement -- no image gen, no web search, no scripts.
 # Keeps the loop fast and focused on text editing.
 _REFINEMENT_EXCLUDED_TOOLS = {

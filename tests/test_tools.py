@@ -49,6 +49,7 @@ class TestToolDefinitionsStructure:
         "create_skill",
         "list_skills",
         "delegate_task",
+        "research_trends",
         "search_memory",
         "read_references",
         "check_figma_design",

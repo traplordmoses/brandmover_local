@@ -56,6 +56,19 @@ PLATFORM_CONFIGS: dict[str, dict] = {
         "keep_full_length": True,
         "image_upload": True,
     },
+    "linkedin": {
+        "max_chars": 3000,
+        "strip_hashtags": False,
+        "hashtags_inline": True,
+        "image_upload": True,
+    },
+    "instagram": {
+        "max_chars": 2200,
+        "strip_hashtags": False,
+        "hashtags_inline": True,
+        "image_upload": True,
+        "image_required": True,
+    },
 }
 
 SUPPORTED_PLATFORMS = list(PLATFORM_CONFIGS.keys())
@@ -113,6 +126,24 @@ def adapt_for_platform(
         hashtag_str = " ".join(hashtags)
         if hashtag_str:
             full_text = f"{caption}\n\n{hashtag_str}".strip()
+        else:
+            full_text = caption.strip()
+        text = _truncate_text(full_text, max_chars)
+
+    elif platform == "linkedin":
+        # LinkedIn: full caption + hashtags inline at the end, 3000 char limit
+        hashtag_str = " ".join(hashtags)
+        if hashtag_str:
+            full_text = f"{caption}\n\n{hashtag_str}".strip()
+        else:
+            full_text = caption.strip()
+        text = _truncate_text(full_text, max_chars)
+
+    elif platform == "instagram":
+        # Instagram: caption + hashtags inline (often in a separate paragraph), 2200 char limit
+        hashtag_str = " ".join(hashtags)
+        if hashtag_str:
+            full_text = f"{caption}\n\n.\n.\n.\n{hashtag_str}".strip()
         else:
             full_text = caption.strip()
         text = _truncate_text(full_text, max_chars)

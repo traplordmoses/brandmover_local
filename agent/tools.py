@@ -533,6 +533,31 @@ TOOL_DEFINITIONS = [
             "required": ["source_caption", "target_format"],
         },
     },
+    # ── Trend research ──
+    {
+        "name": "research_trends",
+        "description": (
+            "Research trending topics and competitor activity in your brand's niche. "
+            "Returns 3-5 actionable content angles based on what's currently resonating. "
+            "Use when the user asks about trends, what to post next, or when planning "
+            "content strategy."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "niche": {
+                    "type": "string",
+                    "description": "The brand's niche or industry (e.g., 'AI marketing', 'DeFi', 'fitness')",
+                },
+                "focus": {
+                    "type": "string",
+                    "enum": ["trending_topics", "competitor_angles", "content_gaps", "all"],
+                    "description": "What to research",
+                },
+            },
+            "required": ["niche"],
+        },
+    },
     # ── Video promo generation ──
     {
         "name": "generate_promo_video",
@@ -1295,6 +1320,40 @@ async def _handle_delegate_task(
     return json.dumps(result, indent=2)
 
 
+async def _handle_research_trends(
+    input_dict: dict, tracker: ResourceTracker
+) -> str:
+    """Research trending topics via a sub-agent."""
+    from agent.subagent import delegate_task
+
+    niche = input_dict.get("niche", "")
+    focus = input_dict.get("focus", "all")
+    if not niche:
+        return json.dumps({"error": "No niche provided."})
+
+    focus_instructions = {
+        "trending_topics": "Focus on what topics are trending right now in this space. What are people talking about?",
+        "competitor_angles": "Focus on what competitors are doing well. What content angles are getting engagement?",
+        "content_gaps": "Focus on content gaps -- what topics are underserved? Where is there opportunity?",
+        "all": "Cover trending topics, competitor angles, AND content gaps.",
+    }
+
+    task = (
+        f"Research trending topics and content opportunities in the '{niche}' niche.\n\n"
+        f"{focus_instructions.get(focus, focus_instructions['all'])}\n\n"
+        f"Return exactly 3-5 actionable content angles. For each angle provide:\n"
+        f"1. TOPIC: A specific topic or hook\n"
+        f"2. WHY NOW: Why this is timely or resonating\n"
+        f"3. CONTENT IDEA: A concrete post idea the brand could create\n"
+        f"4. FORMAT: Best format (single post, thread, image, video)\n\n"
+        f"Be specific and actionable. No generic advice."
+    )
+
+    tracker.log_api("subagent:research_trends")
+    result = await delegate_task(task=task, context=f"Brand niche: {niche}", tracker=tracker)
+    return json.dumps(result, indent=2)
+
+
 async def _handle_search_memory(
     input_dict: dict, tracker: ResourceTracker
 ) -> str:
@@ -1622,6 +1681,7 @@ _HANDLERS = {
     "create_skill": _handle_create_skill,
     "list_skills": _handle_list_skills,
     "delegate_task": _handle_delegate_task,
+    "research_trends": _handle_research_trends,
     "search_memory": _handle_search_memory,
     "generate_promo_video": _handle_generate_promo_video,
     "repurpose_content": _handle_repurpose_content,
@@ -1698,6 +1758,7 @@ def tool_description(tool_name: str, tool_input: dict) -> str:
         # Generic
         "think": "Reasoning...",
         "finish": "Submitting final draft...",
+        "research_trends": f"Researching trends in {tool_input.get('niche', 'your niche')}...",
         "generate_promo_video": f"Generating promo video: {tool_input.get('title', '?')[:40]}...",
         "suggest_variations": "Suggesting creative variations...",
     }

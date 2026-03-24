@@ -145,6 +145,16 @@ async def autostatus_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
     else:
         sched_section = "\n<b>Scheduled:</b> none"
 
+    # Optimal posting times from analytics
+    timing_section = ""
+    try:
+        from agent.publishing.posting_time import format_timing_context
+        timing_ctx = format_timing_context()
+        if timing_ctx:
+            timing_section = f"\n\n<b>Optimal Timing:</b>\n{_esc(timing_ctx)}"
+    except Exception:
+        pass  # Degrade gracefully if no analytics data
+
     msg = (
         f"<b>Auto-Post Status: {paused_str}</b>\n\n"
         f"<b>Enabled:</b> {settings.AUTO_POST_ENABLED}\n"
@@ -153,7 +163,8 @@ async def autostatus_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
         f"<b>Last post:</b> {last_str}\n"
         f"<b>Min gap:</b> {global_cfg.get('min_gap_minutes', 120)} min\n\n"
         f"<b>Slots:</b>\n" + "\n".join(slot_lines) +
-        sched_section + "\n\n"
+        sched_section +
+        timing_section + "\n\n"
         f"<b>Recent:</b>\n{recent_str}"
     )
     await update.message.reply_text(msg, parse_mode="HTML")
@@ -257,6 +268,74 @@ async def autoforce_command(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 # ---------------------------------------------------------------------------
 
 
+async def _handle_schedule_next(update: Update, prompt: str) -> None:
+    """Handle /schedule next <prompt> — auto-pick the optimal time slot."""
+    from agent.publishing.posting_time import get_optimal_slot
+    from datetime import datetime, timedelta, timezone as _tz
+
+    if not prompt:
+        await update.message.reply_text(
+            "Usage: /schedule next <i>prompt</i>\n\n"
+            "Example: <code>/schedule next community update</code>\n\n"
+            "This auto-picks the best time slot based on your engagement data.",
+            parse_mode="HTML",
+        )
+        return
+
+    try:
+        optimal = get_optimal_slot(content_type="")
+    except Exception:
+        optimal = {"day": "wednesday", "hour": 12, "reason": "Default slot (no data)."}
+
+    opt_day = optimal.get("day", "wednesday")
+    opt_hour = optimal.get("hour", 12)
+    reason = optimal.get("reason", "")
+
+    # Calculate the next occurrence of this day+hour
+    now = datetime.now(tz=_tz.utc)
+    day_names = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]
+    target_weekday = day_names.index(opt_day) if opt_day in day_names else 2  # default wednesday
+    current_weekday = now.weekday()
+
+    days_ahead = target_weekday - current_weekday
+    if days_ahead < 0:
+        days_ahead += 7
+    elif days_ahead == 0 and now.hour >= opt_hour:
+        days_ahead = 7  # same day but hour passed, go to next week
+
+    target_dt = (now + timedelta(days=days_ahead)).replace(
+        hour=opt_hour, minute=0, second=0, microsecond=0,
+    )
+    ts = target_dt.timestamp()
+
+    # Format display time
+    opt_period = "AM" if opt_hour < 12 else "PM"
+    opt_display_hour = opt_hour if opt_hour <= 12 else opt_hour - 12
+    if opt_display_hour == 0:
+        opt_display_hour = 12
+    display = target_dt.strftime(f"%b %d {opt_display_hour}:%M {opt_period} UTC")
+
+    item = schedule_queue.add_scheduled(prompt, ts, "once")
+    if item is None:
+        await update.message.reply_text(
+            "A post is already scheduled around that time. "
+            "Use /unschedule to cancel the existing one first.",
+            parse_mode="HTML",
+        )
+        return
+
+    await update.message.reply_text(
+        f"<b>Post scheduled (optimal slot)</b>\n\n"
+        f"<b>Time:</b> {_esc(display)} ({_esc(opt_day.capitalize())})\n"
+        f"<b>Prompt:</b> {_esc(prompt[:200])}\n"
+        f"<b>ID:</b> <code>{item['id']}</code>\n\n"
+        f"\U0001F4CA {_esc(reason)}\n\n"
+        f"I'll generate a draft at the scheduled time and send it here for your approval.\n"
+        f"Use /unschedule <code>{item['id']}</code> to cancel.",
+        parse_mode="HTML",
+    )
+
+
 async def schedule_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle /schedule <time> <prompt> — schedule a post for a specific time."""
     if not _authorized(update.effective_user.id):
@@ -273,11 +352,20 @@ async def schedule_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             "<code>/schedule tomorrow 9am morning engagement</code>\n"
             "<code>/schedule in 2 hours community update</code>\n"
             "<code>/schedule daily 3pm afternoon post</code>\n"
-            "<code>/schedule weekly monday 9am week in review</code>\n\n"
+            "<code>/schedule weekly monday 9am week in review</code>\n"
+            "<code>/schedule next community update</code>\n\n"
             "<b>Time formats:</b> 3pm, 9:30am, 15:00, tomorrow, monday, in 2 hours\n"
+            "<b>Shortcuts:</b> <code>next</code> auto-picks the optimal time slot\n"
             "<b>Recurrence:</b> prefix with <code>daily</code> or <code>weekly</code>",
             parse_mode="HTML",
         )
+        return
+
+    # --- /schedule next <prompt> — auto-pick optimal time slot ---
+    remaining = args[1].strip()
+    if remaining.lower().startswith("next"):
+        next_prompt = remaining[4:].strip()
+        await _handle_schedule_next(update, next_prompt)
         return
 
     prompt, ts, recurrence, display = schedule_queue.parse_schedule_command(args[1])
@@ -299,13 +387,73 @@ async def schedule_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         return
     recurrence_tag = f" ({recurrence})" if recurrence and recurrence != "once" else ""
 
+    # Build smart scheduling suggestion — compare chosen time with optimal slot
+    analytics_tip = ""
+    try:
+        from agent.publishing.posting_time import get_optimal_slot, analyze_posting_times
+        from datetime import datetime, timezone as _tz
+
+        optimal = get_optimal_slot(content_type="")
+        analysis = analyze_posting_times()
+
+        if analysis.get("sufficient_data") and ts:
+            chosen_dt = datetime.fromtimestamp(ts, tz=_tz.utc)
+            chosen_hour = chosen_dt.hour
+            optimal_hour = optimal.get("hour", 12)
+            optimal_day = optimal.get("day", "wednesday")
+            optimal_reason = optimal.get("reason", "")
+
+            # Calculate hour difference (accounting for wrap-around)
+            hour_diff = abs(chosen_hour - optimal_hour)
+            if hour_diff > 12:
+                hour_diff = 24 - hour_diff
+
+            if hour_diff > 2:
+                # Significant difference — show a targeted suggestion
+                # Format the optimal time nicely
+                opt_period = "AM" if optimal_hour < 12 else "PM"
+                opt_display_hour = optimal_hour if optimal_hour <= 12 else optimal_hour - 12
+                if opt_display_hour == 0:
+                    opt_display_hour = 12
+                opt_range_end = optimal_hour + 2
+                opt_end_period = "AM" if opt_range_end < 12 else "PM"
+                opt_end_display = opt_range_end if opt_range_end <= 12 else opt_range_end - 12
+                if opt_end_display == 0:
+                    opt_end_display = 12
+
+                # Get engagement rates for comparison
+                heatmap = analysis.get("heatmap", {})
+                chosen_day_name = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"][chosen_dt.weekday()]
+                chosen_rate = heatmap.get(chosen_day_name, {}).get(str(chosen_hour), 0.0)
+                optimal_rate = heatmap.get(optimal_day, {}).get(str(optimal_hour), 0.0)
+
+                analytics_tip = (
+                    f"\n\n\U0001F4A1 <i>Tip: Your audience is most active at "
+                    f"{opt_display_hour}-{opt_end_display} {opt_end_period} on "
+                    f"{_esc(optimal_day.capitalize())}s"
+                )
+                if optimal_rate > 0 and chosen_rate >= 0:
+                    analytics_tip += (
+                        f" ({optimal_rate:.1f}% avg engagement"
+                        f" vs {chosen_rate:.1f}% at {chosen_hour}:00)"
+                    )
+                analytics_tip += ". Consider /reschedule for better reach.</i>"
+            elif analysis.get("best_hours"):
+                # Close to optimal — just confirm it's a good choice
+                best_hours = analysis["best_hours"]
+                if chosen_hour in best_hours:
+                    analytics_tip = "\n\n\u2705 <i>Great timing! This is one of your peak engagement windows.</i>"
+    except Exception:
+        pass  # Degrade gracefully
+
     await update.message.reply_text(
         f"<b>Post scheduled{_esc(recurrence_tag)}</b>\n\n"
         f"<b>Time:</b> {_esc(display)}\n"
         f"<b>Prompt:</b> {_esc(prompt[:200])}\n"
         f"<b>ID:</b> <code>{item['id']}</code>\n\n"
         f"I'll generate a draft at the scheduled time and send it here for your approval.\n"
-        f"Use /unschedule <code>{item['id']}</code> to cancel.",
+        f"Use /unschedule <code>{item['id']}</code> to cancel."
+        + analytics_tip,
         parse_mode="HTML",
     )
 

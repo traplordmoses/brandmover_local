@@ -484,6 +484,14 @@ async def _handle_agent_mode(update: Update, request: str, user_id: int | None =
 
         await _send_draft(update, result.draft, image_url, resources=result.resources, image_urls=image_urls, user_id=user_id)
 
+        # Show skill auto-discovery suggestion if present
+        skill_suggestion = result.draft.get("_skill_suggestion")
+        if skill_suggestion:
+            await update.message.reply_text(
+                f"<i>{_esc(skill_suggestion)}</i>",
+                parse_mode="HTML",
+            )
+
         # Fire hooks + transcript
         transcript.log_agent_response(
             user_id or 0, result.draft.get("caption", ""),

@@ -700,7 +700,11 @@ async def _send_draft(
             InlineKeyboardButton("Reject", callback_data="draft_reject"),
         ],
         [
-            InlineKeyboardButton("Edit", callback_data="draft_edit"),
+            InlineKeyboardButton("Edit Caption", callback_data="draft_edit_caption"),
+            InlineKeyboardButton("Edit Image", callback_data="draft_edit_image"),
+        ],
+        [
+            InlineKeyboardButton("Shorten", callback_data="draft_shorten"),
             InlineKeyboardButton("Reroll", callback_data="draft_reroll"),
         ],
     ])
@@ -831,7 +835,7 @@ async def draft_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     if not _can_operate(cb_user_id):
         return
 
-    action = query.data.split("_", 1)[1]  # approve|reject|edit|reroll
+    action = query.data.split("_", 1)[1]  # approve|reject|edit_caption|edit_image|shorten|reroll
 
     # Proxy so _do_approve/_do_reject reply via query.message
     proxy = _CallbackProxy(update, query)
@@ -850,6 +854,12 @@ async def draft_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             "<i>change the background to blue</i>",
             parse_mode="HTML",
         )
+    elif action == "edit_caption":
+        await _do_edit_caption(proxy, context, user_id=cb_user_id)
+    elif action == "edit_image":
+        await _do_edit_image(proxy, context, user_id=cb_user_id)
+    elif action == "shorten":
+        await _do_shorten(proxy, context, user_id=cb_user_id)
     elif action == "reroll":
         if _rate_limited(cb_user_id):
             await query.message.reply_text(
@@ -865,6 +875,169 @@ async def draft_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             if original:
                 from bot.handlers.generation import _handle_agent_mode
                 await _handle_agent_mode(proxy, original, user_id=cb_user_id)
+
+
+# ---------------------------------------------------------------------------
+# Granular draft editing handlers (Edit Caption / Edit Image / Shorten)
+# ---------------------------------------------------------------------------
+
+
+async def _do_edit_caption(update, context, *, user_id: int) -> None:
+    """Re-run the agent to rewrite only the caption, keeping the existing image."""
+    pending = state.get_pending(user_id=user_id)
+    if not pending:
+        await update.message.reply_text("No pending draft to edit.")
+        return
+
+    if _rate_limited(user_id):
+        await update.message.reply_text(
+            f"Please wait {_RATE_LIMIT_SECONDS}s between requests."
+        )
+        return
+
+    caption = pending.get("caption", "")
+    image_url = pending.get("image_url")
+    content_type = pending.get("content_type", "default")
+
+    await update.message.chat.send_action("typing")
+    await update.message.reply_text("Rewriting caption...")
+
+    instruction = (
+        f"Rewrite ONLY the caption for this post. Keep the same topic and tone "
+        f"but try a fresh angle. Current caption: {caption}. Image stays the same."
+    )
+
+    try:
+        result = await engine.run_agent(instruction)
+        if result.draft and result.draft.get("caption"):
+            new_caption = result.draft["caption"]
+            # Preserve existing image and metadata, update caption
+            state.save_pending(
+                caption=new_caption,
+                hashtags=result.draft.get("hashtags", pending.get("hashtags", [])),
+                image_url=image_url,
+                alt_text=result.draft.get("alt_text", pending.get("alt_text", "")),
+                image_prompt=pending.get("image_prompt", ""),
+                original_request=pending.get("original_request", ""),
+                content_type=result.draft.get("content_type", content_type),
+                user_id=user_id,
+            )
+            updated_draft = dict(pending)
+            updated_draft["caption"] = new_caption
+            updated_draft.update({
+                k: result.draft[k] for k in ("hashtags", "alt_text", "content_type")
+                if k in result.draft
+            })
+            await _send_draft(update, updated_draft, image_url, user_id=user_id)
+        else:
+            await update.message.reply_text(
+                "Could not generate a new caption. Original draft is still pending.",
+                parse_mode="HTML",
+            )
+    except Exception as e:
+        logger.error("Edit caption failed: %s", e)
+        await update.message.reply_text(
+            f"Caption edit failed: {_esc(str(e))}\n\nOriginal draft still pending.",
+            parse_mode="HTML",
+        )
+
+
+async def _do_edit_image(update, context, *, user_id: int) -> None:
+    """Regenerate only the image, keeping the existing caption."""
+    pending = state.get_pending(user_id=user_id)
+    if not pending:
+        await update.message.reply_text("No pending draft to edit.")
+        return
+
+    if _rate_limited(user_id):
+        await update.message.reply_text(
+            f"Please wait {_RATE_LIMIT_SECONDS}s between requests."
+        )
+        return
+
+    image_prompt = pending.get("image_prompt", "")
+    content_type = pending.get("content_type", "default")
+
+    if not image_prompt:
+        await update.message.reply_text(
+            "No image prompt found in the draft. Try Reroll instead for a full regeneration.",
+            parse_mode="HTML",
+        )
+        return
+
+    await update.message.chat.send_action("upload_photo")
+    await update.message.reply_text("Regenerating image...")
+
+    try:
+        new_image_url = await image_gen.generate_image(
+            image_prompt, content_type,
+        )
+        if new_image_url:
+            # Update pending with new image
+            state.save_pending(
+                caption=pending.get("caption", ""),
+                hashtags=pending.get("hashtags", []),
+                image_url=new_image_url,
+                alt_text=pending.get("alt_text", ""),
+                image_prompt=image_prompt,
+                original_request=pending.get("original_request", ""),
+                content_type=content_type,
+                user_id=user_id,
+            )
+            updated_draft = dict(pending)
+            updated_draft["image_url"] = new_image_url
+            await _send_draft(update, updated_draft, new_image_url, user_id=user_id)
+        else:
+            await update.message.reply_text(
+                "Image generation returned no result. Original draft still pending.",
+                parse_mode="HTML",
+            )
+    except Exception as e:
+        logger.error("Edit image failed: %s", e)
+        await update.message.reply_text(
+            f"Image edit failed: {_esc(str(e))}\n\nOriginal draft still pending.",
+            parse_mode="HTML",
+        )
+
+
+async def _do_shorten(update, context, *, user_id: int) -> None:
+    """Shorten the caption to under 100 characters at word boundary — no LLM call."""
+    pending = state.get_pending(user_id=user_id)
+    if not pending:
+        await update.message.reply_text("No pending draft to shorten.")
+        return
+
+    caption = pending.get("caption", "")
+    if len(caption) <= 100:
+        await update.message.reply_text(
+            f"Caption is already {len(caption)} chars (under 100). No change needed.",
+        )
+        return
+
+    # Truncate at word boundary, appending ellipsis
+    truncated = caption[:97]  # leave room for "..."
+    # Find last space to avoid cutting mid-word
+    last_space = truncated.rfind(" ")
+    if last_space > 40:  # only break at space if we keep a reasonable amount
+        truncated = truncated[:last_space]
+    short_caption = truncated.rstrip(".,;:!? ") + "..."
+
+    # Update pending with shortened caption
+    state.save_pending(
+        caption=short_caption,
+        hashtags=pending.get("hashtags", []),
+        image_url=pending.get("image_url"),
+        alt_text=pending.get("alt_text", ""),
+        image_prompt=pending.get("image_prompt", ""),
+        original_request=pending.get("original_request", ""),
+        content_type=pending.get("content_type", "default"),
+        user_id=user_id,
+    )
+
+    image_url = pending.get("image_url")
+    updated_draft = dict(pending)
+    updated_draft["caption"] = short_caption
+    await _send_draft(update, updated_draft, image_url, user_id=user_id)
 
 
 # ---------------------------------------------------------------------------
@@ -923,10 +1096,22 @@ async def refine_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             "Examples:\n"
             "  /refine make the tone more casual\n"
             "  /refine shorten to under 100 chars\n"
-            "  /refine add a call to action",
+            "  /refine add a call to action\n\n"
+            "Presets (can combine):\n"
+            "  /refine --shorter\n"
+            "  /refine --punchy --add-cta\n"
+            "  /refine --tone=playful\n"
+            "  /refine --professional --longer",
             parse_mode="HTML",
         )
         return
+
+    # Parse preset flags (--shorter, --punchy, --tone=playful, etc.)
+    from agent.refinement import parse_preset_flags
+    remaining_text, preset_instructions = parse_preset_flags(instruction)
+    if preset_instructions:
+        # Combine preset instructions with any remaining free-text instruction
+        instruction = f"{preset_instructions} {remaining_text}".strip() if remaining_text else preset_instructions
 
     pending = state.get_pending(user_id=user_id)
     if not pending:
@@ -1153,7 +1338,11 @@ async def edit_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
                 InlineKeyboardButton("Reject", callback_data="draft_reject"),
             ],
             [
-                InlineKeyboardButton("Edit", callback_data="draft_edit"),
+                InlineKeyboardButton("Edit Caption", callback_data="draft_edit_caption"),
+                InlineKeyboardButton("Edit Image", callback_data="draft_edit_image"),
+            ],
+            [
+                InlineKeyboardButton("Shorten", callback_data="draft_shorten"),
                 InlineKeyboardButton("Reroll", callback_data="draft_reroll"),
             ],
         ])

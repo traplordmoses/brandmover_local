@@ -346,6 +346,111 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             )
         return
 
+    # --- Competitor analysis: photos with competitor-related captions ---
+    _COMPETITOR_KEYWORDS = ("analyze", "competitor", "compare", "swipe", "breakdown")
+    is_competitor_intent = any(kw in caption_lower for kw in _COMPETITOR_KEYWORDS)
+
+    if _authorized(user_id) and is_competitor_intent:
+        await update.message.reply_text("analyzing competitor content...")
+        await update.message.chat.send_action("typing")
+
+        try:
+            from agent._client import get_anthropic as _get_anthropic
+            from agent import guidelines as _guidelines
+            import base64 as _b64
+
+            # Read the image as base64
+            img_bytes = await _aio.to_thread(Path(tmp_path).read_bytes)
+            img_b64 = _b64.b64encode(img_bytes).decode("utf-8")
+
+            # Load brand guidelines for comparison
+            brand_ctx = await _aio.to_thread(_guidelines.get_brand_context)
+            brand_summary = brand_ctx[:2000] if brand_ctx else "(no brand guidelines loaded)"
+
+            # Call Claude Vision to analyze the competitor content
+            _vision_client = _get_anthropic()
+            _vision_response = await _vision_client.messages.create(
+                model=settings.HAIKU_MODEL,
+                max_tokens=2048,
+                messages=[{
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "image",
+                            "source": {
+                                "type": "base64",
+                                "media_type": "image/jpeg",
+                                "data": img_b64,
+                            },
+                        },
+                        {
+                            "type": "text",
+                            "text": (
+                                "Analyze this competitor's content. Extract:\n"
+                                "1. Colors (hex codes and names)\n"
+                                "2. Typography style (font weight, serif/sans-serif, size hierarchy)\n"
+                                "3. Composition (layout, spacing, alignment)\n"
+                                "4. Tone (formal/casual/playful/aggressive)\n"
+                                "5. Messaging style (short/long copy, CTAs, hooks)\n\n"
+                                "Then compare against this brand's guidelines:\n"
+                                f"{brand_summary}\n\n"
+                                "Return a structured comparison in this format:\n"
+                                "THEIR BRAND: [summary]\n"
+                                "YOUR BRAND: [summary]\n"
+                                "KEY DIFFERENCES: [bullet points]\n"
+                                "WAYS TO STAND OUT: [3 actionable suggestions]"
+                            ),
+                        },
+                    ],
+                }],
+            )
+
+            analysis_text = ""
+            for block in _vision_response.content:
+                if hasattr(block, "text"):
+                    analysis_text += block.text
+
+            # Save to state/competitor_analyses.json (cap at 50)
+            analyses_path = Path(settings.STATE_FOLDER) / "competitor_analyses.json"
+            analyses_path.parent.mkdir(parents=True, exist_ok=True)
+
+            entry = {
+                "timestamp": time.time(),
+                "caption": caption_lower,
+                "analysis": analysis_text,
+            }
+
+            existing = []
+            if analyses_path.exists():
+                try:
+                    existing = json.loads(await _aio.to_thread(analyses_path.read_text, "utf-8"))
+                except (json.JSONDecodeError, OSError):
+                    existing = []
+
+            existing.append(entry)
+            if len(existing) > 50:
+                existing = existing[-50:]
+            await _aio.to_thread(
+                analyses_path.write_text,
+                json.dumps(existing, indent=2),
+                "utf-8",
+            )
+
+            # Format and send
+            if len(analysis_text) > 3800:
+                analysis_text = analysis_text[:3800] + "\n..."
+            await update.message.reply_text(
+                f"<b>Competitor Analysis</b>\n\n{_esc(analysis_text)}",
+                parse_mode="HTML",
+            )
+        except Exception as e:
+            logger.error("Competitor analysis failed: %s", e)
+            await update.message.reply_text(
+                f"Competitor analysis failed: {_esc(str(e))}",
+                parse_mode="HTML",
+            )
+        return
+
     # --- Priority flag checks (admin only: logo > ingest > brand_check) ---
     if _authorized(user_id) and user_data.get("awaiting_logo_upload"):
         user_data["awaiting_logo_upload"] = False

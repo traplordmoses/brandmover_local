@@ -808,6 +808,69 @@ def _guidelines_template_fallback(
 
 
 # ---------------------------------------------------------------------------
+# Prompt template generation
+# ---------------------------------------------------------------------------
+
+_PROMPT_TEMPLATES: dict[str, str] = {
+    "social_post": (
+        "Social media image for {brand_name}: {{description}}. "
+        "Professional branded visual. "
+        "Style: {{style_keywords}}. "
+        "Color palette: {{colors}}. "
+        "Background: {{background}}."
+    ),
+    "announcement": (
+        "Announcement graphic for {brand_name}: {{description}}. "
+        "Bold, attention-grabbing composition with clear hierarchy. "
+        "Style: {{style_keywords}}. "
+        "Color palette: {{colors}}. "
+        "Background: {{background}}."
+    ),
+    "community": (
+        "Community engagement image for {brand_name}: {{description}}. "
+        "Warm, inviting, approachable aesthetic. "
+        "Style: {{style_keywords}}. "
+        "Color palette: {{colors}}. "
+        "Background: {{background}}."
+    ),
+    "banner": (
+        "Wide banner graphic for {brand_name}: {{description}}. "
+        "Landscape orientation, clean layout with breathing room. "
+        "Style: {{style_keywords}}. "
+        "Color palette: {{colors}}. "
+        "Background: {{background}}."
+    ),
+}
+
+
+def _create_default_prompt_templates(
+    brand_path: "Path",
+    session: "OnboardingSession",
+) -> int:
+    """Create brand/prompts/ with basic prompt templates. Returns count of files created."""
+    prompts_dir = brand_path / "prompts"
+    prompts_dir.mkdir(parents=True, exist_ok=True)
+
+    brand_name = session.brand_name or "Brand"
+    created = 0
+
+    for template_name, template_text in _PROMPT_TEMPLATES.items():
+        out_path = prompts_dir / f"{template_name}.txt"
+        if out_path.exists():
+            continue  # Never overwrite existing custom templates
+        try:
+            content = template_text.format(brand_name=brand_name)
+            out_path.write_text(content, encoding="utf-8")
+            created += 1
+        except Exception as e:
+            logger.warning("Failed to write prompt template %s: %s", template_name, e)
+
+    if created:
+        logger.info("Created %d prompt templates in %s", created, prompts_dir)
+    return created
+
+
+# ---------------------------------------------------------------------------
 # Finalize onboarding (writes guidelines.md + config.json)
 # ---------------------------------------------------------------------------
 
@@ -876,6 +939,9 @@ async def finalize_onboarding(session: OnboardingSession) -> str:
 
         guidelines_path.write_text(guidelines_md, encoding="utf-8")
 
+    # Generate brand/prompts/ directory with basic prompt templates
+    prompts_created = _create_default_prompt_templates(brand_path, session)
+
     # Invalidate caches
     compositor_config.invalidate_cache()
 
@@ -883,14 +949,22 @@ async def finalize_onboarding(session: OnboardingSession) -> str:
     session.state = OnboardingState.COMPLETE.value
     save_session(session)
 
+    files_created = [
+        "- <code>brand/config.json</code>",
+        "- <code>brand/strategy.md</code>",
+        "- <code>brand/guidelines.md</code>",
+        "- <code>brand/content_calendar.md</code>",
+    ]
+    if prompts_created:
+        files_created.append(
+            f"- <code>brand/prompts/</code> ({prompts_created} prompt templates)"
+        )
+
     return (
         f"<b>Onboarding Complete!</b>\n\n"
         f"Brand <b>{session.brand_name}</b> is ready.\n\n"
         f"Files created:\n"
-        f"- <code>brand/config.json</code>\n"
-        f"- <code>brand/strategy.md</code>\n"
-        f"- <code>brand/guidelines.md</code>\n"
-        f"- <code>brand/content_calendar.md</code>\n\n"
+        + "\n".join(files_created) + "\n\n"
         f"Use /strategy to view your setup. "
         f"Send me a content request to generate your first post!"
     )

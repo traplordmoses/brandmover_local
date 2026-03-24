@@ -307,10 +307,52 @@ async def publish_to_all(
         logger.debug("publish_to_all: Telegram channel posting not yet implemented")
         return "telegram", None
 
+    async def _publish_linkedin(post: "platform_adapter.PlatformPost") -> tuple[str, str | None]:
+        try:
+            from agent.publishing.channels.registry import get_channel
+            from agent.publishing.channels.base import MessageEnvelope
+            channel = get_channel("linkedin")
+            if channel is None or not channel.is_configured():
+                logger.debug("publish_to_all: LinkedIn not configured, skipping")
+                return "linkedin", None
+            envelope = MessageEnvelope(
+                text=post.text,
+                image_url=publish_image,
+                hashtags=draft.get("hashtags", []),
+                content_type=draft.get("content_type", ""),
+            )
+            result = await channel.publish(envelope)
+            return "linkedin", result.url if result.success else None
+        except Exception as e:
+            logger.error("publish_to_all: LinkedIn failed: %s", e)
+            return "linkedin", None
+
+    async def _publish_instagram(post: "platform_adapter.PlatformPost") -> tuple[str, str | None]:
+        try:
+            from agent.publishing.channels.registry import get_channel
+            from agent.publishing.channels.base import MessageEnvelope
+            channel = get_channel("instagram")
+            if channel is None or not channel.is_configured():
+                logger.debug("publish_to_all: Instagram not configured, skipping")
+                return "instagram", None
+            envelope = MessageEnvelope(
+                text=post.text,
+                image_url=publish_image,
+                hashtags=draft.get("hashtags", []),
+                content_type=draft.get("content_type", ""),
+            )
+            result = await channel.publish(envelope)
+            return "instagram", result.url if result.success else None
+        except Exception as e:
+            logger.error("publish_to_all: Instagram failed: %s", e)
+            return "instagram", None
+
     _PUBLISHER_MAP = {
         "x": _publish_x,
         "discord": _publish_discord,
         "telegram": _publish_telegram,
+        "linkedin": _publish_linkedin,
+        "instagram": _publish_instagram,
     }
 
     # Build tasks for all requested platforms
