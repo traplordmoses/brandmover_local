@@ -203,7 +203,7 @@ class TestSaveStrategy:
         with patch("agent.strategy.settings") as mock_settings:
             mock_settings.BRAND_FOLDER = str(tmp_path)
             mock_settings.BRAND_NAME = "TestBrand"
-            mock_settings.AGENT_MODE = "pipeline"
+            mock_settings.AGENT_MODE = "agent"
             save_strategy(rec, "TestBrand")
 
         assert (tmp_path / "config.json").exists()

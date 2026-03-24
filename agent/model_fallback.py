@@ -309,23 +309,81 @@ async def _call_openai(model: str, **kwargs) -> dict:
     }
 
 
+def _anthropic_tools_to_gemini(tools: list[dict]) -> list[dict]:
+    """Convert Anthropic tool definitions to Gemini function-calling format."""
+    function_declarations = []
+    for tool in tools:
+        decl: dict = {
+            "name": tool["name"],
+            "description": tool.get("description", ""),
+        }
+        schema = tool.get("input_schema")
+        if schema:
+            decl["parameters"] = schema
+        function_declarations.append(decl)
+    return [{"function_declarations": function_declarations}]
+
+
 async def _call_gemini(model: str, **kwargs) -> dict:
     """Call Google Gemini API and return normalized response."""
+    import json as _json
+
     from config import settings
 
     messages = kwargs.get("messages", [])
     system = kwargs.get("system", "")
     max_tokens = kwargs.get("max_tokens", 4096)
+    tools = kwargs.get("tools", [])
 
-    # Build Gemini request
+    def _block_type(block) -> str:
+        if isinstance(block, dict):
+            return block.get("type", "")
+        return getattr(block, "type", "")
+
+    def _block_attr(block, attr, default=""):
+        if isinstance(block, dict):
+            return block.get(attr, default)
+        return getattr(block, attr, default)
+
+    # Build Gemini request — convert Anthropic messages to Gemini format
     contents = []
     for msg in messages:
         role = "user" if msg.get("role") == "user" else "model"
         content = msg.get("content", "")
+        parts = []
         if isinstance(content, list):
-            text_parts = [b["text"] for b in content if isinstance(b, dict) and b.get("type") == "text"]
-            content = "\n".join(text_parts)
-        contents.append({"role": role, "parts": [{"text": content}]})
+            for block in content:
+                btype = _block_type(block)
+                if btype == "text":
+                    text_val = _block_attr(block, "text", "")
+                    if text_val:
+                        parts.append({"text": text_val})
+                elif btype == "tool_use":
+                    # Assistant requesting a function call
+                    parts.append({
+                        "functionCall": {
+                            "name": _block_attr(block, "name"),
+                            "args": _block_attr(block, "input", {}),
+                        }
+                    })
+                elif btype == "tool_result":
+                    # User providing function response
+                    result_content = _block_attr(block, "content", "")
+                    if isinstance(result_content, list):
+                        result_content = "\n".join(
+                            _block_attr(p, "text", "") for p in result_content if _block_type(p) == "text"
+                        )
+                    parts.append({
+                        "functionResponse": {
+                            "name": _block_attr(block, "tool_use_id", "unknown"),
+                            "response": {"result": str(result_content)},
+                        }
+                    })
+            if not parts:
+                parts.append({"text": ""})
+        else:
+            parts.append({"text": content})
+        contents.append({"role": role, "parts": parts})
 
     system_text = ""
     if system:
@@ -343,6 +401,10 @@ async def _call_gemini(model: str, **kwargs) -> dict:
     if system_text:
         body["systemInstruction"] = {"parts": [{"text": system_text}]}
 
+    # Add tools if provided
+    if tools:
+        body["tools"] = _anthropic_tools_to_gemini(tools)
+
     client = get_httpx()
     resp = await client.post(
         f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
@@ -354,12 +416,32 @@ async def _call_gemini(model: str, **kwargs) -> dict:
     data = resp.json()
 
     candidate = data["candidates"][0]
-    text = candidate["content"]["parts"][0]["text"]
+    parts = candidate["content"].get("parts", [])
+
+    # Parse response parts — may contain text and/or functionCall
+    blocks = []
+    for part in parts:
+        if "text" in part:
+            blocks.append({"type": "text", "text": part["text"]})
+        elif "functionCall" in part:
+            fc = part["functionCall"]
+            blocks.append({
+                "type": "tool_use",
+                "id": f"toolu_gemini_{fc['name']}",
+                "name": fc["name"],
+                "input": fc.get("args", {}),
+            })
+
+    # Determine stop reason
+    finish_reason = candidate.get("finishReason", "STOP")
+    has_tool_use = any(b.get("type") == "tool_use" for b in blocks)
+    stop_reason = "tool_use" if has_tool_use else finish_reason
+
     return {
         "provider": "google",
         "model": model,
-        "content": [{"type": "text", "text": text}],
-        "stop_reason": candidate.get("finishReason", "STOP"),
+        "content": blocks if blocks else [{"type": "text", "text": ""}],
+        "stop_reason": stop_reason,
         "usage": data.get("usageMetadata", {}),
         "_raw": data,
     }
@@ -433,14 +515,16 @@ async def call_with_fallback(
                     logger.info("Fallback succeeded: %s/%s (after %d failed)", provider, model, i)
                 return response
             else:
-                # Cross-provider fallback with tool-use support for OpenAI.
-                # OpenAI function-calling is converted automatically.
-                # Gemini still strips tools (no conversion implemented).
+                # Cross-provider fallback with tool-use support for OpenAI and Gemini.
+                # Function-calling is converted automatically for both providers.
                 caller = _PROVIDER_CALLERS[provider]
                 had_tools = "tools" in kwargs or "tool_choice" in kwargs
-                if provider == "openai":
-                    # OpenAI supports function calling — pass tools through
+                if provider in ("openai", "google"):
+                    # OpenAI and Gemini support function calling — pass tools through
                     fallback_kwargs = dict(kwargs)
+                    # Gemini doesn't support tool_choice — strip it
+                    if provider == "google":
+                        fallback_kwargs.pop("tool_choice", None)
                     logger.info("Falling back to %s/%s with tool-use support", provider, model)
                 else:
                     # Other providers — strip tools (degraded)
@@ -456,7 +540,7 @@ async def call_with_fallback(
                     result = await result
                 if i > 0:
                     logger.info("Fallback succeeded: %s/%s (after %d failed)", provider, model, i)
-                tools_degraded = had_tools and provider != "openai"
+                tools_degraded = had_tools and provider not in ("openai", "google")
                 return _wrap_as_anthropic(result, tools_degraded=tools_degraded)
 
         except anthropic.APIStatusError as e:

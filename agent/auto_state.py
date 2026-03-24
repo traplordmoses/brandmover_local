@@ -65,6 +65,7 @@ def _default_state() -> dict:
         "recent_captions": [],
         "paused": False,
         "last_post_timestamp": 0,
+        "dead_letters": [],
     }
 
 
@@ -251,13 +252,91 @@ def get_status_summary() -> dict:
     state = _read_state()
     today = _today_key()
     today_posts = [p for p in state["posts_today"] if p.get("date") == today]
+    dead_letters = state.get("dead_letters", [])
+    today_failures = [d for d in dead_letters if d.get("date") == today]
     return {
         "paused": state.get("paused", False),
         "posts_today": len(today_posts),
         "last_post_timestamp": state.get("last_post_timestamp", 0),
         "recent_slots": [p.get("slot") for p in today_posts],
         "recent_captions": [p.get("caption", "")[:60] for p in today_posts[-3:]],
+        "dead_letters_total": len(dead_letters),
+        "dead_letters_today": len(today_failures),
     }
+
+
+# ---------------------------------------------------------------------------
+# Dead-letter queue — failed generation attempts for inspection and retry
+# ---------------------------------------------------------------------------
+
+_MAX_DEAD_LETTERS = 50  # Keep at most this many entries
+
+
+def record_failure(slot_name: str, error: str, retry_count: int = 0) -> None:
+    """Record a failed generation attempt in the dead-letter queue.
+
+    Stores the slot name, error message, retry count, and timestamp so
+    operators can inspect failures via /autostatus and optionally retry.
+    """
+    with _auto_lock:
+        state = _read_state()
+        dead_letters = state.get("dead_letters", [])
+        dead_letters.append({
+            "slot_name": slot_name,
+            "error": str(error)[:500],
+            "retry_count": retry_count,
+            "timestamp": time.time(),
+            "date": _today_key(),
+        })
+        # Prune oldest entries if over the limit
+        if len(dead_letters) > _MAX_DEAD_LETTERS:
+            dead_letters = dead_letters[-_MAX_DEAD_LETTERS:]
+        state["dead_letters"] = dead_letters
+        _write_state(state)
+    logger.warning(
+        "Dead-letter recorded: slot=%s error=%s retries=%d",
+        slot_name, str(error)[:100], retry_count,
+    )
+
+
+def get_dead_letters(limit: int = 10) -> list[dict]:
+    """Return the most recent dead-letter entries (newest first)."""
+    state = _read_state()
+    dead_letters = state.get("dead_letters", [])
+    return list(reversed(dead_letters[-limit:]))
+
+
+def retry_dead_letter(index: int) -> dict | None:
+    """Remove a dead-letter entry by index (0-based, newest first) and return it.
+
+    Returns the removed entry so the caller can re-queue it, or None if the
+    index is out of range.
+    """
+    with _auto_lock:
+        state = _read_state()
+        dead_letters = state.get("dead_letters", [])
+        if not dead_letters:
+            return None
+        # index is newest-first, so convert to list index
+        reversed_idx = len(dead_letters) - 1 - index
+        if reversed_idx < 0 or reversed_idx >= len(dead_letters):
+            return None
+        entry = dead_letters.pop(reversed_idx)
+        state["dead_letters"] = dead_letters
+        _write_state(state)
+    logger.info("Dead-letter retried: slot=%s", entry.get("slot_name"))
+    return entry
+
+
+def clear_dead_letters() -> int:
+    """Clear all dead-letter entries. Returns the number removed."""
+    with _auto_lock:
+        state = _read_state()
+        count = len(state.get("dead_letters", []))
+        state["dead_letters"] = []
+        _write_state(state)
+    logger.info("Dead-letter queue cleared (%d entries)", count)
+    return count
 
 
 # ---------------------------------------------------------------------------

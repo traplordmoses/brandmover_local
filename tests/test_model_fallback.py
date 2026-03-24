@@ -255,3 +255,450 @@ class TestWrapAsAnthropic:
         }
         msg = _wrap_as_anthropic(result)
         assert msg.content[0].text == ""
+
+
+# ---------------------------------------------------------------------------
+# OpenAI tool conversion
+# ---------------------------------------------------------------------------
+
+class TestAnthropicToolsToOpenAI:
+    """Test _anthropic_tools_to_openai() tool definition conversion."""
+
+    def test_basic_tool_conversion(self):
+        from agent.model_fallback import _anthropic_tools_to_openai
+
+        anthropic_tools = [
+            {
+                "name": "get_weather",
+                "description": "Get current weather for a location",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "location": {"type": "string", "description": "City name"},
+                    },
+                    "required": ["location"],
+                },
+            }
+        ]
+        oai_tools = _anthropic_tools_to_openai(anthropic_tools)
+
+        assert len(oai_tools) == 1
+        assert oai_tools[0]["type"] == "function"
+        assert oai_tools[0]["function"]["name"] == "get_weather"
+        assert oai_tools[0]["function"]["description"] == "Get current weather for a location"
+        assert oai_tools[0]["function"]["parameters"]["properties"]["location"]["type"] == "string"
+
+    def test_missing_description_defaults_empty(self):
+        from agent.model_fallback import _anthropic_tools_to_openai
+
+        tools = [{"name": "my_tool", "input_schema": {"type": "object", "properties": {}}}]
+        oai_tools = _anthropic_tools_to_openai(tools)
+
+        assert oai_tools[0]["function"]["description"] == ""
+
+    def test_missing_input_schema_defaults(self):
+        from agent.model_fallback import _anthropic_tools_to_openai
+
+        tools = [{"name": "simple_tool", "description": "A tool"}]
+        oai_tools = _anthropic_tools_to_openai(tools)
+
+        assert oai_tools[0]["function"]["parameters"] == {"type": "object", "properties": {}}
+
+    def test_multiple_tools(self):
+        from agent.model_fallback import _anthropic_tools_to_openai
+
+        tools = [
+            {"name": "tool_a", "description": "A", "input_schema": {"type": "object", "properties": {}}},
+            {"name": "tool_b", "description": "B", "input_schema": {"type": "object", "properties": {}}},
+            {"name": "tool_c", "description": "C", "input_schema": {"type": "object", "properties": {}}},
+        ]
+        oai_tools = _anthropic_tools_to_openai(tools)
+        assert len(oai_tools) == 3
+        assert [t["function"]["name"] for t in oai_tools] == ["tool_a", "tool_b", "tool_c"]
+
+
+class TestAnthropicToolChoiceToOpenAI:
+    """Test _anthropic_tool_choice_to_openai() conversion for all cases."""
+
+    def test_auto(self):
+        from agent.model_fallback import _anthropic_tool_choice_to_openai
+
+        assert _anthropic_tool_choice_to_openai({"type": "auto"}) == "auto"
+
+    def test_none(self):
+        from agent.model_fallback import _anthropic_tool_choice_to_openai
+
+        assert _anthropic_tool_choice_to_openai({"type": "none"}) == "none"
+
+    def test_any_becomes_required(self):
+        from agent.model_fallback import _anthropic_tool_choice_to_openai
+
+        assert _anthropic_tool_choice_to_openai({"type": "any"}) == "required"
+
+    def test_tool_becomes_function_dict(self):
+        from agent.model_fallback import _anthropic_tool_choice_to_openai
+
+        result = _anthropic_tool_choice_to_openai({"type": "tool", "name": "get_weather"})
+        assert result == {"type": "function", "function": {"name": "get_weather"}}
+
+    def test_missing_type_defaults_to_auto(self):
+        from agent.model_fallback import _anthropic_tool_choice_to_openai
+
+        assert _anthropic_tool_choice_to_openai({}) == "auto"
+
+    def test_unknown_type_defaults_to_auto(self):
+        from agent.model_fallback import _anthropic_tool_choice_to_openai
+
+        assert _anthropic_tool_choice_to_openai({"type": "something_else"}) == "auto"
+
+
+# ---------------------------------------------------------------------------
+# OpenAI message format conversion (mock httpx POST)
+# ---------------------------------------------------------------------------
+
+class TestCallOpenAIMessageConversion:
+    """Test that _call_openai() correctly converts Anthropic message format."""
+
+    @pytest.mark.asyncio
+    async def test_system_and_user_messages(self):
+        """System prompt and simple user messages are converted correctly."""
+        import json as _json
+
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.raise_for_status = MagicMock()
+        mock_resp.json.return_value = {
+            "choices": [{"message": {"content": "hello back"}, "finish_reason": "stop"}],
+            "model": "gpt-4o",
+            "usage": {"prompt_tokens": 10, "completion_tokens": 5},
+        }
+
+        captured_body = {}
+
+        async def mock_post(url, **kwargs):
+            captured_body.update(kwargs.get("json", {}))
+            return mock_resp
+
+        mock_httpx = AsyncMock()
+        mock_httpx.post = mock_post
+
+        with patch("agent.model_fallback.get_httpx", return_value=mock_httpx), \
+             patch("config.settings.OPENAI_API_KEY", "test-key"):
+            from agent.model_fallback import _call_openai
+            result = await _call_openai(
+                "gpt-4o",
+                system="You are helpful",
+                messages=[{"role": "user", "content": "hi"}],
+                max_tokens=100,
+            )
+
+        # Verify system message was prepended
+        assert captured_body["messages"][0]["role"] == "system"
+        assert captured_body["messages"][0]["content"] == "You are helpful"
+        # Verify user message
+        assert captured_body["messages"][1]["role"] == "user"
+        assert captured_body["messages"][1]["content"] == "hi"
+        # Verify result
+        assert result["provider"] == "openai"
+        assert result["content"][0]["text"] == "hello back"
+
+    @pytest.mark.asyncio
+    async def test_tool_use_messages_converted(self):
+        """Assistant tool_use blocks and user tool_result blocks are converted."""
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.raise_for_status = MagicMock()
+        mock_resp.json.return_value = {
+            "choices": [{"message": {"content": "done"}, "finish_reason": "stop"}],
+            "model": "gpt-4o",
+            "usage": {},
+        }
+
+        captured_body = {}
+
+        async def mock_post(url, **kwargs):
+            captured_body.update(kwargs.get("json", {}))
+            return mock_resp
+
+        mock_httpx = AsyncMock()
+        mock_httpx.post = mock_post
+
+        messages = [
+            {"role": "user", "content": "What's the weather?"},
+            {
+                "role": "assistant",
+                "content": [
+                    {"type": "text", "text": "Let me check."},
+                    {"type": "tool_use", "id": "call_123", "name": "get_weather", "input": {"city": "NYC"}},
+                ],
+            },
+            {
+                "role": "user",
+                "content": [
+                    {"type": "tool_result", "tool_use_id": "call_123", "content": "72F sunny"},
+                ],
+            },
+        ]
+
+        with patch("agent.model_fallback.get_httpx", return_value=mock_httpx), \
+             patch("config.settings.OPENAI_API_KEY", "test-key"):
+            from agent.model_fallback import _call_openai
+            await _call_openai("gpt-4o", messages=messages, max_tokens=100)
+
+        oai_msgs = captured_body["messages"]
+        # User message
+        assert oai_msgs[0]["role"] == "user"
+        assert oai_msgs[0]["content"] == "What's the weather?"
+        # Assistant message with tool_calls
+        assert oai_msgs[1]["role"] == "assistant"
+        assert oai_msgs[1]["tool_calls"][0]["id"] == "call_123"
+        assert oai_msgs[1]["tool_calls"][0]["function"]["name"] == "get_weather"
+        # Tool result message
+        assert oai_msgs[2]["role"] == "tool"
+        assert oai_msgs[2]["tool_call_id"] == "call_123"
+        assert oai_msgs[2]["content"] == "72F sunny"
+
+    @pytest.mark.asyncio
+    async def test_tool_calls_in_response_parsed(self):
+        """OpenAI tool_calls in response are parsed as tool_use blocks."""
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.raise_for_status = MagicMock()
+        mock_resp.json.return_value = {
+            "choices": [{
+                "message": {
+                    "content": None,
+                    "tool_calls": [{
+                        "id": "call_abc",
+                        "type": "function",
+                        "function": {"name": "get_weather", "arguments": '{"city": "NYC"}'},
+                    }],
+                },
+                "finish_reason": "tool_calls",
+            }],
+            "model": "gpt-4o",
+            "usage": {},
+        }
+
+        async def mock_post(url, **kwargs):
+            return mock_resp
+
+        mock_httpx = AsyncMock()
+        mock_httpx.post = mock_post
+
+        with patch("agent.model_fallback.get_httpx", return_value=mock_httpx), \
+             patch("config.settings.OPENAI_API_KEY", "test-key"):
+            from agent.model_fallback import _call_openai
+            result = await _call_openai("gpt-4o", messages=[{"role": "user", "content": "weather?"}], max_tokens=100)
+
+        assert result["stop_reason"] == "tool_use"
+        assert result["content"][0]["type"] == "tool_use"
+        assert result["content"][0]["name"] == "get_weather"
+        assert result["content"][0]["input"] == {"city": "NYC"}
+
+
+# ---------------------------------------------------------------------------
+# Gemini tool stripping with ARCH-03 warning
+# ---------------------------------------------------------------------------
+
+class TestGeminiToolSupport:
+    """Test that Gemini fallback passes tools through with function-calling support."""
+
+    @pytest.mark.asyncio
+    async def test_gemini_receives_tools_and_strips_tool_choice(self):
+        """When falling back to Gemini with tools, tools are passed but tool_choice is stripped."""
+        error_429 = anthropic.APIStatusError(
+            message="rate limited",
+            response=MagicMock(status_code=429, headers={}),
+            body=None,
+        )
+        mock_client = AsyncMock()
+        mock_client.messages.create = AsyncMock(side_effect=error_429)
+
+        gemini_result = {
+            "provider": "google",
+            "model": "gemini-2.0-flash",
+            "content": [{"type": "text", "text": "gemini response"}],
+            "stop_reason": "STOP",
+            "usage": {"input_tokens": 10, "output_tokens": 20},
+        }
+
+        captured_kwargs = {}
+
+        async def fake_gemini(model, **kwargs):
+            captured_kwargs.update(kwargs)
+            return gemini_result
+
+        with patch("agent.model_fallback._provider_available", return_value=True), \
+             patch.dict("agent.model_fallback._PROVIDER_CALLERS", {"google": fake_gemini}), \
+             patch("agent.model_fallback.logger") as mock_logger:
+            result = await call_with_fallback(
+                client=mock_client,
+                models=["claude-sonnet-4-6", "gemini-2.0-flash"],
+                messages=[{"role": "user", "content": "hi"}],
+                max_tokens=100,
+                tools=[{"name": "my_tool", "description": "A tool"}],
+                tool_choice={"type": "auto"},
+            )
+
+        # Verify tools are passed through to Gemini (function-calling support)
+        assert "tools" in captured_kwargs
+        # Verify tool_choice is stripped (Gemini doesn't support it)
+        assert "tool_choice" not in captured_kwargs
+
+        # Verify no ARCH-03 warning (Gemini now supports tools)
+        warning_calls = [str(c) for c in mock_logger.warning.call_args_list]
+        assert not any("ARCH-03" in w for w in warning_calls)
+
+        # Verify info-level log about tool-use support
+        info_calls = [str(c) for c in mock_logger.info.call_args_list]
+        assert any("tool-use support" in i for i in info_calls)
+
+        # Verify result does NOT include FALLBACK NOTICE (tools not degraded)
+        assert isinstance(result, anthropic.types.Message)
+        assert "FALLBACK NOTICE" not in result.content[0].text
+        assert "gemini response" in result.content[0].text
+
+    @pytest.mark.asyncio
+    async def test_gemini_function_call_response_parsed(self):
+        """When Gemini returns a functionCall, it is parsed into a tool_use block."""
+        from agent.model_fallback import _call_gemini, _wrap_as_anthropic
+
+        gemini_result = {
+            "provider": "google",
+            "model": "gemini-2.0-flash",
+            "content": [
+                {
+                    "type": "tool_use",
+                    "id": "toolu_gemini_my_tool",
+                    "name": "my_tool",
+                    "input": {"arg1": "value1"},
+                },
+            ],
+            "stop_reason": "tool_use",
+            "usage": {"input_tokens": 10, "output_tokens": 20},
+        }
+
+        wrapped = _wrap_as_anthropic(gemini_result)
+        assert wrapped.stop_reason == "tool_use"
+        assert len(wrapped.content) == 1
+        assert wrapped.content[0].type == "tool_use"
+        assert wrapped.content[0].name == "my_tool"
+        assert wrapped.content[0].input == {"arg1": "value1"}
+
+
+# ---------------------------------------------------------------------------
+# Credit balance error treated as retriable (special case at line 465)
+# ---------------------------------------------------------------------------
+
+class TestCreditBalanceFallback:
+    """Test that 400 + 'credit balance' in message IS retriable."""
+
+    @pytest.mark.asyncio
+    async def test_credit_balance_400_triggers_fallback(self):
+        """A 400 error with 'credit balance' in the message triggers fallback."""
+        error_credit = anthropic.APIStatusError(
+            message="Your credit balance is too low to access this model",
+            response=MagicMock(status_code=400, headers={}),
+            body=None,
+        )
+        mock_response = MagicMock(spec=anthropic.types.Message)
+        mock_client = AsyncMock()
+        mock_client.messages.create = AsyncMock(
+            side_effect=[error_credit, mock_response],
+        )
+
+        with patch("agent.model_fallback._provider_available", return_value=True):
+            result = await call_with_fallback(
+                client=mock_client,
+                models=["claude-sonnet-4-6", "claude-haiku-4-5-20251001"],
+                messages=[{"role": "user", "content": "hi"}],
+                max_tokens=100,
+            )
+
+        # Should have fallen back to second model
+        assert result is mock_response
+        assert mock_client.messages.create.await_count == 2
+
+    @pytest.mark.asyncio
+    async def test_regular_400_does_not_trigger_fallback(self):
+        """A normal 400 without 'credit balance' does NOT trigger fallback."""
+        error_400 = anthropic.APIStatusError(
+            message="invalid request: max_tokens too large",
+            response=MagicMock(status_code=400, headers={}),
+            body=None,
+        )
+        mock_client = AsyncMock()
+        mock_client.messages.create = AsyncMock(side_effect=error_400)
+
+        with patch("agent.model_fallback._provider_available", return_value=True), \
+             pytest.raises(anthropic.APIStatusError):
+            await call_with_fallback(
+                client=mock_client,
+                models=["claude-sonnet-4-6", "claude-haiku-4-5-20251001"],
+                messages=[{"role": "user", "content": "hi"}],
+                max_tokens=100,
+            )
+
+        assert mock_client.messages.create.await_count == 1
+
+
+# ---------------------------------------------------------------------------
+# Provider availability filtering
+# ---------------------------------------------------------------------------
+
+class TestProviderAvailabilityFiltering:
+    """Test that models whose providers lack API keys are skipped."""
+
+    @pytest.mark.asyncio
+    async def test_skips_unavailable_provider(self):
+        """Models whose providers lack API keys are skipped in the chain."""
+        error_429 = anthropic.APIStatusError(
+            message="rate limited",
+            response=MagicMock(status_code=429, headers={}),
+            body=None,
+        )
+        mock_response = MagicMock(spec=anthropic.types.Message)
+        mock_client = AsyncMock()
+        # First call (Claude Sonnet) fails with 429, second call (Claude Haiku) succeeds
+        mock_client.messages.create = AsyncMock(
+            side_effect=[error_429, mock_response],
+        )
+
+        def fake_available(provider):
+            # Anthropic available, OpenAI not
+            return provider == "anthropic"
+
+        with patch("agent.model_fallback._provider_available", side_effect=fake_available):
+            result = await call_with_fallback(
+                client=mock_client,
+                models=["claude-sonnet-4-6", "gpt-5.4", "claude-haiku-4-5-20251001"],
+                messages=[{"role": "user", "content": "hi"}],
+                max_tokens=100,
+            )
+
+        # gpt-5.4 should have been skipped; went from sonnet -> haiku
+        assert result is mock_response
+        assert mock_client.messages.create.await_count == 2
+        # Verify the second call used haiku
+        second_call_kwargs = mock_client.messages.create.call_args_list[1]
+        assert second_call_kwargs.kwargs.get("model") == "claude-haiku-4-5-20251001"
+
+    @pytest.mark.asyncio
+    async def test_all_providers_unavailable_tries_first(self):
+        """When ALL providers lack keys, tries the first model anyway."""
+        mock_response = MagicMock(spec=anthropic.types.Message)
+        mock_client = AsyncMock()
+        mock_client.messages.create = AsyncMock(return_value=mock_response)
+
+        with patch("agent.model_fallback._provider_available", return_value=False):
+            result = await call_with_fallback(
+                client=mock_client,
+                models=["claude-sonnet-4-6", "gpt-5.4"],
+                messages=[{"role": "user", "content": "hi"}],
+                max_tokens=100,
+            )
+
+        # Should try first model even though no providers are "available"
+        assert result is mock_response
+        assert mock_client.messages.create.await_count == 1

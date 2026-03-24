@@ -24,7 +24,7 @@ from PIL import Image as _PILImage
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import ContextTypes
 
-from agent import auto_state, brain, compositor, compositor_config, conversation_context, engine, feedback, generation_history, guidelines, hooks, image_gen, state, transcript
+from agent import auto_state, compositor, compositor_config, conversation_context, engine, feedback, generation_history, guidelines, hooks, image_gen, state, transcript
 from agent import compositor_config as _cc
 from config import settings
 
@@ -482,65 +482,7 @@ async def _do_reject(update: Update, context: ContextTypes.DEFAULT_TYPE, feedbac
     transcript.log_draft_action(user_id or 0, "rejected", caption=pending.get("caption", ""), feedback=feedback_text)
     await hooks.emit("draft:rejected", {"draft": pending, "feedback": feedback_text, "user_id": user_id})
 
-    # Branch: agent mode re-runs with revision context, pipeline mode uses revise_draft
-    if settings.AGENT_MODE == "agent":
-        await _handle_agent_revision(update, pending, feedback_text, user_id=user_id)
-    else:
-        await _handle_pipeline_revision(update, pending, feedback_text, user_id=user_id)
-
-
-async def _handle_pipeline_revision(update: Update, pending: dict, feedback_text: str, user_id: int | None = None) -> None:
-    """Revise a draft using the pipeline mode."""
-    try:
-        brand_context = guidelines.get_brand_context()
-        draft = await brain.revise_draft(
-            original_draft=pending,
-            feedback=feedback_text,
-            brand_context=brand_context,
-        )
-
-        # Generate new image if prompt changed
-        image_url = pending.get("image_url")
-        if draft.get("image_prompt") != pending.get("image_prompt"):
-            await update.message.chat.send_action("upload_photo")
-            content_type = draft.get("content_type", "announcement")
-            from agent import template_memory as _tm
-            template_aspect = _tm.get_aspect_ratio_for_content_type(content_type)
-            image_url = await image_gen.generate_image(draft["image_prompt"], content_type=content_type, aspect_ratio=template_aspect)
-
-        # Save revised draft (carry forward auto-post metadata through revisions)
-        state.save_pending(
-            caption=draft["caption"],
-            hashtags=draft.get("hashtags", []),
-            image_url=image_url,
-            alt_text=draft["alt_text"],
-            image_prompt=draft["image_prompt"],
-            original_request=pending["original_request"],
-            auto_slot=pending.get("auto_slot"),
-            auto_event_ids=pending.get("auto_event_ids"),
-            user_id=user_id,
-        )
-
-        await _send_draft(update, draft, image_url, user_id=user_id)
-
-    except Exception as e:
-        logger.error("Revision failed: %s", e)
-        # Restore the old pending so user can retry
-        state.save_pending(
-            caption=pending.get("caption", ""),
-            hashtags=pending.get("hashtags", []),
-            image_url=pending.get("image_url"),
-            alt_text=pending.get("alt_text", ""),
-            image_prompt=pending.get("image_prompt", ""),
-            original_request=pending.get("original_request", ""),
-            auto_slot=pending.get("auto_slot"),
-            auto_event_ids=pending.get("auto_event_ids"),
-            user_id=user_id,
-        )
-        await update.message.reply_text(
-            f"Revision failed: {_esc(str(e))}\n\nOriginal draft still pending. Try again or /cancel.",
-            parse_mode="HTML",
-        )
+    await _handle_agent_revision(update, pending, feedback_text, user_id=user_id)
 
 
 async def _handle_agent_revision(update: Update, pending: dict, feedback_text: str, user_id: int | None = None) -> None:
@@ -921,14 +863,8 @@ async def draft_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             state.clear_draft_history(user_id=cb_user_id)
             await query.message.reply_text("Regenerating...")
             if original:
-                # Import generation handlers lazily to avoid circular imports
-                from bot.handlers.generation import _handle_unified, _handle_agent_mode, _handle_pipeline_mode
-                if settings.UNIFIED_BRAIN_ENABLED:
-                    await _handle_unified(proxy, context, original, user_id=cb_user_id)
-                elif settings.AGENT_MODE == "agent":
-                    await _handle_agent_mode(proxy, original, user_id=cb_user_id)
-                else:
-                    await _handle_pipeline_mode(proxy, original, user_id=cb_user_id)
+                from bot.handlers.generation import _handle_agent_mode
+                await _handle_agent_mode(proxy, original, user_id=cb_user_id)
 
 
 # ---------------------------------------------------------------------------

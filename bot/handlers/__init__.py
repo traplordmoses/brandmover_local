@@ -36,7 +36,6 @@ from bot.handlers.draft import (      # noqa: F401
 )
 from bot.handlers.generation import ( # noqa: F401
     _route_intent,
-    _handle_pipeline_mode,
     score_command,
     approval_rate_command,
 )

@@ -147,7 +147,7 @@ def create_bot() -> Application:
         try:
             _chat_ids = [int(x.strip()) for x in _monitor_ids.split(",") if x.strip()]
             if _chat_ids:
-                from agent.unified_tools import log_channel_message
+                from agent.channel_monitor import log_channel_message
 
                 async def _log_channel_msg(update, context):
                     msg = update.effective_message
@@ -178,20 +178,68 @@ def create_bot() -> Application:
     return app
 
 
-async def _start_scheduler(app: Application) -> None:
-    """Post-init hook: launch the auto-post scheduler and Discord client as background tasks."""
+async def _supervised_scheduler(bot) -> None:
+    """Run the auto-post scheduler with auto-restart on crash.
+
+    Wraps run_scheduler_loop in a supervisor that catches unhandled exceptions,
+    logs them, sends a Telegram alert to the admin, and restarts with
+    exponential backoff.
+    """
     from scripts.auto_post import run_scheduler_loop
 
+    restart_delay = 60  # seconds
+    max_restarts = 5
+    restarts = 0
+    while restarts < max_restarts:
+        try:
+            await run_scheduler_loop(bot=bot)
+            break  # Normal exit
+        except Exception as e:
+            restarts += 1
+            logger.error(
+                "Scheduler crashed (restart %d/%d): %s", restarts, max_restarts, e,
+            )
+            # Alert admin via Telegram
+            try:
+                await bot.send_message(
+                    chat_id=settings.TELEGRAM_ALLOWED_USER_ID,
+                    text=(
+                        f"Auto-post scheduler crashed and restarted "
+                        f"({restarts}/{max_restarts}):\n{str(e)[:200]}"
+                    ),
+                )
+            except Exception:
+                pass
+            await asyncio.sleep(restart_delay)
+            restart_delay = min(restart_delay * 2, 600)  # exponential backoff, max 10min
+    else:
+        logger.critical(
+            "Scheduler exceeded max restarts (%d). Giving up.", max_restarts,
+        )
+        try:
+            await bot.send_message(
+                chat_id=settings.TELEGRAM_ALLOWED_USER_ID,
+                text=(
+                    "Auto-post scheduler stopped after too many crashes. "
+                    "Use /autostatus to check."
+                ),
+            )
+        except Exception:
+            pass
+
+
+async def _start_scheduler(app: Application) -> None:
+    """Post-init hook: launch the auto-post scheduler and Discord client as background tasks."""
     # Register the heartbeat notifier so agent/ never imports from bot/
     from agent.heartbeat import set_notifier
     from bot.handlers import send_auto_draft
     set_notifier(send_auto_draft)
 
     bot = app.bot
-    task = asyncio.create_task(run_scheduler_loop(bot=bot))
+    task = asyncio.create_task(_supervised_scheduler(bot))
     # Store reference so it doesn't get GC'd
     app.bot_data["_scheduler_task"] = task
-    logger.info("Auto-post scheduler background task launched")
+    logger.info("Auto-post scheduler background task launched (supervised)")
 
     # Start Discord client if configured
     if settings.DISCORD_BOT_TOKEN:

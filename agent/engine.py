@@ -232,6 +232,7 @@ async def _run_loop(
     tool_call_log = []
     finished = False
     critique_done = False
+    _quality_retry_done = False
     consecutive_think_only = 0
     _MAX_CONSECUTIVE_THINK = 3
 
@@ -319,7 +320,7 @@ async def _run_loop(
                             tool_result_str = await execute_tool(tool_name, tool_input, tracker)
                             if len(tool_result_str) > 15000:
                                 tool_result_str = tool_result_str[:15000] + "\n\n[... truncated ...]"
-                        except Exception:
+                        except Exception:  # Intentional broad catch — tool handlers can raise anything
                             logger.exception("Tool %s failed during critique gate", tool_name)
                             tool_result_str = json.dumps({"error": "tool execution failed — see logs"})
                         critique_tool_results.append({
@@ -341,6 +342,55 @@ async def _run_loop(
                     {"type": "text", "text": critique_msg},
                 ]})
                 continue
+
+            # --- Quality gate retry ---
+            # After critique is done, run the quality gate inline. If it fails
+            # and we haven't already retried, feed the failure reasons back to
+            # the agent for one more attempt before accepting the draft.
+            if not _quality_retry_done and result.draft:
+                try:
+                    from agent.self_review import draft_quality_gate
+                    gate = await asyncio.to_thread(draft_quality_gate, result.draft)
+                    if not gate["passed"]:
+                        draft_format = result.draft.get("format", "single")
+                        failed_checks = [c for c in gate["checks"] if not c["passed"]]
+                        # For non-single formats, image_prompt is optional
+                        if draft_format != "single":
+                            failed_checks = [c for c in failed_checks if c["rule"] != "has_image_prompt"]
+                        if failed_checks:
+                            _quality_retry_done = True
+                            failure_reasons = "; ".join(
+                                f"{c['rule']}: {c['detail']}" for c in failed_checks
+                            )
+                            logger.info(
+                                "Quality gate failed inline — retrying with feedback: %s",
+                                [c["rule"] for c in failed_checks],
+                            )
+                            # Feed failure reasons back as a tool result + instruction
+                            messages.append({"role": "assistant", "content": assistant_content})
+                            messages.append({"role": "user", "content": [
+                                {
+                                    "type": "tool_result",
+                                    "tool_use_id": finish_block.id,
+                                    "content": json.dumps({
+                                        "status": "quality_gate_failed",
+                                        "failures": failure_reasons,
+                                    }),
+                                },
+                                {
+                                    "type": "text",
+                                    "text": (
+                                        f"Your draft failed the quality gate: {failure_reasons}. "
+                                        f"Please fix these issues and call finish again with a corrected draft."
+                                    ),
+                                },
+                            ]})
+                            result.draft = {}  # Clear the failed draft
+                            result._finished = False
+                            finished = False
+                            continue  # Re-enter the agent loop
+                except Exception as e:
+                    logger.debug("Inline quality gate check failed: %s", e)
 
             finished = True
             break
@@ -380,9 +430,10 @@ async def _run_loop(
 
             try:
                 tool_result = await execute_tool(tool_name, tool_input, tracker)
-                if len(tool_result) > 15000:
-                    tool_result = tool_result[:15000] + "\n\n[... truncated to 15000 chars ...]"
-            except Exception as e:
+                _max_chars = settings.AGENT_TOOL_RESULT_MAX_CHARS
+                if len(tool_result) > _max_chars:
+                    tool_result = tool_result[:_max_chars] + f"\n\n[... truncated to {_max_chars} chars ...]"
+            except Exception as e:  # Intentional broad catch — tool handlers can raise anything
                 logger.exception("Tool %s failed", tool_name)
                 tool_result = json.dumps({"error": f"Tool {tool_name} failed: {type(e).__name__}: {str(e)[:200]}"})
 
@@ -461,7 +512,7 @@ async def _post_process_draft(
                 if report_path:
                     result.draft["_report_path"] = report_path
                     logger.info("Report generated: %s", report_path)
-            except Exception as e:
+            except (OSError, ImportError, KeyError, TypeError) as e:
                 logger.warning("Report auto-generation failed: %s", e)
 
         # For calendars: save markdown content calendar
@@ -472,7 +523,7 @@ async def _post_process_draft(
                 if cal_path:
                     result.draft["_calendar_path"] = cal_path
                     logger.info("Calendar generated: %s", cal_path)
-            except Exception as e:
+            except (OSError, ImportError, KeyError, TypeError) as e:
                 logger.warning("Calendar generation failed: %s", e)
 
         # For threads: sanitize each post's text
@@ -579,6 +630,7 @@ def _build_skeleton_context(request: str) -> str:
                 variation_aggressiveness=brand_config.variation_aggressiveness,
                 preferred=brand_config.preferred_skeletons or None,
                 excluded=brand_config.excluded_skeletons or None,
+                performance_weight=0.3,
             )
 
         if skeleton:
@@ -589,7 +641,7 @@ def _build_skeleton_context(request: str) -> str:
                 f"but match the hook style, body flow, and CTA pattern.\n\n"
                 f"{formatted}"
             )
-    except Exception as e:
+    except (ImportError, KeyError, TypeError, ValueError) as e:
         logger.debug("Skeleton context build failed: %s", e)
 
     return ""
@@ -622,7 +674,7 @@ def _run_diversity_check(result: AgentResult) -> None:
                 body_structure = skeleton.body
                 cta_type = skeleton.cta
                 tone = skeleton.tone
-        except Exception:
+        except (ImportError, KeyError):
             pass
 
     # Log the structure
@@ -746,6 +798,14 @@ async def run_agent(
     if feedback_context and "No feedback history" not in feedback_context:
         user_content = f"{feedback_context}\n\n---\n\n{user_content}"
 
+    # Inject similar past successes from semantic memory search
+    # This gives the agent concrete examples of approved posts that matched
+    # similar requests, closing the feedback loop for self-improvement.
+    from agent.context_engine import build_memory_context
+    memory_context = await build_memory_context(request, limit=3)
+    if memory_context:
+        user_content = f"{memory_context}\n\n---\n\n{user_content}"
+
     # Inject structural skeleton instructions if a skeleton_id is provided
     skeleton_context = _build_skeleton_context(request)
     if skeleton_context:
@@ -781,14 +841,14 @@ async def run_agent(
             tools_called=result.tool_calls_made,
             finished_via=finished_via,
         )
-    except Exception as e:
+    except OSError as e:
         logger.debug("Session record_run failed: %s", e)
 
     # Structural diversity check and logging
     if result.draft and settings.DIVERSITY_TRACKER_ENABLED:
         try:
             _run_diversity_check(result)
-        except Exception as e:
+        except (OSError, KeyError, TypeError, ValueError) as e:
             logger.debug("Diversity check failed: %s", e)
 
     # Optional self-scoring via preference engine
@@ -803,7 +863,7 @@ async def run_agent(
                 "should_reject": pref_score.should_reject,
             }
             logger.info("Self-score: %.1f (%s)", pref_score.score, pref_score.reasoning[:60])
-        except Exception as e:
+        except (anthropic.APIError, OSError, KeyError, TypeError) as e:
             logger.debug("Self-scoring failed: %s", e)
 
     return result
@@ -863,7 +923,7 @@ async def run_agent_with_history(
             tools_called=result.tool_calls_made,
             finished_via=finished_via,
         )
-    except Exception as e:
+    except OSError as e:
         logger.debug("Session record_run failed: %s", e)
 
     return result

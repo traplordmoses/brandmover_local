@@ -14,6 +14,8 @@ import tempfile
 import time as _time
 from pathlib import Path
 
+import httpx
+
 from agent import asset_library, content_types, feedback, figma, guidelines, image_gen, lora_pipeline, state as _state
 from agent.resource_log import ResourceTracker
 from config import settings
@@ -31,8 +33,9 @@ def _str_param(d: dict, key: str, default: str = "") -> str:
     return str(v) if v is not None else default
 
 
-# Allowlist of OpenClaw scripts that can be executed
-_OPENCLAW_ALLOWLIST = {
+# Allowlist of OpenClaw scripts that can be executed.
+# Loaded from brand/openclaw_allowlist.txt if present, else uses this default set.
+_DEFAULT_OPENCLAW_ALLOWLIST = {
     "read_vault.js",
     "create_campaign.js",
     "schedule_content.js",
@@ -46,6 +49,31 @@ _OPENCLAW_ALLOWLIST = {
     "verify_contract.js",
     "get_task_details.js",
 }
+
+
+def _load_openclaw_allowlist() -> set[str]:
+    """Load script allowlist from brand/openclaw_allowlist.txt or use defaults.
+
+    The config file is one script name per line. Blank lines and #comments are ignored.
+    """
+    config_path = Path(settings.BRAND_FOLDER) / "openclaw_allowlist.txt"
+    if not config_path.exists():
+        return set(_DEFAULT_OPENCLAW_ALLOWLIST)
+    try:
+        lines = config_path.read_text(encoding="utf-8").splitlines()
+        names = {
+            line.strip() for line in lines
+            if line.strip() and not line.strip().startswith("#")
+        }
+        if names:
+            logger.info("Loaded %d OpenClaw scripts from %s", len(names), config_path)
+            return names
+    except OSError as e:
+        logger.warning("Failed to read openclaw_allowlist.txt: %s — using defaults", e)
+    return set(_DEFAULT_OPENCLAW_ALLOWLIST)
+
+
+_OPENCLAW_ALLOWLIST = _load_openclaw_allowlist()
 
 # ---------------------------------------------------------------------------
 # Tool definitions (Anthropic ToolParam format)
@@ -696,12 +724,12 @@ async def _handle_generate_image(
             if ref_grid:
                 try:
                     Path(ref_grid).unlink(missing_ok=True)
-                except Exception as e:
+                except OSError as e:
                     logger.debug("Temp cleanup failed for %s: %s", ref_grid, e)
             for _tmp in _logo_contrast_temps:
                 try:
                     Path(_tmp).unlink(missing_ok=True)
-                except Exception as e:
+                except OSError as e:
                     logger.debug("Logo temp cleanup failed for %s: %s", _tmp, e)
 
     # 1. Check for active style profile for this content_type
@@ -736,7 +764,7 @@ async def _handle_generate_image(
             if input_ref.startswith(tempfile.gettempdir()):
                 try:
                     Path(input_ref).unlink(missing_ok=True)
-                except Exception as e:
+                except OSError as e:
                     logger.debug("Style ref cleanup failed for %s: %s", input_ref, e)
 
             if url:
@@ -776,7 +804,7 @@ async def _handle_generate_image(
     if url:
         try:
             asset_library.add(url, "generated", content_type, prompt=prompt)
-        except Exception as e:
+        except OSError as e:
             logger.debug("Asset library add failed: %s", e)
         return json.dumps({"image_url": url, "model": model_id, "reason": reason, "prompt_used": prompt})
     else:
@@ -824,7 +852,7 @@ def _prepare_logo_ref(logo_path: Path) -> tuple[Path, str | None]:
 
         # Logo is fine as-is
         return logo_path, None
-    except Exception as e:
+    except (OSError, ValueError, ImportError) as e:
         logger.warning("brand_3d logo: failed to preprocess %s: %s", logo_path.name, e)
         return logo_path, None
 
@@ -852,7 +880,7 @@ async def _staggered_generate(
                 if result:
                     return result
                 return None
-            except Exception as e:
+            except (httpx.HTTPStatusError, httpx.TimeoutException, OSError, ValueError, RuntimeError) as e:
                 is_429 = "429" in str(e)
                 if is_429 and attempt < max_retries:
                     backoff = delay * (2 ** (attempt + 1))
@@ -1007,7 +1035,7 @@ async def _handle_img2img(
     if reference_image_path.startswith(tempfile.gettempdir()):
         try:
             Path(reference_image_path).unlink(missing_ok=True)
-        except Exception as e:
+        except OSError as e:
             logger.debug("Mascot ref cleanup failed for %s: %s", reference_image_path, e)
 
     if url:
@@ -1105,7 +1133,7 @@ async def _handle_execute_openclaw_script(
 
     except subprocess.TimeoutExpired:
         return json.dumps({"error": f"Script {script_name} timed out after 60 seconds"})
-    except Exception as e:
+    except (subprocess.SubprocessError, OSError) as e:
         return json.dumps({"error": f"Failed to execute {script_name}: {e}"})
 
 
@@ -1253,7 +1281,7 @@ async def _handle_generate_promo_video(
     # Pull brand config for defaults
     try:
         cfg = compositor_config.get_config()
-    except Exception:
+    except (OSError, KeyError, ValueError):
         cfg = None
 
     # Resolve paths
@@ -1334,7 +1362,7 @@ async def _handle_generate_promo_video(
         if fresh_bg:
             result["fresh_bg"] = True
         return json.dumps(result)
-    except Exception as e:
+    except Exception as e:  # Intentional broad catch — video pipeline spans FFmpeg, PIL, and external APIs
         logger.exception("Promo video generation failed")
         return json.dumps({"error": f"Video generation failed: {type(e).__name__}: {str(e)[:300]}"})
 
@@ -1359,7 +1387,7 @@ async def _handle_verify_draft(input_dict: dict, tracker: ResourceTracker) -> st
 
     try:
         brand_score = score_brand_alignment(draft)
-    except Exception:
+    except (OSError, KeyError, TypeError, ValueError):
         brand_score = {"alignment_score": -1, "drift_flags": [], "checks": []}
 
     # Build actionable feedback

@@ -162,6 +162,64 @@ class ContextEngine:
         }
 
 
+async def build_memory_context(request: str, limit: int = 3) -> str:
+    """Search past approved generations for similar successes and format as context.
+
+    Uses the semantic memory module to find approved posts that are similar
+    to the current request, giving the agent concrete examples of what worked.
+
+    Args:
+        request: The user's current content request.
+        limit: Maximum number of past successes to include.
+
+    Returns:
+        Formatted context string, or empty string if no relevant results found.
+    """
+    if not request or not request.strip():
+        return ""
+
+    try:
+        from agent.learning.memory import search_past_generations
+        results = await asyncio.to_thread(
+            search_past_generations,
+            query=request,
+            top_k=limit,
+            status_filter="approved",
+            min_score=0.02,
+        )
+        if not results:
+            return ""
+
+        lines = ["## SIMILAR PAST SUCCESSES", ""]
+        lines.append(
+            "These approved posts matched your current request. "
+            "Use them as reference for tone, structure, and what resonated:"
+        )
+        lines.append("")
+
+        for i, item in enumerate(results, 1):
+            entry = item["entry"]
+            score = item["score"]
+            lines.append(f"### Example {i} (relevance: {score:.2f})")
+            if entry.get("content_type"):
+                lines.append(f"Type: {entry['content_type']}")
+            if entry.get("original_request"):
+                lines.append(f"Request: {entry['original_request']}")
+            if entry.get("prompt"):
+                lines.append(f"Generated: {entry['prompt']}")
+            lines.append("")
+
+        context = "\n".join(lines).strip()
+        logger.info(
+            "Memory context: %d similar approved posts found for request",
+            len(results),
+        )
+        return context
+    except (ImportError, OSError, KeyError, TypeError, ValueError) as e:
+        logger.debug("Memory context search failed: %s", e)
+        return ""
+
+
 async def build_brand_context_block(budget_tokens: int = DEFAULT_BUDGET_TOKENS) -> str:
     """Build brand context using priority-based budget assembly.
 

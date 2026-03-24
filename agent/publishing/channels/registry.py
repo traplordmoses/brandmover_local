@@ -85,11 +85,34 @@ async def publish_to_all(
 
 
 def _auto_register() -> None:
-    """Auto-register built-in channels."""
+    """Auto-register built-in channels.
+
+    Registers Twitter and Discord unconditionally (they check credentials
+    at publish time). LinkedIn and Instagram are registered when their
+    credentials are present in settings, since they are opt-in platforms.
+    """
     from agent.channels.twitter import TwitterChannel
     from agent.channels.discord import DiscordChannel
     register_channel(TwitterChannel())
     register_channel(DiscordChannel())
+
+    # LinkedIn — register when credentials are configured
+    try:
+        from config import settings as _settings
+        if getattr(_settings, "LINKEDIN_ACCESS_TOKEN", "") and getattr(_settings, "LINKEDIN_AUTHOR_URN", ""):
+            from agent.publishing.channels.linkedin import LinkedInChannel
+            register_channel(LinkedInChannel())
+    except Exception as e:
+        logger.debug("LinkedIn channel registration skipped: %s", e)
+
+    # Instagram — register when credentials are configured
+    try:
+        from config import settings as _settings
+        if getattr(_settings, "INSTAGRAM_ACCESS_TOKEN", "") and getattr(_settings, "INSTAGRAM_BUSINESS_ACCOUNT_ID", ""):
+            from agent.publishing.channels.instagram import InstagramChannel
+            register_channel(InstagramChannel())
+    except Exception as e:
+        logger.debug("Instagram channel registration skipped: %s", e)
 
 
 # Auto-register on import

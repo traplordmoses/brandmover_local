@@ -30,7 +30,7 @@ from pathlib import Path
 from telegram import Update
 from telegram.ext import ContextTypes
 
-from agent import asset_library, brain, feedback, generation_history, guidelines, state
+from agent import asset_library, feedback, generation_history, guidelines, state
 from agent import compositor_config as _cc
 from config import settings
 
@@ -680,11 +680,8 @@ async def preview_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     await update.message.chat.send_action("typing")
 
     try:
-        brand_context = guidelines.get_brand_context()
-        result = await brain.pipeline_generate(
-            request=topic,
-            brand_context=brand_context,
-        )
+        from agent import engine
+        result = await engine.run_agent(request=topic)
         draft = result.draft
 
         if not draft.get("caption"):

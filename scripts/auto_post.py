@@ -231,6 +231,11 @@ async def process_slot(
 
     if not result or not result.draft:
         logger.error("Failed to generate content for %s after %d attempts", slot_name, _MAX_RETRIES + 1)
+        auto_state.record_failure(
+            slot_name=slot_name,
+            error=f"Could not generate content after {_MAX_RETRIES + 1} attempts",
+            retry_count=_MAX_RETRIES + 1,
+        )
         await _notify_telegram(
             f"<b>Auto-post failed</b>\n\n"
             f"Slot: {slot_name}\n"

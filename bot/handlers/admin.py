@@ -83,12 +83,10 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     if not _can_operate(uid):
         return
 
-    mode = settings.AGENT_MODE
-
     if _authorized(uid):
         # Full admin help
         msg = (
-            f"<b>BrandMover Local</b> (mode: {_esc(mode)})\n\n"
+            "<b>BrandMover Local</b> (mode: agent)\n\n"
             "Send any message to generate a branded post draft.\n"
             "I'll think through it in multiple steps and show you my reasoning.\n\n"
             "<b>Commands:</b>\n"

@@ -162,20 +162,19 @@ class TestErrorRecovery:
                  patch("bot.handlers.generation._rate_limited", return_value=False), \
                  patch("bot.handlers.generation.state") as mock_state, \
                  patch("bot.handlers.generation.transcript"), \
-                 patch("bot.handlers.generation._handle_pipeline_mode") as mock_pipeline:
-                mock_settings.UNIFIED_BRAIN_ENABLED = False
+                 patch("bot.handlers.generation._handle_agent_mode") as mock_agent:
                 mock_settings.INTENT_ROUTER_ENABLED = True
-                mock_settings.AGENT_MODE = "pipeline"
+                mock_settings.AGENT_MODE = "agent"
                 mock_settings.TELEGRAM_ALLOWED_USER_ID = 123
                 mock_onboard.get_session.return_value = None
                 mock_state.has_pending.return_value = False
-                mock_pipeline.return_value = None
+                mock_agent.return_value = None
 
                 update = _mock_update(text="some message")
                 await handle_message(update, MagicMock())
 
-                # Should have fallen through to pipeline
-                mock_pipeline.assert_called_once()
+                # Should have fallen through to agent
+                mock_agent.assert_called_once()
 
         asyncio.run(_run())
 
@@ -299,19 +298,18 @@ class TestKillSwitch:
                  patch("bot.handlers.generation._rate_limited", return_value=False), \
                  patch("bot.handlers.generation.state") as mock_state, \
                  patch("bot.handlers.generation.transcript"), \
-                 patch("bot.handlers.generation._handle_pipeline_mode") as mock_pipeline:
-                mock_settings.UNIFIED_BRAIN_ENABLED = False
+                 patch("bot.handlers.generation._handle_agent_mode") as mock_agent:
                 mock_settings.INTENT_ROUTER_ENABLED = False
-                mock_settings.AGENT_MODE = "pipeline"
+                mock_settings.AGENT_MODE = "agent"
                 mock_settings.TELEGRAM_ALLOWED_USER_ID = 123
                 mock_onboard.get_session.return_value = None
                 mock_state.has_pending.return_value = False
-                mock_pipeline.return_value = None
+                mock_agent.return_value = None
 
                 update = _mock_update(text="hello")
                 await handle_message(update, MagicMock())
 
                 mock_ir.classify_intent.assert_not_called()
-                mock_pipeline.assert_called_once()
+                mock_agent.assert_called_once()
 
         asyncio.run(_run())

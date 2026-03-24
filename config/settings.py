@@ -94,21 +94,16 @@ BRAND_NAME: str = os.getenv("BRAND_NAME", "MyBrand")
 # Defaults to state/ in project root. Override for multi-brand isolation.
 STATE_FOLDER: str = os.getenv("STATE_FOLDER", str(_project_root / "state"))
 
-# ── Pipeline ──
-# Legacy pipeline mode (4-step: analyze → plan → verify → generate).
-# "full" runs all 4 steps, "fast" merges plan+verify into one step.
-PIPELINE_MODE: str = os.getenv("PIPELINE_MODE", "full")
+# ── References ──
 MAX_REFERENCE_CHARS: int = _safe_int("MAX_REFERENCE_CHARS", 50000)
 REFERENCES_FOLDER: str = os.getenv("REFERENCES_FOLDER", str(Path(BRAND_FOLDER) / "references"))
 
 # ── Agent Mode ──
-# AGENT_MODE: "pipeline" uses the legacy multi-step pipeline, "agent" uses
-# a Claude tool-use loop (the modern approach — see unified_brain.py).
+# Uses Claude tool-use loop (see engine.py).
 # AGENT_MAX_TURNS: Max LLM round-trips per request. More turns = more tool calls
 # but higher cost. 15 is generous for complex multi-tool workflows.
-# SONNET_MODEL: The main model used for all brain calls. Sonnet for speed+cost.
 # HAIKU_MODEL: Used for lightweight tasks (intent classification, etc.)
-AGENT_MODE: str = os.getenv("AGENT_MODE", "agent")
+AGENT_MODE: str = "agent"  # Legacy setting — always "agent" now
 AGENT_MAX_TURNS: int = _safe_int("AGENT_MAX_TURNS", 15)
 AGENT_MODEL: str = os.getenv("AGENT_MODEL", "claude-sonnet-4-6")
 AGENT_SELF_CRITIQUE: bool = os.getenv("AGENT_SELF_CRITIQUE", "true").lower() in ("true", "1", "yes")
@@ -121,6 +116,21 @@ CHAT_MAX_TOKENS: int = _safe_int("CHAT_MAX_TOKENS", 600)
 # Model fallback — comma-separated fallback chain for agent calls.
 # When primary model fails (429/500/503), tries the next model in the chain.
 AGENT_FALLBACK_MODELS: str = os.getenv("AGENT_FALLBACK_MODELS", "")
+# Maximum characters for tool results before truncation.
+# Higher values give the agent more context but cost more tokens.
+AGENT_TOOL_RESULT_MAX_CHARS: int = _safe_int("AGENT_TOOL_RESULT_MAX_CHARS", 15000)
+
+# ── LinkedIn ──
+# Optional LinkedIn integration for cross-posting content to LinkedIn.
+# Requires an OAuth 2.0 access token with w_member_social scope.
+LINKEDIN_ACCESS_TOKEN: str = os.getenv("LINKEDIN_ACCESS_TOKEN", "")
+LINKEDIN_AUTHOR_URN: str = os.getenv("LINKEDIN_AUTHOR_URN", "")  # e.g. "urn:li:person:xxx"
+
+# ── Instagram ──
+# Optional Instagram Business publishing via Facebook Graph API.
+# Requires a long-lived Page access token with instagram_content_publish scope.
+INSTAGRAM_ACCESS_TOKEN: str = os.getenv("INSTAGRAM_ACCESS_TOKEN", "")
+INSTAGRAM_BUSINESS_ACCOUNT_ID: str = os.getenv("INSTAGRAM_BUSINESS_ACCOUNT_ID", "")
 
 # ── Discord ──
 # Optional Discord bot for cross-posting content to Discord channels.
@@ -129,7 +139,7 @@ DISCORD_GUILD_ID: int = _safe_int("DISCORD_GUILD_ID", 0)
 
 # ── Multi-Platform Publishing ──
 # PUBLISH_PLATFORMS: Comma-separated list of platforms to publish to on /approve.
-# Supported: x, discord, telegram. Default: ["x"].
+# Supported: x, discord, telegram, linkedin, instagram. Default: ["x"].
 # DISCORD_CROSSPOST_ENABLED: Automatically cross-post to Discord when DISCORD_BOT_TOKEN is set.
 _raw_platforms = os.getenv("PUBLISH_PLATFORMS", "x")
 PUBLISH_PLATFORMS: list[str] = [
@@ -177,10 +187,9 @@ WHISPER_ENABLED: bool = os.getenv(
     "true" if os.getenv("OPENAI_API_KEY") else "false",
 ).lower() in ("true", "1", "yes")
 
-# ── Unified Brain ──
-# When True, ALL messages go through unified_brain.py (single LLM loop).
-# When False, legacy routing is used (separate chat + generation paths).
-UNIFIED_BRAIN_ENABLED: bool = os.getenv("UNIFIED_BRAIN_ENABLED", "false").lower() in ("true", "1", "yes")
+# ── Unified Brain (removed) ──
+# Legacy setting — kept as False for backward compatibility with code that reads it.
+UNIFIED_BRAIN_ENABLED: bool = False
 
 # ── Auto Post ──
 # Background scheduler that generates and posts content at predefined times.
@@ -342,12 +351,6 @@ def validate(exit_on_error: bool = True) -> list[str]:
         warnings.append("DISCORD_BOT_TOKEN not set — Discord posting disabled")
     if not FIGMA_ACCESS_TOKEN:
         warnings.append("FIGMA_ACCESS_TOKEN not set — Figma design checks disabled")
-
-    # ── Deprecation checks ──
-    if AGENT_MODE == "pipeline":
-        _logger.warning(
-            "AGENT_MODE=pipeline is deprecated. Switch to AGENT_MODE=agent."
-        )
 
     # ── Value validation ──
     if AGENT_MAX_TURNS < 1:

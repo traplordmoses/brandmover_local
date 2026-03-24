@@ -13,3 +13,43 @@ omit = ["tests/*", "scripts/*", "eval/*"]
 [tool.coverage.report]
 show_missing = true
 skip_empty = true
+
+[tool.mypy]
+python_version = "3.11"
+warn_return_any = true
+warn_unused_configs = true
+check_untyped_defs = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+no_implicit_optional = true
+strict_equality = true
+
+# Strict mode for new/refactored modules
+[[tool.mypy.overrides]]
+module = [
+    "agent.channel_monitor",
+    "agent.publishing.*",
+    "agent.quality.*",
+]
+disallow_untyped_defs = true
+disallow_any_generics = true
+
+# Ignore missing stubs for third-party libraries
+[[tool.mypy.overrides]]
+module = [
+    "tweepy.*",
+    "replicate.*",
+    "anthropic.*",
+    "telegram.*",
+    "PIL.*",
+    "cairosvg.*",
+    "fitz.*",
+    "discord.*",
+    "fal_client.*",
+    "RestrictedPython.*",
+    "deepeval.*",
+    "playwright.*",
+    "bs4.*",
+    "numpy.*",
+]
+ignore_missing_imports = true

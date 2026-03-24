@@ -1,7 +1,6 @@
 """
 Content generation handlers — handle_message (NL router), _route_intent,
-_handle_unified, _handle_agent_mode, _handle_pipeline_mode, _fast_path, generate_command,
-generate_callback.
+_handle_agent_mode, generate_command, generate_callback.
 """
 
 __all__ = [
@@ -23,7 +22,7 @@ from PIL import Image as _PILImage
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import ContextTypes
 
-from agent import asset_gen, auto_state, brain, chat, compositor_config, conversation_context, engine, feedback, generation_history, guidelines, hooks, image_gen, intent_router, onboarding, schedule_queue, state, transcript, unified_brain
+from agent import asset_gen, auto_state, chat, compositor_config, conversation_context, engine, feedback, generation_history, guidelines, hooks, image_gen, intent_router, onboarding, schedule_queue, state, transcript
 from agent import compositor_config as _cc
 from config import settings
 
@@ -55,237 +54,10 @@ logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
-# Unified brain — fast path + unified handler
+# Agent mode handler + intent routing
 # ---------------------------------------------------------------------------
 
-# Deterministic short-message lookup for draft actions + utility commands.
-# Only used in unified brain mode. Maps normalized lowercase -> action.
-_UNIFIED_FAST_PATH: dict[str, str] = {
-    # Approve (save, do NOT post)
-    "yes": "approve", "yep": "approve", "yeah": "approve", "y": "approve",
-    "ok": "approve", "okay": "approve", "sure": "approve", "looks good": "approve",
-    "lgtm": "approve", "approve": "approve", "approved": "approve",
-    "i approve": "approve", "love it": "approve", "perfect": "approve",
-    "thats good": "approve", "that's good": "approve",
-    # Post (publish to X — requires approved draft)
-    "post it": "post", "send it": "post", "ship it": "post",
-    "publish": "post", "go": "post", "do it": "post",
-    "post": "post", "send": "post",
-    # Reroll
-    "try again": "reroll", "again": "reroll", "another": "reroll",
-    "another one": "reroll", "reroll": "reroll", "redo": "reroll",
-    "regenerate": "reroll", "new one": "reroll",
-}
 
-# Suffix keywords that indicate approve intent even if the full message doesn't match.
-# Catches "this is amazing i approve", "love it approve", etc.
-_APPROVE_SUFFIXES = ("approve", "approved", "i approve", "looks good", "lgtm")
-_POST_SUFFIXES = ("post it", "send it", "ship it", "publish it")
-
-# Fast path actions that require a pending draft
-_FAST_PATH_DRAFT_ACTIONS = {"approve", "reroll"}
-# Fast path actions that target approved drafts
-_FAST_PATH_APPROVED_ACTIONS = {"post"}
-
-
-async def _fast_path(update: Update, context: ContextTypes.DEFAULT_TYPE, message: str) -> bool:
-    """Handle deterministic short-message actions for the unified brain path.
-
-    Returns True if the message was handled, False to pass to unified brain.
-    """
-    user_id = update.effective_user.id
-    normalized = message.lower().strip()
-
-    action = _UNIFIED_FAST_PATH.get(normalized)
-
-    # Fuzzy suffix match for longer messages like "this is amazing i approve"
-    if not action:
-        if any(normalized.endswith(s) for s in _APPROVE_SUFFIXES):
-            action = "approve"
-        elif any(normalized.endswith(s) for s in _POST_SUFFIXES):
-            action = "post"
-
-    if not action:
-        return False
-
-    has_draft = await state.async_has_pending(user_id=user_id)
-    has_approved = await _aio.to_thread(state.has_approved, user_id=user_id)
-
-    # Post action — guarded by per-user lock to prevent double-post race
-    if action == "post":
-        async with _get_approve_lock(user_id):
-            if has_approved:
-                await _do_post(update, context, source="unified_fast")
-                return True
-            elif has_draft:
-                # One-shot shortcut: approve + post in one step
-                await _do_approve(update, context, source="unified_fast")
-                await _do_post(update, context, source="unified_fast_auto")
-                return True
-            else:
-                # Nothing to post — pass to unified brain
-                return False
-
-    # Draft-dependent actions without a draft -> pass to unified brain
-    if action in _FAST_PATH_DRAFT_ACTIONS and not has_draft:
-        return False
-
-    if action == "approve":
-        async with _get_approve_lock(user_id):
-            await _do_approve(update, context, source="unified_fast")
-            return True
-
-    if action == "reroll":
-        if _rate_limited(user_id):
-            await update.message.reply_text(f"Please wait {_RATE_LIMIT_SECONDS}s between requests.")
-            return True
-        pending = state.get_pending(user_id=user_id)
-        if pending:
-            original = pending.get("original_request", "")
-            state.clear_pending(user_id=user_id)
-            state.clear_draft_history(user_id=user_id)
-            await update.message.reply_text("Regenerating...")
-            if original:
-                await _handle_unified(update, context, original, user_id=user_id)
-            return True
-
-    return False
-
-
-async def _handle_unified(
-    update: Update,
-    context: ContextTypes.DEFAULT_TYPE,
-    request: str,
-    user_id: int | None = None,
-) -> None:
-    """Run the unified brain and handle the result."""
-    await update.message.chat.send_action("typing")
-
-    # Load conversation context and sync pending state
-    ctx = conversation_context.get_context(user_id or update.effective_user.id)
-    ctx.pending_draft_exists = state.has_pending(user_id=user_id)
-
-    # Set user name if available
-    if update.effective_user and update.effective_user.first_name and not ctx.user_name:
-        ctx.user_name = update.effective_user.first_name
-
-    # Inject reference image path if stored
-    ref_path = state.get_reference_image()
-    if ref_path and Path(ref_path).exists():
-        request = f"{request}\n\n[REFERENCE IMAGE: {ref_path}]"
-
-    # Status message for tool calls + live reasoning traces
-    _status_msg = None
-    _status_lines: list[str] = []
-    _reasoning_line: str = ""  # Current reasoning line (replaced each turn)
-
-    def _build_status_text() -> str:
-        parts = list(_status_lines)
-        if _reasoning_line:
-            parts.append(f"<i>\U0001F4AD {_esc(_reasoning_line)}</i>")
-        return "\n".join(parts)
-
-    async def _update_status():
-        nonlocal _status_msg
-        text = _build_status_text()
-        if not text:
-            return
-        if _status_msg is None:
-            _status_msg = await update.message.reply_text(text, parse_mode="HTML")
-        else:
-            try:
-                await _status_msg.edit_text(text, parse_mode="HTML")
-            except Exception:
-                pass  # Telegram rejects edits if text unchanged
-
-    async def on_tool_call(tool_name: str, description: str):
-        nonlocal _reasoning_line
-        _reasoning_line = ""
-        icon = _TOOL_ICONS.get(tool_name, "\u26A1")
-        _status_lines.append(f"{icon} {_esc(description)}")
-        await _update_status()
-        await update.message.chat.send_action("typing")
-
-    async def on_reasoning(text: str):
-        nonlocal _reasoning_line
-        _reasoning_line = _truncate_reasoning(text)
-        await _update_status()
-        await update.message.chat.send_action("typing")
-
-    try:
-        result = await unified_brain.run(
-            request=request,
-            context=ctx,
-            on_tool_call=on_tool_call,
-            on_reasoning=on_reasoning,
-        )
-
-        # Delete the status message now that we're done
-        if _status_msg:
-            try:
-                await _status_msg.delete()
-            except Exception:
-                pass
-
-        # Check what the unified brain returned
-        if result.draft:
-            image_url = result.image_url
-            image_urls = result.image_urls
-
-            # Determine draft format
-            draft_format = result.draft.get("format", "single")
-            format_data = None
-            if draft_format == "thread" and result.draft.get("thread_posts"):
-                format_data = {"thread_posts": result.draft["thread_posts"]}
-
-            # Save pending state
-            state.save_pending(
-                caption=result.draft["caption"],
-                hashtags=result.draft.get("hashtags", []),
-                image_url=image_url,
-                alt_text=result.draft.get("alt_text", ""),
-                image_prompt=result.draft.get("image_prompt", ""),
-                original_request=request,
-                image_urls=image_urls if image_urls and len(image_urls) > 1 else None,
-                content_type=result.draft.get("content_type"),
-                user_id=user_id,
-                conversation_history=result.conversation_history,
-                draft_format=draft_format,
-                format_data=format_data,
-            )
-
-            await _send_draft(update, result.draft, image_url, resources=result.resources, image_urls=image_urls, user_id=user_id)
-
-            # Fire hooks + transcript
-            transcript.log_agent_response(
-                user_id or 0, result.draft.get("caption", ""),
-                turns=result.turns_used, tools=result.tool_calls_made,
-            )
-            await hooks.emit("draft:generated", {
-                "draft": result.draft, "user_id": user_id,
-                "turns": result.turns_used, "time": result.total_time,
-            })
-        else:
-            text = result.response_text or "I processed your request but didn't generate a draft."
-            max_len = 3900
-            if len(text) > max_len:
-                text = text[:max_len] + "..."
-            await update.message.reply_text(
-                _esc(text),
-                parse_mode="HTML",
-            )
-
-    except Exception as e:
-        logger.error("Unified brain error: %s", e)
-        if _status_msg:
-            try:
-                await _status_msg.delete()
-            except Exception:
-                pass
-        await update.message.reply_text(
-            f"Something went wrong: {_esc(str(e))}\n\nPlease try again.",
-            parse_mode="HTML",
-        )
 
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -345,15 +117,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             await update.message.reply_text(summary, parse_mode="HTML")
         return
 
-    # --- Unified brain path ---
-    if settings.UNIFIED_BRAIN_ENABLED:
-        handled = await _fast_path(update, context, request)
-        if not handled:
-            await _handle_unified(update, context, request, user_id=user_id)
-        return
-
-    # --- Legacy path: intent router + separate brains ---
-
     # Intent routing — classify message and dispatch if confident
     if settings.INTENT_ROUTER_ENABLED:
         try:
@@ -377,10 +140,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         )
         return
 
-    if settings.AGENT_MODE == "agent":
-        await _handle_agent_mode(update, request, user_id=user_id)
-    else:
-        await _handle_pipeline_mode(update, request, user_id=user_id)
+    await _handle_agent_mode(update, request, user_id=user_id)
 
 
 async def _route_intent(update: Update, context: ContextTypes.DEFAULT_TYPE, message: str) -> bool:
@@ -441,10 +201,7 @@ async def _route_intent(update: Update, context: ContextTypes.DEFAULT_TYPE, mess
             state.clear_draft_history(user_id=user_id)
             await update.message.reply_text("Regenerating...")
             if original:
-                if settings.AGENT_MODE == "agent":
-                    await _handle_agent_mode(update, original, user_id=user_id)
-                else:
-                    await _handle_pipeline_mode(update, original, user_id=user_id)
+                await _handle_agent_mode(update, original, user_id=user_id)
             return True
         return False
 
@@ -509,10 +266,7 @@ async def _route_intent(update: Update, context: ContextTypes.DEFAULT_TYPE, mess
                 f"Please wait {_RATE_LIMIT_SECONDS}s between requests."
             )
             return True
-        if settings.AGENT_MODE == "agent":
-            await _handle_agent_mode(update, augmented, user_id=user_id)
-        else:
-            await _handle_pipeline_mode(update, augmented, user_id=user_id)
+        await _handle_agent_mode(update, augmented, user_id=user_id)
         return True
 
     if intent == "upload_assets":
@@ -786,96 +540,6 @@ async def _escalate_agent_error(
     except Exception as esc_err:
         logger.error("Auto-escalation failed: %s", esc_err)
 
-
-async def _handle_pipeline_mode(update: Update, request: str, user_id: int | None = None) -> None:
-    """Run the existing multi-step pipeline for a content request.
-
-    .. deprecated::
-        Pipeline mode is deprecated. Set AGENT_MODE=agent.
-    """
-    logger.warning(
-        "Pipeline mode is deprecated. Set AGENT_MODE=agent to use the active architecture."
-    )
-    await update.message.chat.send_action("typing")
-
-    _pipe_status_msg = None
-    _pipe_status_lines: list[str] = []
-
-    async def on_step(step_num: int, total: int, step_name: str, summary: str):
-        nonlocal _pipe_status_msg
-        icon = _STEP_ICONS.get(step_name, "\u26A1")
-        _pipe_status_lines.append(f"{icon} [{step_num}/{total}] {step_name}")
-        text = "\n".join(_pipe_status_lines)
-        if _pipe_status_msg is None:
-            _pipe_status_msg = await update.message.reply_text(text, parse_mode="HTML")
-        else:
-            try:
-                await _pipe_status_msg.edit_text(text, parse_mode="HTML")
-            except Exception:
-                pass
-        await update.message.chat.send_action("typing")
-
-    try:
-        brand_context = guidelines.get_brand_context()
-        logger.info("Brand context loaded: %d chars", len(brand_context))
-
-        pipeline_result = await brain.pipeline_generate(
-            request=request,
-            brand_context=brand_context,
-            on_step=on_step,
-        )
-
-        draft = pipeline_result.draft
-
-        # Delete the status message now that we're done
-        if _pipe_status_msg:
-            try:
-                await _pipe_status_msg.delete()
-            except Exception:
-                pass
-
-        if pipeline_result.fell_back:
-            await update.message.reply_text(
-                "<i>Note: Pipeline had an issue, used direct generation instead.</i>",
-                parse_mode="HTML",
-            )
-
-        logger.info("Draft generated: %s", draft.get("caption", "")[:80])
-
-        # Generate image with smart model routing (mode-aware)
-        image_url = None
-        cfg = _cc.get_config()
-        should_gen = draft.get("image_prompt") and cfg.default_mode != "text_only"
-        if should_gen:
-            await update.message.chat.send_action("upload_photo")
-            content_type = draft.get("content_type", "announcement")
-            from agent import template_memory as _tm
-            template_aspect = _tm.get_aspect_ratio_for_content_type(content_type)
-            image_url = await image_gen.generate_image(draft["image_prompt"], content_type=content_type, aspect_ratio=template_aspect)
-            if not image_url:
-                await update.message.reply_text(
-                    "Image generation failed \u2014 sending text draft only.",
-                )
-
-        # Save pending state
-        state.save_pending(
-            caption=draft["caption"],
-            hashtags=draft.get("hashtags", []),
-            image_url=image_url,
-            alt_text=draft["alt_text"],
-            image_prompt=draft["image_prompt"],
-            original_request=request,
-            user_id=user_id,
-        )
-
-        await _send_draft(update, draft, image_url, user_id=user_id)
-
-    except Exception as e:
-        logger.error("Pipeline error: %s", e)
-        await update.message.reply_text(
-            f"Something went wrong: {_esc(str(e))}\n\nPlease try again.",
-            parse_mode="HTML",
-        )
 
 
 # ---------------------------------------------------------------------------

@@ -490,23 +490,8 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
                 content_hint = "create an announcement"
             request = f"{content_hint}\n\n[DIRECT PHOTO: {tmp_path}]\n[generate text only, do NOT call generate_image]"
 
-            from bot.handlers.generation import _handle_unified, _handle_agent_mode, _handle_pipeline_mode
-            if settings.UNIFIED_BRAIN_ENABLED:
-                await _handle_unified(update, context, request, user_id=user_id)
-                return
-
-            # Legacy path: pending draft blocker
-            if state.has_pending(user_id=user_id):
-                await update.message.reply_text(
-                    "You have a pending draft. /approve, /reject, or /cancel it first.",
-                    parse_mode="HTML",
-                )
-                return
-
-            if settings.AGENT_MODE == "agent":
-                await _handle_agent_mode(update, request, user_id=user_id)
-            else:
-                await _handle_pipeline_mode(update, request, user_id=user_id)
+            from bot.handlers.generation import _handle_agent_mode
+            await _handle_agent_mode(update, request, user_id=user_id)
             return
 
     # Check if caption matches a style profile name (admin only)
@@ -533,45 +518,11 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             )
             return
 
-        from bot.handlers.generation import _handle_unified, _handle_agent_mode, _handle_pipeline_mode
-        if settings.UNIFIED_BRAIN_ENABLED:
-            await _handle_unified(update, context, caption, user_id=user_id)
-            return
-
-        # Legacy path: pending draft blocker
-        if state.has_pending(user_id=user_id):
-            await update.message.reply_text(
-                "You have a pending draft. /approve, /reject, or /cancel it first.",
-                parse_mode="HTML",
-            )
-            return
-
-        if settings.AGENT_MODE == "agent":
-            await _handle_agent_mode(update, caption, user_id=user_id)
-        else:
-            await _handle_pipeline_mode(update, caption, user_id=user_id)
+        from bot.handlers.generation import _handle_agent_mode
+        await _handle_agent_mode(update, caption, user_id=user_id)
     else:
-        from bot.handlers.generation import _handle_unified
-        if settings.UNIFIED_BRAIN_ENABLED:
-            await _handle_unified(update, context, "[User sent a photo]", user_id=user_id)
-            return
-
-        # Legacy: batch uploads — collect images for 3 seconds, then auto-ingest if bulk
-        import asyncio as _aio_mod
-
-        batch = context.user_data.setdefault("_bulk_uploads", [])
-        batch.append(tmp_path)
-        chat_id = update.message.chat_id
-        user_id = update.effective_user.id
-
-        # Cancel existing batch timer and reschedule
-        existing = _bulk_upload_tasks.get(user_id)
-        if existing and not existing.done():
-            existing.cancel()
-
-        _bulk_upload_tasks[user_id] = _aio_mod.create_task(
-            _delayed_bulk_process(context, user_id, chat_id)
-        )
+        from bot.handlers.generation import _handle_agent_mode
+        await _handle_agent_mode(update, "[User sent a photo]", user_id=user_id)
 
 
 # ---------------------------------------------------------------------------
@@ -625,40 +576,8 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         # We need to route through handle_message, so we call the generation flow directly
         transcript.log_user_message(user_id, f"[voice] {text}")
 
-        from bot.handlers.generation import _handle_unified, _handle_agent_mode, _handle_pipeline_mode
-
-        if settings.UNIFIED_BRAIN_ENABLED:
-            from bot.handlers.generation import _fast_path
-            handled = await _fast_path(update, context, text)
-            if not handled:
-                await _handle_unified(update, context, text, user_id=user_id)
-            return
-
-        if settings.INTENT_ROUTER_ENABLED:
-            from bot.handlers.generation import _route_intent
-            try:
-                handled = await _route_intent(update, context, text)
-                if handled:
-                    return
-            except Exception as e:
-                logger.warning("Intent router error on voice: %s", e)
-
-        if _rate_limited(user_id):
-            await update.message.reply_text(f"Please wait {_RATE_LIMIT_SECONDS}s between requests.")
-            return
-
-        from agent import state as _state
-        if _state.has_pending(user_id=user_id):
-            await update.message.reply_text(
-                "You have a pending draft. /approve, /reject, or /cancel it first.",
-                parse_mode="HTML",
-            )
-            return
-
-        if settings.AGENT_MODE == "agent":
-            await _handle_agent_mode(update, text, user_id=user_id)
-        else:
-            await _handle_pipeline_mode(update, text, user_id=user_id)
+        from bot.handlers.generation import _handle_agent_mode
+        await _handle_agent_mode(update, text, user_id=user_id)
 
     except Exception as e:
         logger.error("Voice handler error: %s", e)
@@ -786,11 +705,8 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                 context.user_data["last_video_path"] = str(agent_path)
                 synthetic_text = f"[Video reference uploaded: {agent_path}]\n\n{caption}"
                 transcript.log_user_message(user_id, synthetic_text)
-                from bot.handlers.generation import _handle_unified, _handle_agent_mode
-                if settings.UNIFIED_BRAIN_ENABLED:
-                    await _handle_unified(update, context, synthetic_text, user_id=user_id)
-                else:
-                    await _handle_agent_mode(update, synthetic_text, user_id=user_id)
+                from bot.handlers.generation import _handle_agent_mode
+                await _handle_agent_mode(update, synthetic_text, user_id=user_id)
         except Exception as e:
             logger.error("Video upload failed: %s", e)
             await update.message.reply_text("Video upload failed. Check logs.")
@@ -829,11 +745,8 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             if caption:
                 synthetic_text = f"[File uploaded: {save_path}]\n\n{caption}"
                 transcript.log_user_message(user_id, synthetic_text)
-                from bot.handlers.generation import _handle_unified, _handle_agent_mode
-                if settings.UNIFIED_BRAIN_ENABLED:
-                    await _handle_unified(update, context, synthetic_text, user_id=user_id)
-                else:
-                    await _handle_agent_mode(update, synthetic_text, user_id=user_id)
+                from bot.handlers.generation import _handle_agent_mode
+                await _handle_agent_mode(update, synthetic_text, user_id=user_id)
         except Exception as e:
             logger.error("File upload failed: %s", e)
             await update.message.reply_text("File upload failed. Check logs.")

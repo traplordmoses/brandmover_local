@@ -225,23 +225,22 @@ class TestKillSwitch:
                  patch(f"{_GEN}._rate_limited", return_value=False), \
                  patch(f"{_GEN}.state") as mock_state, \
                  patch(f"{_GEN}.transcript"), \
-                 patch(f"{_GEN}._handle_pipeline_mode") as mock_pipeline:
-                mock_settings.UNIFIED_BRAIN_ENABLED = False
+                 patch(f"{_GEN}._handle_agent_mode") as mock_agent:
                 mock_settings.INTENT_ROUTER_ENABLED = False
-                mock_settings.AGENT_MODE = "pipeline"
+                mock_settings.AGENT_MODE = "agent"
                 mock_settings.TELEGRAM_ALLOWED_USER_ID = 123
                 mock_settings._RATE_LIMIT_SECONDS = 10
                 mock_onboard.get_session.return_value = None
                 mock_state.has_pending.return_value = False
-                mock_pipeline.return_value = None
+                mock_agent.return_value = None
 
                 update = _mock_update(text="write a post")
                 await handle_message(update, _mock_context())
 
                 # Router should NOT have been called
                 mock_ir.classify_intent.assert_not_called()
-                # Should fall through to pipeline
-                mock_pipeline.assert_called_once()
+                # Should fall through to agent
+                mock_agent.assert_called_once()
 
         asyncio.run(_run())
 
@@ -258,7 +257,7 @@ class TestRerollIntent:
             with patch(f"{_GEN}.conversation_context") as mock_cc, \
                  patch(f"{_GEN}.intent_router") as mock_ir, \
                  patch(f"{_GEN}.state") as mock_state, \
-                 patch(f"{_GEN}._handle_pipeline_mode") as mock_pipeline, \
+                 patch(f"{_GEN}._handle_agent_mode") as mock_agent, \
                  patch(f"{_GEN}.settings") as mock_settings, \
                  patch(f"{_GEN}._rate_limited", return_value=False):
                 mock_cc.get_context.return_value = ConversationContext(user_id=123, updated_at=time.time())
@@ -270,8 +269,8 @@ class TestRerollIntent:
                 mock_ir.classify_intent = AsyncMock(
                     return_value=_routing_result("reroll", 0.95)
                 )
-                mock_settings.AGENT_MODE = "pipeline"
-                mock_pipeline.return_value = None
+                mock_settings.AGENT_MODE = "agent"
+                mock_agent.return_value = None
 
                 update = _mock_update(text="try again")
                 result = await _route_intent(update, _mock_context(), "try again")
@@ -279,7 +278,7 @@ class TestRerollIntent:
                 assert result is True
                 mock_state.clear_pending.assert_called_once_with(user_id=123)
                 mock_state.clear_draft_history.assert_called_once_with(user_id=123)
-                mock_pipeline.assert_called_once_with(update, "weekly update post", user_id=123)
+                mock_agent.assert_called_once_with(update, "weekly update post", user_id=123)
 
         asyncio.run(_run())
 

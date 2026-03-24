@@ -154,6 +154,13 @@ video/               Video assets and templates
 - **Content type routing**: `content_types.py` is the single source of truth. Image model selection lives in `image_gen._select_model()`. Compositor profile mapping lives in `COMPOSITOR_PROFILE_MAP`.
 - **Handlers package**: `bot/handlers/` is split by concern (core, draft, generation, media, admin, scheduling, debug). The `__init__.py` re-exports all public names and provides stable test-facing aliases for internal functions.
 
+## Deployment Constraints
+
+- **Single-instance only**: State files in `state/` use in-process `threading.RLock` for thread safety and `os.replace()` for atomic writes. There is no inter-process or distributed locking. Running multiple bot instances against the same `state/` directory will cause race conditions and data loss.
+- **Multi-brand isolation**: For multiple brands, use separate `BRAND_FOLDER` and `STATE_FOLDER` env vars per instance. Each instance must have its own state directory.
+- **OpenClaw script allowlist**: Default allowlist is hardcoded. Override by creating `brand/openclaw_allowlist.txt` (one script name per line).
+- **Tool result truncation**: Configurable via `AGENT_TOOL_RESULT_MAX_CHARS` (default: 15000). Increase for workflows that need large tool outputs.
+
 ## Running
 
 ```bash
@@ -165,6 +172,7 @@ python main.py
 ## Testing
 
 ```bash
+pip install -r requirements-dev.txt
 python -m pytest tests/ -v
 ```
 

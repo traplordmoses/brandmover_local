@@ -103,19 +103,19 @@ class TestMergeExtracted:
 # ---------------------------------------------------------------------------
 
 class TestBulkUploadBatching:
-    def test_no_caption_batches_instead_of_prompting(self):
-        """Photos without captions should batch, not immediately prompt."""
+    def test_no_caption_routes_to_agent(self):
+        """Photos without captions should route to agent mode."""
         async def _run():
             with patch(f"{_MEDIA}._can_operate", return_value=True), \
                  patch(f"{_MEDIA}.onboarding") as mock_onboard, \
                  patch(f"{_MEDIA}.state"), \
                  patch(f"{_MEDIA}._PILImage") as mock_pil, \
-                 patch(f"{_MEDIA}._bulk_upload_tasks", {}), \
+                 patch("bot.handlers.generation._handle_agent_mode") as mock_agent, \
                  patch(f"{_MEDIA}.settings") as mock_settings:
                 mock_onboard.get_session.return_value = None
-                mock_settings.UNIFIED_BRAIN_ENABLED = False
                 mock_img = MagicMock()
                 mock_pil.open.return_value.convert.return_value = mock_img
+                mock_agent.return_value = None
 
                 update = _mock_update(caption="")
                 ctx = _mock_context()
@@ -125,31 +125,31 @@ class TestBulkUploadBatching:
                 for call in update.message.reply_text.call_args_list:
                     assert "reference / mascot" not in str(call)
 
-                # Should have added to batch
-                assert len(ctx.user_data["_bulk_uploads"]) == 1
+                # Should have routed to agent mode
+                mock_agent.assert_called_once()
 
         asyncio.run(_run())
 
-    def test_multiple_photos_accumulate_in_batch(self):
-        """Multiple rapid uploads should accumulate in the batch list."""
+    def test_multiple_photos_each_route_to_agent(self):
+        """Multiple rapid uploads should each route to agent mode."""
         async def _run():
             with patch(f"{_MEDIA}._can_operate", return_value=True), \
                  patch(f"{_MEDIA}.onboarding") as mock_onboard, \
                  patch(f"{_MEDIA}.state"), \
                  patch(f"{_MEDIA}._PILImage") as mock_pil, \
-                 patch(f"{_MEDIA}._bulk_upload_tasks", {}), \
+                 patch("bot.handlers.generation._handle_agent_mode") as mock_agent, \
                  patch(f"{_MEDIA}.settings") as mock_settings:
                 mock_onboard.get_session.return_value = None
-                mock_settings.UNIFIED_BRAIN_ENABLED = False
                 mock_img = MagicMock()
                 mock_pil.open.return_value.convert.return_value = mock_img
+                mock_agent.return_value = None
 
                 ctx = _mock_context()
                 for _ in range(5):
                     update = _mock_update(caption="")
                     await handle_photo(update, ctx)
 
-                assert len(ctx.user_data["_bulk_uploads"]) == 5
+                assert mock_agent.call_count == 5
 
         asyncio.run(_run())
 
@@ -161,16 +161,15 @@ class TestBulkUploadBatching:
                  patch(f"{_MEDIA}.state") as mock_state, \
                  patch(f"{_MEDIA}._PILImage") as mock_pil, \
                  patch(f"{_MEDIA}._rate_limited", return_value=False), \
-                 patch("bot.handlers.generation._handle_pipeline_mode") as mock_pipeline, \
+                 patch("bot.handlers.generation._handle_agent_mode") as mock_agent, \
                  patch(f"{_MEDIA}.settings") as mock_settings:
                 mock_onboard.get_session.return_value = None
                 mock_img = MagicMock()
                 mock_pil.open.return_value.convert.return_value = mock_img
                 mock_state.has_pending.return_value = False
                 mock_state.get_style_profiles.return_value = {}
-                mock_settings.AGENT_MODE = "pipeline"
-                mock_settings.UNIFIED_BRAIN_ENABLED = False
-                mock_pipeline.return_value = None
+                mock_settings.AGENT_MODE = "agent"
+                mock_agent.return_value = None
 
                 update = _mock_update(caption="write a post about this")
                 ctx = _mock_context()
@@ -178,8 +177,8 @@ class TestBulkUploadBatching:
 
                 # Should NOT have batched
                 assert "_bulk_uploads" not in ctx.user_data or len(ctx.user_data.get("_bulk_uploads", [])) == 0
-                # Should have gone through pipeline
-                mock_pipeline.assert_called_once()
+                # Should have gone through agent
+                mock_agent.assert_called_once()
 
         asyncio.run(_run())
 

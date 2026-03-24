@@ -98,22 +98,21 @@ class TestDraftCallback:
         async def _run():
             with patch(f"{_DRAFT}._can_operate", return_value=True), \
                  patch(f"{_DRAFT}.state") as mock_state, \
-                 patch("bot.handlers.generation._handle_pipeline_mode") as mock_pipeline, \
+                 patch("bot.handlers.generation._handle_agent_mode") as mock_agent, \
                  patch(f"{_DRAFT}.settings") as mock_settings:
                 mock_state.get_pending.return_value = {
                     "original_request": "test topic",
                     "caption": "Old",
                 }
-                mock_settings.AGENT_MODE = "pipeline"
-                mock_settings.UNIFIED_BRAIN_ENABLED = False
-                mock_pipeline.return_value = None
+                mock_settings.AGENT_MODE = "agent"
+                mock_agent.return_value = None
 
                 update = _mock_callback_update("reroll")
                 await draft_callback(update, _mock_context())
 
                 mock_state.clear_pending.assert_called_once_with(user_id=123)
                 mock_state.clear_draft_history.assert_called_once_with(user_id=123)
-                mock_pipeline.assert_called_once()
+                mock_agent.assert_called_once()
 
         asyncio.run(_run())
 
