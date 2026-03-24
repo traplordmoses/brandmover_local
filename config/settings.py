@@ -242,6 +242,11 @@ PREF_EXTRACTION_ENABLED: bool = os.getenv("PREF_EXTRACTION_ENABLED", "true").low
 PREF_EXTRACTION_MIN_EVENTS: int = int(os.getenv("PREF_EXTRACTION_MIN_EVENTS", "3"))
 PREF_EXTRACTION_INTERVAL_HOURS: int = int(os.getenv("PREF_EXTRACTION_INTERVAL_HOURS", "2"))
 
+# ── Growth Engine ──
+# Tracks follower growth, manages target accounts for reply engagement,
+# and suggests growth threads when growth stalls.
+GROWTH_ENGINE_ENABLED: bool = os.getenv("GROWTH_ENGINE_ENABLED", "false").lower() in ("true", "1", "yes")
+
 # ── Timezone ──
 # IANA timezone name for interpreting user-provided times (e.g. "America/Chicago").
 # Used by schedule_queue.py to convert "3pm" into the correct UTC timestamp.
@@ -305,6 +310,16 @@ CONTEXT_FEED_ENABLED: bool = os.getenv("CONTEXT_FEED_ENABLED", "true").lower() i
 X_MENTIONS_ENABLED: bool = os.getenv("X_MENTIONS_ENABLED", "false").lower() in ("true", "1", "yes")
 X_MENTIONS_POLL_MINUTES: int = int(os.getenv("X_MENTIONS_POLL_MINUTES", "30"))
 EVENT_TRIGGER_ENABLED: bool = os.getenv("EVENT_TRIGGER_ENABLED", "true").lower() in ("true", "1", "yes")
+
+# ── X Growth Engine ──
+# Monitors target accounts, generates reply drafts, and tracks follower growth.
+# GROWTH_TARGET_ACCOUNTS: comma-separated X handles to monitor (without @).
+# GROWTH_REPLY_DAILY_LIMIT: max replies the engine can draft per day.
+# GROWTH_MONITOR_INTERVAL_MINUTES: how often to poll target timelines.
+GROWTH_ENGINE_ENABLED: bool = os.getenv("GROWTH_ENGINE_ENABLED", "false").lower() in ("true", "1", "yes")
+GROWTH_TARGET_ACCOUNTS: str = os.getenv("GROWTH_TARGET_ACCOUNTS", "")  # comma-separated usernames
+GROWTH_REPLY_DAILY_LIMIT: int = _safe_int("GROWTH_REPLY_DAILY_LIMIT", 20)
+GROWTH_MONITOR_INTERVAL_MINUTES: int = _safe_int("GROWTH_MONITOR_INTERVAL_MINUTES", 30)
 
 # ── Monitoring ──
 # Daily digest: summary of bot performance sent at DAILY_DIGEST_HOUR (UTC).

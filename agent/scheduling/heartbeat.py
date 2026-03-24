@@ -850,4 +850,37 @@ async def daily_maintenance(bot=None) -> None:
         except Exception as e:
             logger.debug("Maintenance: preference extraction failed: %s", e)
 
+    # 5. Growth engine — track followers and detect stalling growth
+    if settings.GROWTH_ENGINE_ENABLED:
+        try:
+            from agent import growth_engine
+            result = await growth_engine.track_follower_growth()
+            if result:
+                logger.info(
+                    "Maintenance: follower count recorded (current=%s, weekly_change=%s%%)",
+                    result.get("current"), result.get("pct_change"),
+                )
+            # If growth is stalling, suggest a growth thread
+            if growth_engine.is_growth_stalling():
+                logger.info("Maintenance: growth stalling (<1%% weekly) — suggesting growth thread")
+                if bot:
+                    try:
+                        stats = growth_engine.get_growth_stats(days=7)
+                        pct = stats.get("pct_change", 0)
+                        await bot.send_message(
+                            chat_id=settings.TELEGRAM_ALLOWED_USER_ID,
+                            text=(
+                                f"<b>Growth Alert</b>\n\n"
+                                f"Weekly follower growth is only {pct}%.\n"
+                                f"Suggestion: Create a growth thread to boost organic reach.\n\n"
+                                f"Try: send a message like <i>\"write a thread about [your topic]\"</i> "
+                                f"or use the agent's plan_growth_thread tool."
+                            ),
+                            parse_mode="HTML",
+                        )
+                    except Exception as send_err:
+                        logger.debug("Maintenance: growth alert notification failed: %s", send_err)
+        except Exception as e:
+            logger.debug("Maintenance: growth engine check failed: %s", e)
+
     logger.info("Daily maintenance complete")

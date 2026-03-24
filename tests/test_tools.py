@@ -59,6 +59,7 @@ class TestToolDefinitionsStructure:
         "verify_draft",
         "suggest_variations",
         "repurpose_content",
+        "plan_growth_thread",
     }
 
     def test_tool_count(self):

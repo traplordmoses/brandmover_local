@@ -13,6 +13,7 @@ from bot.handlers.media import *       # noqa: F401,F403
 from bot.handlers.admin import *       # noqa: F401,F403
 from bot.handlers.scheduling import *  # noqa: F401,F403
 from bot.handlers.debug import *       # noqa: F401,F403
+from bot.handlers.growth import *      # noqa: F401,F403
 
 # Private names used by tests and other internal callers.
 # (star-imports skip underscore-prefixed names unless __all__ is defined.)

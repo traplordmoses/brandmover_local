@@ -101,6 +101,14 @@ def create_bot() -> Application:
     app.add_handler(CommandHandler("code", handlers.code_command))
     app.add_handler(CommandHandler("design", handlers.design_command))
 
+    # Growth engine commands
+    app.add_handler(CommandHandler("growth", handlers.growth_command))
+    app.add_handler(CommandHandler("targets", handlers.targets_command))
+    app.add_handler(CommandHandler("target_add", handlers.target_add_command))
+    app.add_handler(CommandHandler("target_remove", handlers.target_remove_command))
+    app.add_handler(CommandHandler("replies", handlers.replies_command))
+    app.add_handler(CommandHandler("growth_report", handlers.growth_report_command))
+
     # Inline button callbacks (e.g. /generate approve/reject buttons)
     app.add_handler(CallbackQueryHandler(handlers.generate_callback, pattern=r"^gen_"))
 
@@ -112,6 +120,9 @@ def create_bot() -> Application:
 
     # Claude Code inline buttons (Reload/Diff/Revert)
     app.add_handler(CallbackQueryHandler(handlers.code_callback, pattern=r"^code_"))
+
+    # Growth engine inline buttons (Send/Skip/Edit reply)
+    app.add_handler(CallbackQueryHandler(handlers.growth_callback, pattern=r"^growth_"))
 
     # Voice and audio messages (transcribe → process as text)
     app.add_handler(

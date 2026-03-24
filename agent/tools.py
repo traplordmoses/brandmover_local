@@ -558,6 +558,41 @@ TOOL_DEFINITIONS = [
             "required": ["niche"],
         },
     },
+    # ── Growth threads ──
+    {
+        "name": "plan_growth_thread",
+        "description": (
+            "Plan a growth-optimized Twitter thread. Threads are the #1 organic growth "
+            "tool on X. This tool structures threads with proven growth hooks: bold opening "
+            "claim, evidence/story, twist/insight, and a 'follow for more' CTA. Use when "
+            "the user wants to create a thread or when the content would benefit from "
+            "multi-post depth."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "topic": {
+                    "type": "string",
+                    "description": "The thread topic",
+                },
+                "angle": {
+                    "type": "string",
+                    "description": "The unique angle or hot take",
+                },
+                "target_length": {
+                    "type": "integer",
+                    "description": "Number of posts (5-12 recommended for growth)",
+                    "default": 7,
+                },
+                "include_follow_cta": {
+                    "type": "boolean",
+                    "description": "Add 'follow for more' in final post",
+                    "default": True,
+                },
+            },
+            "required": ["topic"],
+        },
+    },
     # ── Video promo generation ──
     {
         "name": "generate_promo_video",
@@ -1662,6 +1697,88 @@ async def _handle_verify_draft(input_dict: dict, tracker: ResourceTracker) -> st
     return json.dumps(result)
 
 
+async def _handle_plan_growth_thread(
+    input_dict: dict, tracker: ResourceTracker
+) -> str:
+    """Plan a growth-optimized Twitter thread using Haiku for speed."""
+    from agent._client import get_anthropic
+
+    topic = _str_param(input_dict, "topic")
+    if not topic:
+        return json.dumps({"error": "No topic provided."})
+
+    angle = _str_param(input_dict, "angle", "")
+    target_length = input_dict.get("target_length", 7)
+    include_follow_cta = input_dict.get("include_follow_cta", True)
+
+    # Clamp target_length to 3-15
+    target_length = max(3, min(15, target_length))
+
+    # Load brand name from guidelines for the CTA
+    brand_name = settings.BRAND_NAME if hasattr(settings, "BRAND_NAME") else ""
+    brand_handle = f"@{brand_name}" if brand_name else "us"
+
+    angle_line = f"Angle/hot take: {angle}\n" if angle else ""
+    if include_follow_cta:
+        cta_instruction = (
+            f'"Follow {brand_handle} for more on {topic}" + optional link.'
+        )
+    else:
+        cta_instruction = "Strong closing statement summarizing the thread's value."
+
+    planning_prompt = (
+        f"Plan a growth-optimized Twitter/X thread on the topic: {topic}\n"
+        f"{angle_line}"
+        f"Target length: {target_length} posts\n\n"
+        f"Follow the proven growth thread formula:\n"
+        f"- Post 1 (HOOK): Bold claim, surprising stat, or provocative question. "
+        f"Must stop the scroll. Under 280 chars.\n"
+        f"- Post 2 (BRIDGE): 'Here's why...' or 'Let me explain...' — transition "
+        f"that promises value.\n"
+        f"- Posts 3 to {target_length - 2} (BODY): Evidence, stories, data points. "
+        f"Each post must be standalone-valuable. Each under 280 chars.\n"
+        f"- Post {target_length - 1} (PAYOFF): The twist or unexpected insight that "
+        f"rewards reading the whole thread.\n"
+        f"- Post {target_length} (CTA): {cta_instruction}\n\n"
+        f"Return valid JSON with this exact structure:\n"
+        f'{{"thread_plan": {{"topic": str, "hook_type": str, "estimated_reach_multiplier": str, '
+        f'"posts": [{{"post_number": int, "role": str, "text": str, "tip": str}}]}}}}\n\n'
+        f"Roles are: hook, bridge, body, payoff, cta\n"
+        f"Tips are brief notes on WHY this post works for growth."
+    )
+
+    client = get_anthropic()
+    tracker.log_api("anthropic:haiku (growth thread planner)")
+
+    try:
+        response = await client.messages.create(
+            model=settings.HAIKU_MODEL,
+            max_tokens=2000,
+            system="You are a Twitter growth strategist. Plan viral threads that maximize follower growth. Always return valid JSON.",
+            messages=[{"role": "user", "content": planning_prompt}],
+        )
+
+        text = response.content[0].text if response.content else ""
+
+        # Try to parse JSON from the response
+        try:
+            # Strip markdown fences if present
+            cleaned = text.strip()
+            if cleaned.startswith("```"):
+                cleaned = cleaned.split("\n", 1)[-1]
+                if cleaned.endswith("```"):
+                    cleaned = cleaned[:-3].strip()
+            plan = json.loads(cleaned)
+        except json.JSONDecodeError:
+            # Return the raw text if JSON parsing fails
+            plan = {"thread_plan": {"raw_text": text, "topic": topic}}
+
+        return json.dumps(plan, indent=2)
+    except Exception as e:
+        logger.error("Growth thread planning failed: %s", e)
+        return json.dumps({"error": f"Thread planning failed: {str(e)[:200]}"})
+
+
 # ---------------------------------------------------------------------------
 # Handler dispatch
 # ---------------------------------------------------------------------------
@@ -1687,6 +1804,7 @@ _HANDLERS = {
     "repurpose_content": _handle_repurpose_content,
     "verify_draft": _handle_verify_draft,
     "suggest_variations": _handle_suggest_variations,
+    "plan_growth_thread": _handle_plan_growth_thread,
 }
 
 
@@ -1761,6 +1879,7 @@ def tool_description(tool_name: str, tool_input: dict) -> str:
         "research_trends": f"Researching trends in {tool_input.get('niche', 'your niche')}...",
         "generate_promo_video": f"Generating promo video: {tool_input.get('title', '?')[:40]}...",
         "suggest_variations": "Suggesting creative variations...",
+        "plan_growth_thread": f"Planning growth thread on {tool_input.get('topic', 'topic')}...",
     }
     return descs.get(tool_name, f"Executing {tool_name}...")
 
