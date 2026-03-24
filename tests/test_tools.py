@@ -57,10 +57,11 @@ class TestToolDefinitionsStructure:
         "generate_promo_video",
         "verify_draft",
         "suggest_variations",
+        "repurpose_content",
     }
 
     def test_tool_count(self):
-        assert len(TOOL_DEFINITIONS) == 18
+        assert len(TOOL_DEFINITIONS) == len(self.EXPECTED_TOOL_NAMES)
 
     def test_all_expected_names_present(self):
         actual = set(_tool_names())

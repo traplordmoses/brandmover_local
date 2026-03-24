@@ -499,6 +499,40 @@ TOOL_DEFINITIONS = [
             "required": ["query"],
         },
     },
+    # ── Content repurposing ──
+    {
+        "name": "repurpose_content",
+        "description": (
+            "Take a high-performing past post and repurpose it into a different format. "
+            "E.g., turn a popular tweet into a thread, an image post into a carousel concept, "
+            "or a thread into a summary image post. Use when the user asks to 'repurpose', "
+            "'remix', or 'turn X into Y', or when you notice a past post had high engagement."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "source_caption": {
+                    "type": "string",
+                    "description": "The original post caption to repurpose",
+                },
+                "source_format": {
+                    "type": "string",
+                    "enum": ["single", "thread", "carousel"],
+                    "description": "Original format",
+                },
+                "target_format": {
+                    "type": "string",
+                    "enum": ["single", "thread", "carousel", "quote_card", "infographic_concept"],
+                    "description": "Desired output format",
+                },
+                "angle": {
+                    "type": "string",
+                    "description": "Optional: specific angle or twist for the repurposed version",
+                },
+            },
+            "required": ["source_caption", "target_format"],
+        },
+    },
     # ── Video promo generation ──
     {
         "name": "generate_promo_video",
@@ -1432,6 +1466,91 @@ async def _handle_suggest_variations(
     })
 
 
+async def _handle_repurpose_content(
+    input_dict: dict, tracker: ResourceTracker
+) -> str:
+    """Repurpose an existing post into a different format using Claude Haiku."""
+    from agent.model_fallback import call_with_fallback
+
+    source_caption = _str_param(input_dict, "source_caption")
+    if not source_caption:
+        return json.dumps({"error": "No source_caption provided"})
+
+    target_format = _str_param(input_dict, "target_format")
+    if not target_format:
+        return json.dumps({"error": "No target_format provided"})
+
+    source_format = _str_param(input_dict, "source_format", "single")
+    angle = _str_param(input_dict, "angle")
+
+    format_instructions = {
+        "single": "a single concise post (280 chars max for Twitter)",
+        "thread": "a multi-post thread (3-7 posts, each under 280 chars). Return as a JSON array of strings.",
+        "carousel": "a carousel concept with 3-8 slides. Return as a JSON array of {slide_number, heading, body, visual_note} objects.",
+        "quote_card": "a quote card with a punchy pull-quote (under 100 chars) and optional attribution. Return as {quote, attribution, context}.",
+        "infographic_concept": "an infographic concept with a title, 3-5 key data points or steps, and a visual description. Return as {title, points: [{label, detail}], visual_description}.",
+    }
+
+    format_desc = format_instructions.get(target_format, f"a {target_format} format post")
+
+    system_prompt = (
+        "You are a content repurposing specialist. Take an existing post and "
+        "transform it into a different format while preserving the core message "
+        "and brand voice. Return ONLY valid JSON, no markdown fences, no explanation."
+    )
+
+    user_msg = (
+        f"Original post ({source_format} format):\n"
+        f"---\n{source_caption}\n---\n\n"
+        f"Repurpose this into: {format_desc}\n"
+    )
+    if angle:
+        user_msg += f"Angle/twist: {angle}\n"
+    user_msg += (
+        "\nReturn a JSON object with:\n"
+        '- "format": the target format name\n'
+        '- "content": the repurposed content (structure depends on format)\n'
+        '- "rationale": one sentence explaining what you changed and why\n'
+    )
+
+    try:
+        response = await call_with_fallback(
+            messages=[{"role": "user", "content": user_msg}],
+            system=system_prompt,
+            max_tokens=2048,
+            primary_model="claude-haiku-4-5-20251001",
+        )
+
+        text = ""
+        for block in response.content:
+            if hasattr(block, "text"):
+                text += block.text
+
+        text = text.strip()
+        # Strip markdown fences if present
+        if text.startswith("```"):
+            text = text.split("\n", 1)[-1]
+        if text.endswith("```"):
+            text = text.rsplit("```", 1)[0]
+        text = text.strip()
+
+        result = json.loads(text)
+        tracker.log_api("repurpose_content")
+        return json.dumps(result)
+
+    except json.JSONDecodeError:
+        # Return the raw text if it's not valid JSON
+        tracker.log_api("repurpose_content")
+        return json.dumps({
+            "format": target_format,
+            "content": text,
+            "rationale": "Raw response (could not parse as JSON)",
+        })
+    except Exception as e:
+        logger.warning("Repurpose content failed: %s", e)
+        return json.dumps({"error": f"Repurpose failed: {e}"})
+
+
 async def _handle_verify_draft(input_dict: dict, tracker: ResourceTracker) -> str:
     """Run quality scoring + brand alignment on a draft before submission."""
     from agent.scoring import score_draft
@@ -1505,6 +1624,7 @@ _HANDLERS = {
     "delegate_task": _handle_delegate_task,
     "search_memory": _handle_search_memory,
     "generate_promo_video": _handle_generate_promo_video,
+    "repurpose_content": _handle_repurpose_content,
     "verify_draft": _handle_verify_draft,
     "suggest_variations": _handle_suggest_variations,
 }
