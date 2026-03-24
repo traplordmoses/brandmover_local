@@ -845,6 +845,14 @@ async def run_scheduler_loop(bot=None) -> None:
 
     while True:
         try:
+            # Always process user-scheduled queue (campaigns, /schedule posts)
+            schedule = scheduler.load_schedule()
+            global_config = schedule.get("global", {})
+            queued = await _process_scheduled_items(global_config, dry_run=False, bot=bot)
+            if queued:
+                logger.info("Scheduler: %d queued item(s) processed", queued)
+
+            # Then run heartbeat or cron for predefined slots
             if use_heartbeat:
                 from agent.heartbeat import heartbeat_tick
                 action_taken = await heartbeat_tick(bot=bot)
@@ -855,7 +863,7 @@ async def run_scheduler_loop(bot=None) -> None:
                 if drafts:
                     logger.info("Scheduler cycle: %d draft(s) generated", drafts)
         except Exception as e:
-            logger.error("Scheduler cycle error: %s", e)
+            logger.error("Scheduler cycle error: %s", e, exc_info=True)
 
         await asyncio.sleep(SCHEDULER_INTERVAL_SECONDS)
 
