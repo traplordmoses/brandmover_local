@@ -16,7 +16,11 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-_GUIDELINES_PATH = Path(__file__).resolve().parent.parent / "brand" / "guidelines.md"
+try:
+    from config.settings import BRAND_FOLDER as _brand_folder
+    _GUIDELINES_PATH = Path(_brand_folder) / "guidelines.md"
+except Exception:
+    _GUIDELINES_PATH = Path(__file__).resolve().parent.parent.parent / "brand" / "guidelines.md"
 
 # ---------------------------------------------------------------------------
 # Data model
