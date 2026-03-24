@@ -250,9 +250,13 @@ async def _do_approve(update: Update, context: ContextTypes.DEFAULT_TYPE, option
     except Exception as e:
         logger.debug("Session plan update failed in _do_approve: %s", e)
 
-    # --- Calendar auto-queue: when a content calendar is approved, queue all entries ---
+    # --- Auto-queue: calendars and campaigns get scheduled automatically ---
     draft_format = pending.get("format", "single")
-    if draft_format == "calendar":
+    original_request = pending.get("original_request", "").lower()
+    is_calendar = draft_format == "calendar" or pending.get("_calendar_path")
+    is_campaign = "campaign" in original_request or "schedule" in original_request or "content plan" in original_request
+
+    if is_calendar:
         queued_count = await _auto_queue_calendar(update, pending, user_id=user_id)
         if queued_count > 0:
             await update.message.reply_text(
@@ -263,7 +267,48 @@ async def _do_approve(update: Update, context: ContextTypes.DEFAULT_TYPE, option
             )
         else:
             await update.message.reply_text(
-                "Calendar approved but no posts could be queued (check dates/times).",
+                "Calendar approved but no posts could be queued (check dates/times).\n"
+                "Try: generate a new calendar with future dates.",
+                parse_mode="HTML",
+            )
+    elif is_campaign:
+        # Try to auto-schedule campaign posts
+        try:
+            from agent import campaigns
+            # Find the most recent campaign
+            all_campaigns = campaigns.list_campaigns()
+            if all_campaigns:
+                latest = all_campaigns[-1]
+                name = latest.get("name", "")
+                if name:
+                    result = campaigns.schedule_campaign_posts(name)
+                    scheduled = result.get("scheduled", 0)
+                    if scheduled > 0:
+                        await update.message.reply_text(
+                            f"Campaign approved! <b>{scheduled} posts auto-scheduled.</b>\n\n"
+                            f"The heartbeat will generate each one at the scheduled time.\n"
+                            f"Use /scheduled to see the queue.",
+                            parse_mode="HTML",
+                        )
+                    else:
+                        await update.message.reply_text(
+                            f"Campaign '{_esc(name)}' approved! Use <code>/campaign_schedule {_esc(name)}</code> to queue the posts.",
+                            parse_mode="HTML",
+                        )
+                else:
+                    await update.message.reply_text(
+                        "Approved! Use /campaign_schedule to queue the posts.",
+                        parse_mode="HTML",
+                    )
+            else:
+                await update.message.reply_text(
+                    "Approved! Want me to post this to X now, or schedule it for later?",
+                    parse_mode="HTML",
+                )
+        except Exception as e:
+            logger.warning("Campaign auto-schedule failed: %s", e)
+            await update.message.reply_text(
+                "Approved! Use /campaign_schedule to queue the posts.",
                 parse_mode="HTML",
             )
     else:
