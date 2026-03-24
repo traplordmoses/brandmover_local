@@ -12,6 +12,7 @@ import shlex
 import subprocess  # nosec B404 — mitigated by _OPENCLAW_ALLOWLIST + shlex + _UNSAFE_CHARS
 import tempfile
 import time as _time
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import httpx
@@ -647,6 +648,44 @@ TOOL_DEFINITIONS = [
                 },
             },
             "required": ["title", "conversation"],
+        },
+    },
+    # ── Campaign creation ──
+    {
+        "name": "create_campaign",
+        "description": (
+            "Create a multi-day content campaign with individual posts that will be auto-scheduled. "
+            "Use this when the user wants a content plan, campaign, or series of posts spread across days."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string", "description": "Short campaign name (kebab-case)"},
+                "brief": {"type": "string", "description": "Campaign brief/strategy"},
+                "posts": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "day": {"type": "integer", "description": "Day number (1-based)"},
+                            "time": {"type": "string", "description": "Time to post, e.g. '11:11am', '3:33pm'"},
+                            "caption": {"type": "string", "description": "The exact post copy"},
+                            "content_type": {"type": "string"},
+                            "image_prompt": {"type": "string", "description": "Image generation prompt, if needed"},
+                            "narrative_role": {
+                                "type": "string",
+                                "enum": ["hook", "buildup", "climax", "resolution", "cta"],
+                            },
+                            "emotional_tone": {
+                                "type": "string",
+                                "enum": ["curiosity", "excitement", "urgency", "trust", "celebration"],
+                            },
+                        },
+                        "required": ["day", "time", "caption"],
+                    },
+                },
+            },
+            "required": ["name", "posts"],
         },
     },
 ]
@@ -1526,6 +1565,169 @@ async def _handle_generate_promo_video(
         return json.dumps({"error": f"Video generation failed: {type(e).__name__}: {str(e)[:300]}"})
 
 
+async def _handle_create_campaign(
+    input_dict: dict, tracker: ResourceTracker
+) -> str:
+    """Create a multi-day campaign and immediately schedule all posts."""
+    from agent import campaigns
+    from agent.scheduling import schedule_queue
+
+    name = _str_param(input_dict, "name")
+    if not name:
+        return json.dumps({"error": "Campaign name is required."})
+
+    brief = _str_param(input_dict, "brief", "")
+    posts = input_dict.get("posts", [])
+    if not posts:
+        return json.dumps({"error": "At least one post is required."})
+
+    # Determine local timezone for converting day/time to UTC timestamps
+    local_tz = schedule_queue._get_local_tz()
+    today = datetime.now(local_tz).replace(hour=0, minute=0, second=0, microsecond=0)
+    start_date = today.strftime("%Y-%m-%d")
+
+    # Build campaign slots and schedule each post immediately
+    slots: list[dict] = []
+    schedule_results: list[dict] = []
+    errors: list[str] = []
+
+    for i, post in enumerate(posts):
+        day = post.get("day", i + 1)
+        time_str = post.get("time", "9:00am")
+        caption = post.get("caption", "")
+        content_type = post.get("content_type", "")
+        image_prompt = post.get("image_prompt", "")
+        narrative_role = post.get("narrative_role", "")
+        emotional_tone = post.get("emotional_tone", "")
+
+        # Parse the time string to get a UTC timestamp
+        # Calculate the target date first
+        target_date = today + timedelta(days=day - 1)
+        # Combine date with the parsed time
+        ts, label_str = schedule_queue.parse_time(time_str, now=target_date)
+        if ts is None:
+            # Fallback: try parsing as HH:MMam/pm manually
+            try:
+                time_str_clean = time_str.strip().lower()
+                parsed_dt = None
+                for fmt in ("%I:%M%p", "%I:%M %p", "%H:%M"):
+                    try:
+                        parsed_dt = datetime.strptime(time_str_clean, fmt)
+                        break
+                    except ValueError:
+                        continue
+                if parsed_dt:
+                    target_dt = target_date.replace(
+                        hour=parsed_dt.hour,
+                        minute=parsed_dt.minute,
+                        second=0,
+                        microsecond=0,
+                    )
+                    ts = target_dt.timestamp()
+                else:
+                    errors.append(f"Post {i+1} (day {day}): could not parse time '{time_str}', defaulting to 9:00am")
+                    target_dt = target_date.replace(hour=9, minute=0, second=0, microsecond=0)
+                    ts = target_dt.timestamp()
+            except Exception:
+                errors.append(f"Post {i+1} (day {day}): could not parse time '{time_str}', defaulting to 9:00am")
+                target_dt = target_date.replace(hour=9, minute=0, second=0, microsecond=0)
+                ts = target_dt.timestamp()
+
+        # Build the prompt for the scheduler
+        narrative_ctx = ""
+        if narrative_role or emotional_tone:
+            parts = []
+            if narrative_role:
+                parts.append(f"Role: {narrative_role}")
+            if emotional_tone:
+                parts.append(f"Tone: {emotional_tone}")
+            narrative_ctx = f"\nNarrative: {' | '.join(parts)}"
+
+        full_prompt = f"[CAMPAIGN: {name}]\n"
+        if brief:
+            full_prompt += f"Campaign brief: {brief}\n"
+        full_prompt += f"Post this exact copy (do not change the wording):\n\n{caption}"
+        if image_prompt:
+            full_prompt += f"\n\nImage prompt: {image_prompt}"
+        if narrative_ctx:
+            full_prompt += narrative_ctx
+
+        queue_label = f"{name} D{day}/{time_str}"
+        # Build pre-approved draft so scheduler posts directly
+        draft_dict = {"caption": caption, "_campaign_scheduled": True}
+        if content_type:
+            draft_dict["content_type"] = content_type
+        if image_prompt:
+            draft_dict["image_prompt"] = image_prompt
+
+        item = schedule_queue.add_scheduled(
+            prompt=full_prompt,
+            scheduled_utc=ts,
+            label=queue_label,
+            draft=draft_dict,
+        )
+
+        slot = {
+            "day": day,
+            "slot_label": time_str,
+            "copy": caption,
+            "content_type": content_type,
+            "narrative_role": narrative_role,
+            "emotional_tone": emotional_tone,
+            "media_note": image_prompt,
+            "status": "scheduled" if item else "pending",
+            "schedule_queue_id": item["id"] if item else "",
+        }
+        slots.append(slot)
+
+        if item:
+            target_dt_display = datetime.fromtimestamp(ts, tz=local_tz)
+            schedule_results.append({
+                "day": day,
+                "time": time_str,
+                "queue_id": item["id"],
+                "scheduled_for": target_dt_display.strftime("%Y-%m-%d %I:%M %p %Z"),
+                "caption_preview": caption[:60],
+            })
+        else:
+            errors.append(f"Post {i+1} (day {day}): duplicate detected, skipped")
+
+    # Create the campaign record
+    result = campaigns.create_campaign(
+        name=name,
+        brief=brief,
+        slots=slots,
+        start_date=start_date,
+    )
+
+    if not result.get("success"):
+        return json.dumps(result)
+
+    tracker.log_api(f"create_campaign:{name}")
+
+    # Build summary table
+    table_lines = ["| Day | Time | Caption | Status |", "|-----|------|---------|--------|"]
+    for sr in schedule_results:
+        cap = sr["caption_preview"]
+        table_lines.append(f"| {sr['day']} | {sr['time']} | {cap}... | Queued ({sr['queue_id']}) |")
+
+    summary = {
+        "status": "campaign_created",
+        "campaign_name": name,
+        "posts_scheduled": len(schedule_results),
+        "posts_total": len(posts),
+        "schedule": schedule_results,
+        "schedule_table": "\n".join(table_lines),
+        "errors": errors if errors else [],
+        "message": (
+            f"Campaign '{name}' created with {len(schedule_results)}/{len(posts)} posts "
+            f"immediately queued for auto-posting. No /approve needed. "
+            f"The scheduler will fire each post at the scheduled time."
+        ),
+    }
+    return json.dumps(summary, indent=2)
+
+
 async def _handle_suggest_variations(
     input_dict: dict, tracker: ResourceTracker
 ) -> str:
@@ -1805,6 +2007,7 @@ _HANDLERS = {
     "verify_draft": _handle_verify_draft,
     "suggest_variations": _handle_suggest_variations,
     "plan_growth_thread": _handle_plan_growth_thread,
+    "create_campaign": _handle_create_campaign,
 }
 
 
@@ -1880,6 +2083,7 @@ def tool_description(tool_name: str, tool_input: dict) -> str:
         "generate_promo_video": f"Generating promo video: {tool_input.get('title', '?')[:40]}...",
         "suggest_variations": "Suggesting creative variations...",
         "plan_growth_thread": f"Planning growth thread on {tool_input.get('topic', 'topic')}...",
+        "create_campaign": f"Creating campaign '{tool_input.get('name', '?')}' with {len(tool_input.get('posts', []))} posts...",
     }
     return descs.get(tool_name, f"Executing {tool_name}...")
 

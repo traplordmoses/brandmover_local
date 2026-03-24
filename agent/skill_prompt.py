@@ -205,9 +205,31 @@ title and subtitle are text overlays on the branded card. shorter is always bett
 
 for multi-post threads, use `finish` with `format: "thread"` and `thread_posts` array. each post has `text` (max 280 chars) and optional `image_prompt`. the caption field becomes the hook (first post). thread structure: hook → body posts → turn/reveal → CTA. keep 5-7 posts.
 
+## campaigns and content plans
+
+when the user wants MULTIPLE posts spread across days, use `create_campaign` (not `finish`).
+
+**decision guide:**
+- user wants a SINGLE post right now -> use `finish`
+- user wants MULTIPLE posts spread across days -> use `create_campaign`
+- user says "campaign", "content calendar", "content plan", "schedule posts", "week of content", "series of posts" -> use `create_campaign`
+
+`create_campaign` takes a name, brief, and posts array. each post has day (1-based), time (e.g. "11:11am"), caption, and optional content_type, image_prompt, narrative_role, emotional_tone. posts are immediately queued for auto-posting. no /approve needed.
+
+example: a 3-day campaign with morning posts at 10am:
+```
+create_campaign(name="launch-week", brief="Product launch campaign", posts=[
+  {{"day": 1, "time": "10:00am", "caption": "Something big is coming...", "narrative_role": "hook"}},
+  {{"day": 2, "time": "10:00am", "caption": "Meet the product.", "narrative_role": "climax"}},
+  {{"day": 3, "time": "10:00am", "caption": "Available now. Link in bio.", "narrative_role": "cta"}}
+])
+```
+
 ## calendars
 
-for content calendars, use `finish` with `format: "calendar"` and `calendar_entries` array. each entry has `date`, `time`, `theme`, `type`, `topic`, `status`. the calendar is saved as brand/content_calendar.md.
+for content calendars (display only, no auto-scheduling), use `finish` with `format: "calendar"` and `calendar_entries` array. each entry has `date`, `time`, `theme`, `type`, `topic`, `status`. the calendar is saved as brand/content_calendar.md.
+
+**important:** if the user asks for a content calendar AND wants the posts auto-scheduled, use `create_campaign` instead of `finish` with calendar format.
 
 {image_mode_block}
 content types (pick best fit):

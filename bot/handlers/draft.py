@@ -272,45 +272,54 @@ async def _do_approve(update: Update, context: ContextTypes.DEFAULT_TYPE, option
                 parse_mode="HTML",
             )
     elif is_campaign:
-        # Try to auto-schedule campaign posts
-        try:
-            from agent import campaigns
-            # Find the most recent campaign
-            all_campaigns = campaigns.list_campaigns()
-            if all_campaigns:
-                latest = all_campaigns[-1]
-                name = latest.get("name", "")
-                if name:
-                    result = campaigns.schedule_campaign_posts(name)
-                    scheduled = result.get("scheduled", 0)
-                    if scheduled > 0:
-                        await update.message.reply_text(
-                            f"Campaign approved! <b>{scheduled} posts auto-scheduled.</b>\n\n"
-                            f"The heartbeat will generate each one at the scheduled time.\n"
-                            f"Use /scheduled to see the queue.",
-                            parse_mode="HTML",
-                        )
+        # Check if the create_campaign tool already queued everything
+        if pending.get("_campaign_scheduled"):
+            await update.message.reply_text(
+                "Campaign approved! All posts were already queued by the campaign tool.\n\n"
+                "The scheduler will fire each post at the scheduled time.\n"
+                "Use /scheduled to see the queue.",
+                parse_mode="HTML",
+            )
+        else:
+            # Legacy path: try to auto-schedule campaign posts
+            try:
+                from agent import campaigns
+                # Find the most recent campaign
+                all_campaigns = campaigns.list_campaigns()
+                if all_campaigns:
+                    latest = all_campaigns[-1]
+                    name = latest.get("name", "")
+                    if name:
+                        result = campaigns.schedule_campaign_posts(name)
+                        scheduled = result.get("scheduled", 0)
+                        if scheduled > 0:
+                            await update.message.reply_text(
+                                f"Campaign approved! <b>{scheduled} posts auto-scheduled.</b>\n\n"
+                                f"The heartbeat will generate each one at the scheduled time.\n"
+                                f"Use /scheduled to see the queue.",
+                                parse_mode="HTML",
+                            )
+                        else:
+                            await update.message.reply_text(
+                                f"Campaign '{_esc(name)}' approved! Use <code>/campaign_schedule {_esc(name)}</code> to queue the posts.",
+                                parse_mode="HTML",
+                            )
                     else:
                         await update.message.reply_text(
-                            f"Campaign '{_esc(name)}' approved! Use <code>/campaign_schedule {_esc(name)}</code> to queue the posts.",
+                            "Approved! Use /campaign_schedule to queue the posts.",
                             parse_mode="HTML",
                         )
                 else:
                     await update.message.reply_text(
-                        "Approved! Use /campaign_schedule to queue the posts.",
+                        "Approved! Want me to post this to X now, or schedule it for later?",
                         parse_mode="HTML",
                     )
-            else:
+            except Exception as e:
+                logger.warning("Campaign auto-schedule failed: %s", e)
                 await update.message.reply_text(
-                    "Approved! Want me to post this to X now, or schedule it for later?",
+                    "Approved! Use /campaign_schedule to queue the posts.",
                     parse_mode="HTML",
                 )
-        except Exception as e:
-            logger.warning("Campaign auto-schedule failed: %s", e)
-            await update.message.reply_text(
-                "Approved! Use /campaign_schedule to queue the posts.",
-                parse_mode="HTML",
-            )
     else:
         await update.message.reply_text(
             "Approved! Want me to post this to X now, or schedule it for later?",

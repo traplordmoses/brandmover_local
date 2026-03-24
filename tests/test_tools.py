@@ -60,6 +60,7 @@ class TestToolDefinitionsStructure:
         "suggest_variations",
         "repurpose_content",
         "plan_growth_thread",
+        "create_campaign",
     }
 
     def test_tool_count(self):
@@ -802,3 +803,54 @@ class TestToolErrorHandling:
             result = _run(execute_tool("search_memory", {}, _make_tracker()))
             parsed = json.loads(result)
             assert "error" in parsed
+
+    def test_create_campaign_no_name(self):
+        result = _run(execute_tool("create_campaign", {"posts": [{"day": 1, "time": "9am", "caption": "hi"}]}, _make_tracker()))
+        parsed = json.loads(result)
+        assert "error" in parsed
+
+    def test_create_campaign_no_posts(self):
+        result = _run(execute_tool("create_campaign", {"name": "test"}, _make_tracker()))
+        parsed = json.loads(result)
+        assert "error" in parsed
+
+
+# ---------------------------------------------------------------------------
+# _handle_create_campaign
+# ---------------------------------------------------------------------------
+
+class TestHandleCreateCampaign:
+    @patch("agent.campaigns.create_campaign", return_value={"success": True, "campaign": {"name": "test-campaign"}, "message": "Created"})
+    @patch("agent.scheduling.schedule_queue.add_scheduled")
+    @patch("agent.scheduling.schedule_queue.parse_time", return_value=(1711300000.0, "2026-03-25 10:00 AM PDT"))
+    def test_basic_campaign_creation(self, mock_parse, mock_add, mock_create):
+        mock_add.return_value = {"id": "abc12345", "prompt": "test", "scheduled_utc": 1711300000.0, "status": "pending"}
+        tracker = _make_tracker()
+        result = _run(execute_tool("create_campaign", {
+            "name": "test-campaign",
+            "brief": "A test campaign",
+            "posts": [
+                {"day": 1, "time": "10:00am", "caption": "First post"},
+                {"day": 2, "time": "10:00am", "caption": "Second post"},
+            ],
+        }, tracker))
+        parsed = json.loads(result)
+        assert parsed["status"] == "campaign_created"
+        assert parsed["campaign_name"] == "test-campaign"
+        assert parsed["posts_scheduled"] == 2
+        assert "create_campaign:test-campaign" in tracker.apis_called
+
+    @patch("agent.campaigns.create_campaign", return_value={"success": True, "campaign": {"name": "dup-test"}, "message": "Created"})
+    @patch("agent.scheduling.schedule_queue.add_scheduled", return_value=None)
+    @patch("agent.scheduling.schedule_queue.parse_time", return_value=(1711300000.0, "2026-03-25 10:00 AM PDT"))
+    def test_duplicate_posts_skipped(self, mock_parse, mock_add, mock_create):
+        tracker = _make_tracker()
+        result = _run(execute_tool("create_campaign", {
+            "name": "dup-test",
+            "posts": [
+                {"day": 1, "time": "10:00am", "caption": "Duplicate post"},
+            ],
+        }, tracker))
+        parsed = json.loads(result)
+        assert parsed["posts_scheduled"] == 0
+        assert len(parsed["errors"]) > 0
