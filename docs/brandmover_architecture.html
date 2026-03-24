@@ -1,0 +1,1615 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>BrandMover — System Architecture v11</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=Syne:wght@400;600;700;800&display=swap');
+
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --orange: #FF8800;
+    --orange-dim: #FF880033;
+    --orange-glow: #FF880066;
+    --green: #A8FF00;
+    --green-dim: #A8FF0022;
+    --red: #FF4444;
+    --red-dim: #FF444422;
+    --blue: #4488FF;
+    --blue-dim: #4488FF22;
+    --purple: #AA44FF;
+    --purple-dim: #AA44FF22;
+    --teal: #00FFCC;
+    --teal-dim: #00FFCC22;
+    --yellow: #FFE000;
+    --yellow-dim: #FFE00022;
+    --pink: #FF44AA;
+    --pink-dim: #FF44AA22;
+    --white: #FFFFFF;
+    --muted: #666666;
+    --card: #111111;
+    --card2: #161616;
+    --border: #222222;
+    --bg: #080808;
+  }
+
+  body {
+    background: var(--bg);
+    color: var(--white);
+    font-family: 'Syne', sans-serif;
+    min-height: 100vh;
+    overflow-x: hidden;
+  }
+
+  body::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)' opacity='0.04'/%3E%3C/svg%3E");
+    pointer-events: none;
+    z-index: 0;
+  }
+
+  .wrap {
+    position: relative;
+    z-index: 1;
+    padding: 48px 32px 80px;
+    max-width: 1400px;
+    margin: 0 auto;
+  }
+
+  /* HEADER */
+  .header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    margin-bottom: 56px;
+    gap: 24px;
+    flex-wrap: wrap;
+  }
+  .header-left h1 {
+    font-size: 13px;
+    letter-spacing: 0.2em;
+    color: var(--orange);
+    font-family: 'Space Mono', monospace;
+    margin-bottom: 8px;
+  }
+  .header-left h2 { font-size: 36px; font-weight: 800; line-height: 1.1; }
+  .header-left h2 span { color: var(--orange); }
+  .version-badge {
+    background: var(--orange-dim);
+    border: 1px solid var(--orange);
+    color: var(--orange);
+    font-family: 'Space Mono', monospace;
+    font-size: 11px;
+    padding: 6px 14px;
+    border-radius: 4px;
+    margin-top: 4px;
+    display: inline-block;
+  }
+  .session-stats {
+    display: flex;
+    gap: 16px;
+    margin-top: 12px;
+    flex-wrap: wrap;
+  }
+  .stat-pill {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 6px 12px;
+    font-family: 'Space Mono', monospace;
+    font-size: 10px;
+  }
+  .stat-pill span { color: var(--orange); font-weight: 700; }
+
+  /* TABS */
+  .tabs {
+    display: flex;
+    gap: 4px;
+    margin-bottom: 40px;
+    border-bottom: 1px solid var(--border);
+    padding-bottom: 0;
+    flex-wrap: wrap;
+  }
+  .tab {
+    padding: 10px 20px;
+    font-size: 13px;
+    font-weight: 600;
+    letter-spacing: 0.05em;
+    cursor: pointer;
+    border-bottom: 2px solid transparent;
+    color: var(--muted);
+    transition: all 0.2s;
+    background: none;
+    border-top: none;
+    border-left: none;
+    border-right: none;
+    font-family: 'Syne', sans-serif;
+    margin-bottom: -1px;
+  }
+  .tab:hover { color: var(--white); }
+  .tab.active { color: var(--orange); border-bottom-color: var(--orange); }
+  .tab .tab-new {
+    display: inline-block;
+    font-family: 'Space Mono', monospace;
+    font-size: 8px;
+    padding: 1px 4px;
+    border-radius: 2px;
+    margin-left: 6px;
+    vertical-align: middle;
+    background: var(--green-dim);
+    color: var(--green);
+    border: 1px solid var(--green);
+  }
+
+  .panel { display: none; }
+  .panel.active { display: block; }
+
+  /* NODES */
+  .node {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 14px 12px;
+    width: 100%;
+    position: relative;
+    transition: transform 0.2s, border-color 0.2s, box-shadow 0.2s;
+    cursor: default;
+  }
+  .node:hover { transform: translateY(-2px); box-shadow: 0 8px 32px rgba(0,0,0,0.6); }
+  .node.orange { border-color: var(--orange); background: var(--card2); }
+  .node.orange:hover { box-shadow: 0 8px 32px var(--orange-glow); }
+  .node.green { border-color: var(--green); }
+  .node.green:hover { box-shadow: 0 8px 32px #A8FF0033; }
+  .node.blue { border-color: var(--blue); }
+  .node.blue:hover { box-shadow: 0 8px 32px #4488FF33; }
+  .node.purple { border-color: var(--purple); }
+  .node.purple:hover { box-shadow: 0 8px 32px #AA44FF33; }
+  .node.teal { border-color: var(--teal); }
+  .node.teal:hover { box-shadow: 0 8px 32px #00FFCC33; }
+  .node.yellow { border-color: var(--yellow); }
+  .node.yellow:hover { box-shadow: 0 8px 32px #FFE00033; }
+  .node.red { border-color: var(--red); }
+  .node.pink { border-color: var(--pink); }
+  .node.pink:hover { box-shadow: 0 8px 32px #FF44AA33; }
+
+  .node-icon { font-size: 18px; margin-bottom: 6px; display: block; }
+  .node-title { font-size: 12px; font-weight: 700; margin-bottom: 4px; line-height: 1.3; }
+  .node.orange .node-title { color: var(--orange); }
+  .node.green .node-title { color: var(--green); }
+  .node.blue .node-title { color: var(--blue); }
+  .node.purple .node-title { color: var(--purple); }
+  .node.teal .node-title { color: var(--teal); }
+  .node.yellow .node-title { color: var(--yellow); }
+  .node.red .node-title { color: var(--red); }
+  .node.pink .node-title { color: var(--pink); }
+  .node-body { font-size: 10px; color: var(--muted); line-height: 1.5; }
+
+  .node-tag {
+    display: inline-block;
+    margin-top: 8px;
+    padding: 2px 8px;
+    border-radius: 3px;
+    font-family: 'Space Mono', monospace;
+    font-size: 9px;
+    letter-spacing: 0.05em;
+  }
+  .tag-orange { background: var(--orange-dim); color: var(--orange); border: 1px solid var(--orange); }
+  .tag-green { background: var(--green-dim); color: var(--green); border: 1px solid var(--green); }
+  .tag-blue { background: var(--blue-dim); color: var(--blue); border: 1px solid var(--blue); }
+  .tag-purple { background: var(--purple-dim); color: var(--purple); border: 1px solid var(--purple); }
+  .tag-teal { background: var(--teal-dim); color: var(--teal); border: 1px solid var(--teal); }
+  .tag-yellow { background: var(--yellow-dim); color: var(--yellow); border: 1px solid var(--yellow); }
+  .tag-red { background: var(--red-dim); color: var(--red); border: 1px solid var(--red); }
+  .tag-pink { background: var(--pink-dim); color: var(--pink); border: 1px solid var(--pink); }
+  .tag-muted { background: #1a1a1a; color: var(--muted); border: 1px solid var(--border); }
+
+  .section-head {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 16px;
+    margin-top: 32px;
+  }
+  .section-head h3 { font-size: 14px; font-weight: 700; letter-spacing: 0.1em; color: var(--white); }
+  .section-line { flex: 1; height: 1px; background: var(--border); }
+  .section-badge { font-family: 'Space Mono', monospace; font-size: 9px; padding: 2px 8px; border-radius: 3px; }
+
+  /* AGENT LOOP ANIMATION */
+  @keyframes pulse-orange { 0%, 100% { box-shadow: 0 0 0 0 var(--orange-glow); } 50% { box-shadow: 0 0 20px 4px var(--orange-glow); } }
+  @keyframes flow-arrow { 0% { opacity: 0.3; } 50% { opacity: 1; } 100% { opacity: 0.3; } }
+  .pulse { animation: pulse-orange 3s infinite; }
+  .flow-arrow { animation: flow-arrow 2s infinite; }
+
+  /* HERO BLOCK */
+  .hero-block {
+    background: linear-gradient(135deg, #111111 0%, #1a1000 100%);
+    border: 2px solid var(--orange);
+    border-radius: 16px;
+    padding: 32px;
+    margin-bottom: 32px;
+    position: relative;
+    overflow: hidden;
+  }
+  .hero-block::before {
+    content: '';
+    position: absolute;
+    top: -50%;
+    right: -20%;
+    width: 400px;
+    height: 400px;
+    background: radial-gradient(circle, var(--orange-glow) 0%, transparent 70%);
+    pointer-events: none;
+    opacity: 0.15;
+  }
+
+  /* CHANGELOG */
+  .changelog-entry {
+    background: var(--card);
+    border-left: 3px solid var(--orange);
+    border-radius: 0 8px 8px 0;
+    padding: 16px 20px;
+    margin-bottom: 12px;
+    position: relative;
+  }
+  .changelog-entry::before {
+    content: '';
+    position: absolute;
+    left: -7px;
+    top: 20px;
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    background: var(--orange);
+    border: 2px solid var(--bg);
+  }
+  .changelog-entry.green { border-left-color: var(--green); }
+  .changelog-entry.green::before { background: var(--green); }
+  .changelog-entry.teal { border-left-color: var(--teal); }
+  .changelog-entry.teal::before { background: var(--teal); }
+  .changelog-entry.purple { border-left-color: var(--purple); }
+  .changelog-entry.purple::before { background: var(--purple); }
+  .changelog-entry.blue { border-left-color: var(--blue); }
+  .changelog-entry.blue::before { background: var(--blue); }
+  .changelog-entry.pink { border-left-color: var(--pink); }
+  .changelog-entry.pink::before { background: var(--pink); }
+  .changelog-entry.red { border-left-color: var(--red); }
+  .changelog-entry.red::before { background: var(--red); }
+
+  ::-webkit-scrollbar { width: 6px; height: 6px; }
+  ::-webkit-scrollbar-track { background: var(--bg); }
+  ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <!-- HEADER -->
+  <div class="header">
+    <div class="header-left">
+      <h1>BRANDMOVER LOCAL — SYSTEM ARCHITECTURE</h1>
+      <h2>Autonomous Brand<br>Content <span>Agent</span></h2>
+      <div class="session-stats">
+        <div class="stat-pill"><span>Creative Director</span> mode</div>
+        <div class="stat-pill"><span>7</span> sub-packages</div>
+        <div class="stat-pill"><span>21</span> agent tools</div>
+        <div class="stat-pill"><span>14</span> content types</div>
+        <div class="stat-pill" style="border-color:var(--blue);color:var(--blue);"><span>5</span> platforms</div>
+        <div class="stat-pill" style="border-color:var(--green);color:var(--green);"><span>quality gates</span></div>
+        <div class="stat-pill" style="border-color:var(--teal);color:var(--teal);"><span>self-improving</span></div>
+        <div class="stat-pill" style="border-color:var(--purple);color:var(--purple);"><span>1300+</span> tests</div>
+      </div>
+    </div>
+    <div>
+      <div class="version-badge">v11.0 — MAR 23 2026 — INTELLIGENCE OVERHAUL</div>
+      <div style="font-size:11px;color:var(--muted);margin-top:8px;font-family:'Space Mono',monospace;">7 sub-packages — 21 tools — 5 platforms — 1300+ tests — performance-driven</div>
+    </div>
+  </div>
+
+  <!-- TABS -->
+  <div class="tabs">
+    <button class="tab active" onclick="showTab('agent', event)">Agent Flow</button>
+    <button class="tab" onclick="showTab('quality', event)" style="color:var(--green);">Quality Gates <span class="tab-new" style="background:var(--green-dim);color:var(--green);border-color:var(--green);">NEW</span></button>
+    <button class="tab" onclick="showTab('skills', event)" style="color:var(--purple);">Skills & Intelligence</button>
+    <button class="tab" onclick="showTab('multibrand', event)" style="color:var(--pink);">Multi-Brand</button>
+    <button class="tab" onclick="showTab('templates', event)" style="color:var(--teal);">Templates</button>
+    <button class="tab" onclick="showTab('platforms', event)" style="color:var(--blue);">Platforms <span class="tab-new" style="background:var(--blue-dim);color:var(--blue);border-color:var(--blue);">5</span></button>
+    <button class="tab" onclick="showTab('learning', event)">Learning Loop</button>
+    <button class="tab" onclick="showTab('models', event)">Image Models</button>
+    <button class="tab" onclick="showTab('modules', event)">Modules <span class="tab-new">70+</span></button>
+    <button class="tab" onclick="showTab('security', event)" style="color:var(--red);">Security <span class="tab-new" style="background:var(--red-dim);color:var(--red);border-color:var(--red);">v10</span></button>
+    <button class="tab" onclick="showTab('setup', event)">Setup</button>
+    <button class="tab" onclick="showTab('changelog', event)" style="color:var(--yellow);">Changelog <span class="tab-new" style="background:var(--yellow-dim);color:var(--yellow);border-color:var(--yellow);">v1-v10</span></button>
+  </div>
+
+  <!-- ═══════════════════════════════════════════════════
+       AGENT FLOW TAB (DEFAULT)
+  ════════════════════════════════════════════════════ -->
+  <div id="panel-agent" class="panel active">
+
+    <!-- Hero -->
+    <div class="hero-block">
+      <div style="position:relative;z-index:1;">
+        <div style="font-family:'Space Mono',monospace;font-size:10px;color:var(--orange);letter-spacing:0.15em;margin-bottom:12px;">THE CORE — WHAT MAKES THIS BOT BRILLIANT</div>
+        <div style="font-size:24px;font-weight:800;margin-bottom:12px;">Creative Director Agent with Closed Learning Loop</div>
+        <div style="font-size:14px;color:var(--muted);line-height:1.8;max-width:800px;">Claude operates as a <strong style="color:var(--white)">creative director</strong> with <strong style="color:var(--white)">21 tools</strong>, thinking strategically about audience, emotion, and brand narrative. Publishes to <strong style="color:var(--blue)">5 platforms</strong> (X, Discord, LinkedIn, Instagram, Telegram). Every draft passes <strong style="color:var(--green)">6 quality gates</strong> with auto-retry on failure. Content mix <strong style="color:var(--teal)">adapts to real engagement data</strong> — learns optimal posting times, weights content types by performance, and searches past successes for each request. Campaign narratives follow story arcs. Skills auto-discovered from repeated workflows.</div>
+      </div>
+    </div>
+
+    <!-- The Loop Diagram -->
+    <div class="section-head">
+      <h3>THE AGENT LOOP</h3>
+      <div class="section-line"></div>
+      <div class="section-badge tag-orange">engine.py — max 15 turns — model fallback — event hooks</div>
+    </div>
+
+    <div style="display:grid;grid-template-columns:1fr 40px 1fr 40px 1fr 40px 1fr 40px 1fr;gap:8px;align-items:start;margin-bottom:32px;">
+
+      <!-- INPUT -->
+      <div>
+        <div style="font-family:'Space Mono',monospace;font-size:10px;letter-spacing:0.15em;color:var(--muted);padding-bottom:12px;text-align:center;border-bottom:1px solid var(--border);margin-bottom:12px;">01 — INPUT</div>
+        <div class="node orange pulse">
+          <span class="node-icon">&#x1F4AC;</span>
+          <div class="node-title">Natural Language</div>
+          <div class="node-body">"write a post about our new feature"<br>"make a meme about gas fees"<br>"create something for our launch"</div>
+          <span class="node-tag tag-orange">TEXT</span>
+        </div>
+        <div style="height:8px"></div>
+        <div class="node teal">
+          <span class="node-icon">&#x1F5BC;</span>
+          <div class="node-title">Photo Upload</div>
+          <div class="node-body">Reference image auto-routes to img2img or style profile</div>
+          <span class="node-tag tag-teal">PHOTO</span>
+        </div>
+        <div style="height:8px"></div>
+        <div class="node blue">
+          <span class="node-icon">&#x1F916;</span>
+          <div class="node-title">Auto-Poster</div>
+          <div class="node-body">Cron scheduler + heartbeat generates proactive content</div>
+          <span class="node-tag tag-blue">SCHEDULED</span>
+        </div>
+      </div>
+
+      <div style="display:flex;align-items:center;justify-content:center;padding-top:40px;color:var(--orange);font-size:18px;" class="flow-arrow">&rarr;</div>
+
+      <!-- CONTEXT ASSEMBLY -->
+      <div>
+        <div style="font-family:'Space Mono',monospace;font-size:10px;letter-spacing:0.15em;color:var(--muted);padding-bottom:12px;text-align:center;border-bottom:1px solid var(--border);margin-bottom:12px;">02 — CONTEXT ENGINE</div>
+        <div class="node purple">
+          <span class="node-icon">&#x1F9ED;</span>
+          <div class="node-title">Token-Budget Assembly</div>
+          <div class="node-body">Priority-ordered context blocks assembled within token budget. P0 always included, lower priorities truncated or dropped.</div>
+          <span class="node-tag tag-purple">context_engine.py</span>
+        </div>
+        <div style="height:8px"></div>
+        <div class="node blue">
+          <span class="node-icon">&#x1F4CB;</span>
+          <div class="node-title">Workspace Injection</div>
+          <div class="node-body">personality/system_prompt.md + memory.md + skills registry + learned preferences</div>
+          <span class="node-tag tag-blue">BRAND</span>
+        </div>
+      </div>
+
+      <div style="display:flex;align-items:center;justify-content:center;padding-top:40px;color:var(--orange);font-size:18px;" class="flow-arrow">&rarr;</div>
+
+      <!-- AGENT LOOP -->
+      <div>
+        <div style="font-family:'Space Mono',monospace;font-size:10px;letter-spacing:0.15em;color:var(--muted);padding-bottom:12px;text-align:center;border-bottom:1px solid var(--border);margin-bottom:12px;">03 — AGENT LOOP</div>
+        <div class="node orange" style="border-width:2px;">
+          <span class="node-icon">&#x1F9E0;</span>
+          <div class="node-title">Claude Sonnet 4.6</div>
+          <div class="node-body">Tool-use loop with model fallback chain. Auto-retry on 429/500/503. Sub-agents for research. Skills persist across sessions.</div>
+          <span class="node-tag tag-orange">AUTONOMOUS</span>
+        </div>
+        <div style="height:6px"></div>
+        <div style="text-align:center;color:var(--orange);font-size:14px;padding:4px 0;" class="flow-arrow">&updownarrow; calls tools &updownarrow;</div>
+        <div style="height:6px"></div>
+        <div style="background:var(--card);border:1px dashed var(--orange);border-radius:8px;padding:10px;text-align:center;">
+          <div style="font-size:10px;color:var(--orange);font-family:'Space Mono',monospace;">15 TOOLS AVAILABLE</div>
+          <div style="font-size:9px;color:var(--muted);margin-top:4px;">See tool grid below</div>
+        </div>
+      </div>
+
+      <div style="display:flex;align-items:center;justify-content:center;padding-top:40px;color:var(--orange);font-size:18px;" class="flow-arrow">&rarr;</div>
+
+      <!-- COMPOSITOR -->
+      <div>
+        <div style="font-family:'Space Mono',monospace;font-size:10px;letter-spacing:0.15em;color:var(--muted);padding-bottom:12px;text-align:center;border-bottom:1px solid var(--border);margin-bottom:12px;">04 — COMPOSE</div>
+        <div class="node orange">
+          <span class="node-icon">&#x1F3A8;</span>
+          <div class="node-title">PIL Compositor</div>
+          <div class="node-body">Brand overlay: logo, glow background, text, badge. 7 layout profiles.</div>
+          <span class="node-tag tag-orange">BRANDING</span>
+        </div>
+        <div style="height:8px"></div>
+        <div class="node teal">
+          <span class="node-icon">&#x1F4D0;</span>
+          <div class="node-title">Template System</div>
+          <div class="node-body">Deterministic PIL-rendered frames. No AI drift.</div>
+          <span class="node-tag tag-teal">TEMPLATES</span>
+        </div>
+      </div>
+
+      <div style="display:flex;align-items:center;justify-content:center;padding-top:40px;color:var(--orange);font-size:18px;" class="flow-arrow">&rarr;</div>
+
+      <!-- REVIEW + PUBLISH -->
+      <div>
+        <div style="font-family:'Space Mono',monospace;font-size:10px;letter-spacing:0.15em;color:var(--muted);padding-bottom:12px;text-align:center;border-bottom:1px solid var(--border);margin-bottom:12px;">05 — QUALITY + REVIEW</div>
+        <div class="node green">
+          <span class="node-icon">&#x1F6E1;</span>
+          <div class="node-title">4 Quality Gates</div>
+          <div class="node-body">Scoring (A-F) &rarr; Dedup check &rarr; Cost budget &rarr; Risk scan. All before user sees draft.</div>
+          <span class="node-tag tag-green">AUTO</span>
+        </div>
+        <div style="height:8px"></div>
+        <div class="node orange">
+          <span class="node-icon">&#x1F4E4;</span>
+          <div class="node-title">Draft Preview</div>
+          <div class="node-body">Caption + composed image + quality grade sent to Telegram.</div>
+        </div>
+        <div style="height:8px"></div>
+        <div class="node green">
+          <span class="node-icon">&#x2705;</span>
+          <div class="node-title">/approve</div>
+          <div class="node-body">Posts to X via channel abstraction. Logs transcript + fires hooks.</div>
+          <span class="node-tag tag-green">APPROVED</span>
+        </div>
+        <div style="height:8px"></div>
+        <div class="node red">
+          <span class="node-icon">&#x274C;</span>
+          <div class="node-title">/reject + feedback</div>
+          <div class="node-body">Re-runs agent with feedback. Temporal decay weights recent prefs higher.</div>
+          <span class="node-tag tag-red">REVISE</span>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- 15 TOOLS GRID -->
+    <div class="section-head">
+      <h3>15 AGENT TOOLS</h3>
+      <div class="section-line"></div>
+      <div class="section-badge tag-orange">Claude decides which to call and when</div>
+    </div>
+
+    <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:10px;margin:24px 0;">
+
+      <div class="node orange" style="text-align:center;padding:14px 10px;">
+        <span style="font-size:20px;margin-bottom:6px;display:block;">&#x1F4CB;</span>
+        <div style="font-size:10px;font-weight:700;color:var(--orange);margin-bottom:4px;font-family:'Space Mono',monospace;">read_brand_guidelines</div>
+        <div style="font-size:9px;color:var(--muted);line-height:1.4;">Guidelines + preferences + PDF refs</div>
+      </div>
+
+      <div class="node orange" style="text-align:center;padding:14px 10px;">
+        <span style="font-size:20px;margin-bottom:6px;display:block;">&#x1F5C2;</span>
+        <div style="font-size:10px;font-weight:700;color:var(--orange);margin-bottom:4px;font-family:'Space Mono',monospace;">read_references</div>
+        <div style="font-size:9px;color:var(--muted);line-height:1.4;">Reference images, style profiles, assets</div>
+      </div>
+
+      <div class="node green" style="text-align:center;padding:14px 10px;">
+        <span style="font-size:20px;margin-bottom:6px;display:block;">&#x1F5BC;</span>
+        <div style="font-size:10px;font-weight:700;color:var(--green);margin-bottom:4px;font-family:'Space Mono',monospace;">generate_image</div>
+        <div style="font-size:9px;color:var(--muted);line-height:1.4;">Smart model routing by content type</div>
+      </div>
+
+      <div class="node teal" style="text-align:center;padding:14px 10px;">
+        <span style="font-size:20px;margin-bottom:6px;display:block;">&#x1F504;</span>
+        <div style="font-size:10px;font-weight:700;color:var(--teal);margin-bottom:4px;font-family:'Space Mono',monospace;">img2img</div>
+        <div style="font-size:9px;color:var(--muted);line-height:1.4;">flux-kontext-pro reference consistency</div>
+      </div>
+
+      <div class="node blue" style="text-align:center;padding:14px 10px;">
+        <span style="font-size:20px;margin-bottom:6px;display:block;">&#x1F4AC;</span>
+        <div style="font-size:10px;font-weight:700;color:var(--blue);margin-bottom:4px;font-family:'Space Mono',monospace;">read_feedback_history</div>
+        <div style="font-size:9px;color:var(--muted);line-height:1.4;">Approvals, rejections, preferences</div>
+      </div>
+
+      <div class="node purple" style="text-align:center;padding:14px 10px;">
+        <span style="font-size:20px;margin-bottom:6px;display:block;">&#x1F3A8;</span>
+        <div style="font-size:10px;font-weight:700;color:var(--purple);margin-bottom:4px;font-family:'Space Mono',monospace;">check_figma_design</div>
+        <div style="font-size:9px;color:var(--muted);line-height:1.4;">Live colors + tokens from Figma API</div>
+      </div>
+
+      <div class="node purple" style="text-align:center;padding:14px 10px;">
+        <span style="font-size:20px;margin-bottom:6px;display:block;">&#x1F9E0;</span>
+        <div style="font-size:10px;font-weight:700;color:var(--purple);margin-bottom:4px;font-family:'Space Mono',monospace;">think</div>
+        <div style="font-size:9px;color:var(--muted);line-height:1.4;">Internal reasoning scratchpad</div>
+      </div>
+
+      <div class="node purple" style="text-align:center;padding:14px 10px;">
+        <span style="font-size:20px;margin-bottom:6px;display:block;">&#x2705;</span>
+        <div style="font-size:10px;font-weight:700;color:var(--purple);margin-bottom:4px;font-family:'Space Mono',monospace;">finish</div>
+        <div style="font-size:9px;color:var(--muted);line-height:1.4;">Signal loop completion with result</div>
+      </div>
+
+      <div class="node" style="text-align:center;padding:14px 10px;">
+        <span style="font-size:20px;margin-bottom:6px;display:block;">&#x1F4CA;</span>
+        <div style="font-size:10px;font-weight:700;color:var(--white);margin-bottom:4px;font-family:'Space Mono',monospace;">log_resource_usage</div>
+        <div style="font-size:9px;color:var(--muted);line-height:1.4;">Track which brand files were consulted</div>
+      </div>
+
+      <div class="node" style="text-align:center;padding:14px 10px;">
+        <span style="font-size:20px;margin-bottom:6px;display:block;">&#x26D3;</span>
+        <div style="font-size:10px;font-weight:700;color:var(--white);margin-bottom:4px;font-family:'Space Mono',monospace;">execute_openclaw_script</div>
+        <div style="font-size:9px;color:var(--muted);line-height:1.4;">Whitelisted on-chain scripts</div>
+      </div>
+
+      <!-- NEW v9 tools -->
+      <div class="node green" style="text-align:center;padding:14px 10px;border-width:2px;">
+        <span style="font-size:20px;margin-bottom:6px;display:block;">&#x1F4E6;</span>
+        <div style="font-size:10px;font-weight:700;color:var(--green);margin-bottom:4px;font-family:'Space Mono',monospace;">use_skill</div>
+        <div style="font-size:9px;color:var(--muted);line-height:1.4;">Load a saved skill's instructions + scripts</div>
+        <span class="node-tag tag-green" style="font-size:7px;">NEW v9</span>
+      </div>
+
+      <div class="node green" style="text-align:center;padding:14px 10px;border-width:2px;">
+        <span style="font-size:20px;margin-bottom:6px;display:block;">&#x1F527;</span>
+        <div style="font-size:10px;font-weight:700;color:var(--green);margin-bottom:4px;font-family:'Space Mono',monospace;">create_skill</div>
+        <div style="font-size:9px;color:var(--muted);line-height:1.4;">Save a new reusable capability</div>
+        <span class="node-tag tag-green" style="font-size:7px;">NEW v9</span>
+      </div>
+
+      <div class="node green" style="text-align:center;padding:14px 10px;border-width:2px;">
+        <span style="font-size:20px;margin-bottom:6px;display:block;">&#x1F4D1;</span>
+        <div style="font-size:10px;font-weight:700;color:var(--green);margin-bottom:4px;font-family:'Space Mono',monospace;">list_skills</div>
+        <div style="font-size:9px;color:var(--muted);line-height:1.4;">Browse available skill registry</div>
+        <span class="node-tag tag-green" style="font-size:7px;">NEW v9</span>
+      </div>
+
+      <div class="node pink" style="text-align:center;padding:14px 10px;border-width:2px;">
+        <span style="font-size:20px;margin-bottom:6px;display:block;">&#x1F916;</span>
+        <div style="font-size:10px;font-weight:700;color:var(--pink);margin-bottom:4px;font-family:'Space Mono',monospace;">delegate_task</div>
+        <div style="font-size:9px;color:var(--muted);line-height:1.4;">Spawn Haiku sub-agent for research</div>
+        <span class="node-tag tag-pink" style="font-size:7px;">NEW v9</span>
+      </div>
+
+      <div class="node pink" style="text-align:center;padding:14px 10px;border-width:2px;">
+        <span style="font-size:20px;margin-bottom:6px;display:block;">&#x1F50D;</span>
+        <div style="font-size:10px;font-weight:700;color:var(--pink);margin-bottom:4px;font-family:'Space Mono',monospace;">search_memory</div>
+        <div style="font-size:9px;color:var(--muted);line-height:1.4;">TF-IDF search over past generations</div>
+        <span class="node-tag tag-pink" style="font-size:7px;">NEW v9</span>
+      </div>
+
+    </div>
+
+    <!-- What makes it powerful -->
+    <div class="section-head">
+      <h3>WHY THIS IS POWERFUL</h3>
+      <div class="section-line"></div>
+    </div>
+
+    <div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:16px;margin-bottom:24px;">
+      <div style="background:var(--card);border:1px solid var(--orange);border-radius:8px;padding:20px;">
+        <div style="font-family:'Space Mono',monospace;font-size:11px;color:var(--orange);margin-bottom:8px;">NATURAL CONVERSATION</div>
+        <div style="font-size:12px;color:var(--muted);line-height:1.7;">No rigid commands. Say "write something about our launch" and the agent figures it all out. Refine by talking: "make it more casual."</div>
+      </div>
+      <div style="background:var(--card);border:1px solid var(--green);border-radius:8px;padding:20px;">
+        <div style="font-family:'Space Mono',monospace;font-size:11px;color:var(--green);margin-bottom:8px;">CUMULATIVELY SMARTER</div>
+        <div style="font-size:12px;color:var(--muted);line-height:1.7;">Skills persist across sessions. Semantic memory searches past work. Feedback has temporal decay so recent preferences matter most.</div>
+      </div>
+      <div style="background:var(--card);border:1px solid var(--purple);border-radius:8px;padding:20px;">
+        <div style="font-family:'Space Mono',monospace;font-size:11px;color:var(--purple);margin-bottom:8px;">SELF-EXTENDING</div>
+        <div style="font-size:12px;color:var(--muted);line-height:1.7;">The agent creates its own skills as SKILL.md files. Next session, it loads them on demand. No code changes needed — the agent writes its own capabilities.</div>
+      </div>
+      <div style="background:var(--card);border:1px solid var(--pink);border-radius:8px;padding:20px;">
+        <div style="font-family:'Space Mono',monospace;font-size:11px;color:var(--pink);margin-bottom:8px;">MULTI-BRAND</div>
+        <div style="font-size:12px;color:var(--muted);line-height:1.7;">Run multiple brands from one codebase. Each gets isolated state, personality, skills, and its own Telegram bot. Bootstrap in 60 seconds.</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════════════════════════════════
+       QUALITY GATES TAB (NEW v10)
+  ════════════════════════════════════════════════════ -->
+  <div id="panel-quality" class="panel">
+
+    <div class="hero-block" style="border-color:var(--green);">
+      <div style="position:relative;z-index:1;">
+        <div style="font-family:'Space Mono',monospace;font-size:10px;color:var(--green);letter-spacing:0.15em;margin-bottom:12px;">NEW IN v10 — INSPIRED BY PROMPTFOO + AGENCY-AGENTS</div>
+        <div style="font-size:24px;font-weight:800;margin-bottom:12px;">Every Draft Proves It's Ready</div>
+        <div style="font-size:14px;color:var(--muted);line-height:1.8;max-width:800px;">Four automated quality gates run on every draft before the user sees it. <strong style="color:var(--green)">Weighted scoring</strong> grades content A-F across 6 dimensions. <strong style="color:var(--teal)">Semantic dedup</strong> catches repetitive posts. <strong style="color:var(--blue)">Cost tracking</strong> enforces a daily budget. <strong style="color:var(--red)">Risk scoring</strong> flags unsafe content across 5 categories. Plus a default-FAIL quality gate and 7-dimension brand compliance audit.</div>
+      </div>
+    </div>
+
+    <!-- Gate Pipeline -->
+    <div class="section-head">
+      <h3>QUALITY PIPELINE</h3>
+      <div class="section-line"></div>
+      <div class="section-badge tag-green">engine.py — runs after every draft generation</div>
+    </div>
+
+    <div style="display:grid;grid-template-columns:1fr 40px 1fr 40px 1fr 40px 1fr;gap:8px;align-items:start;margin-bottom:32px;">
+      <div class="node green" style="text-align:center;padding:20px;">
+        <span class="node-icon">&#x1F4CA;</span>
+        <div class="node-title">1. Weighted Scoring</div>
+        <div class="node-body">6 assertions with weights. Score 0-100. Grade A-F. Threshold: 60 (C).</div>
+        <span class="node-tag tag-green">scoring.py</span>
+      </div>
+      <div style="display:flex;align-items:center;justify-content:center;color:var(--green);font-size:18px;">&rarr;</div>
+      <div class="node teal" style="text-align:center;padding:20px;">
+        <span class="node-icon">&#x1F50D;</span>
+        <div class="node-title">2. Semantic Dedup</div>
+        <div class="node-body">TF-IDF cosine similarity vs last 20 posts. Threshold: 0.75.</div>
+        <span class="node-tag tag-teal">dedup.py</span>
+      </div>
+      <div style="display:flex;align-items:center;justify-content:center;color:var(--green);font-size:18px;">&rarr;</div>
+      <div class="node blue" style="text-align:center;padding:20px;">
+        <span class="node-icon">&#x1F4B0;</span>
+        <div class="node-title">3. Cost Budget</div>
+        <div class="node-body">Daily spend tracking. Default $5/day. Configurable via env.</div>
+        <span class="node-tag tag-blue">cost_gate.py</span>
+      </div>
+      <div style="display:flex;align-items:center;justify-content:center;color:var(--green);font-size:18px;">&rarr;</div>
+      <div class="node red" style="text-align:center;padding:20px;">
+        <span class="node-icon">&#x26A0;</span>
+        <div class="node-title">4. Risk Scoring</div>
+        <div class="node-body">5 categories: profanity, controversial, financial, spam, competitors.</div>
+        <span class="node-tag tag-red">risk_score.py</span>
+      </div>
+    </div>
+
+    <!-- Scoring Assertions -->
+    <div class="section-head">
+      <h3>WEIGHTED ASSERTIONS — scoring.py</h3>
+      <div class="section-line"></div>
+      <div class="section-badge tag-green">6 assertions — composable — customizable weights</div>
+    </div>
+
+    <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:32px;">
+      <div style="background:var(--card);border:1px solid var(--green);border-radius:8px;padding:16px;">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+          <div style="font-family:'Space Mono',monospace;font-size:10px;color:var(--green);">caption_quality</div>
+          <div style="font-family:'Space Mono',monospace;font-size:10px;color:var(--muted);">w: 0.25</div>
+        </div>
+        <div style="font-size:11px;color:var(--muted);line-height:1.6;">Sweet spot 80-200 chars = 1.0. Too short (&lt;30) or too long (&gt;280) = 0.0. Linear scale between.</div>
+      </div>
+      <div style="background:var(--card);border:1px solid var(--green);border-radius:8px;padding:16px;">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+          <div style="font-family:'Space Mono',monospace;font-size:10px;color:var(--green);">no_ai_language</div>
+          <div style="font-family:'Space Mono',monospace;font-size:10px;color:var(--muted);">w: 0.20</div>
+        </div>
+        <div style="font-size:11px;color:var(--muted);line-height:1.6;">Detects "revolutionize", "game-changing", "leverage", etc. 1.0 if clean, 0.0 if &gt;3 AI words.</div>
+      </div>
+      <div style="background:var(--card);border:1px solid var(--green);border-radius:8px;padding:16px;">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+          <div style="font-family:'Space Mono',monospace;font-size:10px;color:var(--green);">image_prompt_depth</div>
+          <div style="font-family:'Space Mono',monospace;font-size:10px;color:var(--muted);">w: 0.20</div>
+        </div>
+        <div style="font-size:11px;color:var(--muted);line-height:1.6;">Rewards detailed image prompts. &gt;100 chars = 1.0. &lt;20 chars = 0.0. Linear scale between.</div>
+      </div>
+      <div style="background:var(--card);border:1px solid var(--green);border-radius:8px;padding:16px;">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+          <div style="font-family:'Space Mono',monospace;font-size:10px;color:var(--green);">has_content_type</div>
+          <div style="font-family:'Space Mono',monospace;font-size:10px;color:var(--muted);">w: 0.15</div>
+        </div>
+        <div style="font-size:11px;color:var(--muted);line-height:1.6;">1.0 if valid content type from canonical list. 0.5 if any type set. 0.0 if missing.</div>
+      </div>
+      <div style="background:var(--card);border:1px solid var(--green);border-radius:8px;padding:16px;">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+          <div style="font-family:'Space Mono',monospace;font-size:10px;color:var(--green);">hashtag_free</div>
+          <div style="font-family:'Space Mono',monospace;font-size:10px;color:var(--muted);">w: 0.10</div>
+        </div>
+        <div style="font-size:11px;color:var(--muted);line-height:1.6;">Zero tolerance for hashtags. 1.0 if clean, 0.0 if any found.</div>
+      </div>
+      <div style="background:var(--card);border:1px solid var(--green);border-radius:8px;padding:16px;">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+          <div style="font-family:'Space Mono',monospace;font-size:10px;color:var(--green);">emoji_restraint</div>
+          <div style="font-family:'Space Mono',monospace;font-size:10px;color:var(--muted);">w: 0.10</div>
+        </div>
+        <div style="font-size:11px;color:var(--muted);line-height:1.6;">Max 1 emoji. 1.0 for 0-1, 0.5 for 2, 0.0 for &gt;2.</div>
+      </div>
+    </div>
+
+    <!-- Other gates detail -->
+    <div class="section-head">
+      <h3>ADDITIONAL GATES</h3>
+      <div class="section-line"></div>
+    </div>
+
+    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;margin-bottom:32px;">
+      <div style="background:var(--card);border:1px solid var(--orange);border-radius:8px;padding:20px;">
+        <div style="font-family:'Space Mono',monospace;font-size:11px;color:var(--orange);margin-bottom:8px;">DEFAULT-FAIL QUALITY GATE — self_review.py</div>
+        <div style="font-size:12px;color:var(--muted);line-height:1.7;">6-check binary pass/fail: no hashtags (auto-fix), no AI words, caption length (10-280), max 1 emoji, image prompt exists (&gt;20 chars), valid content type. ALL must pass.</div>
+      </div>
+      <div style="background:var(--card);border:1px solid var(--purple);border-radius:8px;padding:20px;">
+        <div style="font-family:'Space Mono',monospace;font-size:11px;color:var(--purple);margin-bottom:8px;">BRAND GUARDIAN — brand_check.py</div>
+        <div style="font-size:12px;color:var(--muted);line-height:1.7;">7-dimension compliance audit via Claude Vision: colors, typography, visual style, brand elements, layout, voice &amp; tone, emotional alignment. Default verdict: FAIL.</div>
+      </div>
+      <div style="background:var(--card);border:1px solid var(--teal);border-radius:8px;padding:20px;">
+        <div style="font-family:'Space Mono',monospace;font-size:11px;color:var(--teal);margin-bottom:8px;">CAMPAIGN RUNBOOKS — campaigns.py</div>
+        <div style="font-size:12px;color:var(--muted);line-height:1.7;">Multi-day content campaigns with daily slots, content mix enforcement (weighted distribution), progress tracking, KPIs, and auto-completion detection.</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════════════════════════════════
+       SKILLS & INTELLIGENCE TAB (NEW v9)
+  ════════════════════════════════════════════════════ -->
+  <div id="panel-skills" class="panel">
+
+    <div class="hero-block" style="border-color:var(--purple);">
+      <div style="position:relative;z-index:1;">
+        <div style="font-family:'Space Mono',monospace;font-size:10px;color:var(--purple);letter-spacing:0.15em;margin-bottom:12px;">NEW IN v9 — INSPIRED BY OPENCLAW</div>
+        <div style="font-size:24px;font-weight:800;margin-bottom:12px;">The Agent Gets Smarter Over Time</div>
+        <div style="font-size:14px;color:var(--muted);line-height:1.8;max-width:800px;">Six new intelligence subsystems work together: <strong style="color:var(--green)">persistent skills</strong> the agent creates and reuses, <strong style="color:var(--pink)">semantic memory</strong> over past generations, <strong style="color:var(--purple)">sub-agent delegation</strong> for research, <strong style="color:var(--blue)">token-budget context assembly</strong>, <strong style="color:var(--teal)">event hooks</strong> for decoupled side effects, and <strong style="color:var(--orange)">model fallback chains</strong> for reliability.</div>
+      </div>
+    </div>
+
+    <!-- Skills System -->
+    <div class="section-head">
+      <h3>PERSISTENT SKILLS SYSTEM</h3>
+      <div class="section-line"></div>
+      <div class="section-badge tag-green">skills.py — SKILL.md + scripts — agent-created</div>
+    </div>
+
+    <div style="display:grid;grid-template-columns:1fr 40px 1fr 40px 1fr;gap:8px;align-items:center;margin-bottom:32px;">
+      <div class="node green" style="text-align:center;padding:20px;">
+        <span class="node-icon">&#x1F4A1;</span>
+        <div class="node-title">Agent Creates Skill</div>
+        <div class="node-body">create_skill tool writes SKILL.md with instructions + optional Python scripts. Path traversal prevention + 100KB size limit.</div>
+      </div>
+      <div style="text-align:center;color:var(--green);font-size:20px;">&rarr;</div>
+      <div class="node green" style="text-align:center;padding:20px;">
+        <span class="node-icon">&#x1F4C1;</span>
+        <div class="node-title">Stored in brand/skills/</div>
+        <div class="node-body">Each skill gets its own directory: SKILL.md + scripts/ folder. REGISTRY.json indexes all skills with name + description.</div>
+      </div>
+      <div style="text-align:center;color:var(--green);font-size:20px;">&rarr;</div>
+      <div class="node green" style="text-align:center;padding:20px;">
+        <span class="node-icon">&#x267B;</span>
+        <div class="node-title">Reused Next Session</div>
+        <div class="node-body">Skill names + descriptions injected in system prompt. Agent calls use_skill to load full instructions on demand. Progressive loading saves tokens.</div>
+      </div>
+    </div>
+
+    <!-- Semantic Memory -->
+    <div class="section-head">
+      <h3>SEMANTIC MEMORY</h3>
+      <div class="section-line"></div>
+      <div class="section-badge tag-pink">memory.py — TF-IDF — 30-day half-life</div>
+    </div>
+
+    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;margin-bottom:32px;">
+      <div style="background:var(--card);border:1px solid var(--pink);border-radius:8px;padding:16px;">
+        <div style="font-family:'Space Mono',monospace;font-size:10px;color:var(--pink);margin-bottom:8px;">SEARCH</div>
+        <div style="font-size:11px;color:var(--muted);line-height:1.8;">TF-IDF keyword similarity over generation_history.json. No external embedding models needed — zero dependencies.</div>
+      </div>
+      <div style="background:var(--card);border:1px solid var(--pink);border-radius:8px;padding:16px;">
+        <div style="font-family:'Space Mono',monospace;font-size:10px;color:var(--pink);margin-bottom:8px;">TEMPORAL DECAY</div>
+        <div style="font-size:11px;color:var(--muted);line-height:1.8;">30-day half-life. Entries from 30 days ago score 50% of a fresh entry. Approved entries get 1.5x boost — the system remembers what worked.</div>
+      </div>
+      <div style="background:var(--card);border:1px solid var(--pink);border-radius:8px;padding:16px;">
+        <div style="font-family:'Space Mono',monospace;font-size:10px;color:var(--pink);margin-bottom:8px;">APPROVED EXAMPLES</div>
+        <div style="font-size:11px;color:var(--muted);line-height:1.8;">get_approved_examples() returns recent successes by content type. Gives the agent concrete examples of past wins to build on.</div>
+      </div>
+    </div>
+
+    <!-- Sub-agents, Context Engine, Hooks, Fallback -->
+    <div class="section-head">
+      <h3>INTELLIGENCE SUBSYSTEMS</h3>
+      <div class="section-line"></div>
+    </div>
+
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:32px;">
+      <div style="background:var(--card);border:1px solid var(--purple);border-radius:8px;padding:20px;">
+        <div style="font-family:'Space Mono',monospace;font-size:11px;color:var(--purple);margin-bottom:8px;">SUBAGENT DELEGATION — subagent.py</div>
+        <div style="font-size:12px;color:var(--muted);line-height:1.7;">Main agent delegates research tasks to lightweight Haiku sub-agents. Sub-agents get 6 tools (read-only) and max 5 turns. Faster, cheaper, parallel.</div>
+      </div>
+      <div style="background:var(--card);border:1px solid var(--blue);border-radius:8px;padding:20px;">
+        <div style="font-family:'Space Mono',monospace;font-size:11px;color:var(--blue);margin-bottom:8px;">TOKEN-BUDGET CONTEXT — context_engine.py</div>
+        <div style="font-size:12px;color:var(--muted);line-height:1.7;">Priority-ordered ContextBlocks assembled within a token budget. Priority 0 always included. Lower priorities truncated or dropped. No more token overflow.</div>
+      </div>
+      <div style="background:var(--card);border:1px solid var(--teal);border-radius:8px;padding:20px;">
+        <div style="font-family:'Space Mono',monospace;font-size:11px;color:var(--teal);margin-bottom:8px;">EVENT HOOKS — hooks.py</div>
+        <div style="font-size:12px;color:var(--muted);line-height:1.7;">Async pub/sub system. Events: draft:generated, draft:approved, draft:rejected, post:published. Handlers fire-and-forget — errors never propagate to core logic. Payloads copied between handlers.</div>
+      </div>
+      <div style="background:var(--card);border:1px solid var(--orange);border-radius:8px;padding:20px;">
+        <div style="font-family:'Space Mono',monospace;font-size:11px;color:var(--orange);margin-bottom:8px;">MODEL FALLBACK — model_fallback.py</div>
+        <div style="font-size:12px;color:var(--muted);line-height:1.7;">Auto-retry on retriable HTTP codes (429, 500, 502, 503, 529). Configurable fallback chain: Sonnet &rarr; Haiku. Never fails silently — always tries the next model.</div>
+      </div>
+    </div>
+
+    <!-- Session Transcripts + Channels -->
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:24px;">
+      <div style="background:var(--card);border:1px solid var(--border);border-radius:8px;padding:20px;">
+        <div style="font-family:'Space Mono',monospace;font-size:11px;color:var(--white);margin-bottom:8px;">SESSION TRANSCRIPTS — transcript.py</div>
+        <div style="font-size:12px;color:var(--muted);line-height:1.7;">JSONL per-user logs: every message, tool call, draft action, publish event. Path traversal prevention (user IDs forced to int). Full debugging + analytics.</div>
+      </div>
+      <div style="background:var(--card);border:1px solid var(--border);border-radius:8px;padding:20px;">
+        <div style="font-family:'Space Mono',monospace;font-size:11px;color:var(--white);margin-bottom:8px;">CHANNEL ABSTRACTION — channels/</div>
+        <div style="font-size:12px;color:var(--muted);line-height:1.7;">Normalized MessageEnvelope with Channel ABC. Twitter adapter wraps existing publisher. Pluggable registry — add Discord, LinkedIn, etc. without touching core logic.</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════════════════════════════════
+       MULTI-BRAND TAB (NEW v9)
+  ════════════════════════════════════════════════════ -->
+  <div id="panel-multibrand" class="panel">
+
+    <div class="hero-block" style="border-color:var(--pink);">
+      <div style="position:relative;z-index:1;">
+        <div style="font-family:'Space Mono',monospace;font-size:10px;color:var(--pink);letter-spacing:0.15em;margin-bottom:12px;">NEW IN v9 — RUN MULTIPLE BRANDS FROM ONE CODEBASE</div>
+        <div style="font-size:24px;font-weight:800;margin-bottom:12px;">Multi-Brand Isolation</div>
+        <div style="font-size:14px;color:var(--muted);line-height:1.8;max-width:800px;">Each brand gets its own Telegram bot, X/Twitter account, guidelines, personality, skills, and runtime state. All running from the same codebase. Bootstrap a new brand in 60 seconds with one script.</div>
+      </div>
+    </div>
+
+    <div class="section-head">
+      <h3>SETUP FLOW</h3>
+      <div class="section-line"></div>
+      <div class="section-badge tag-pink">scripts/new_brand.sh + scripts/launch_brand.sh</div>
+    </div>
+
+    <div style="display:grid;grid-template-columns:1fr 40px 1fr 40px 1fr 40px 1fr;gap:8px;align-items:center;margin-bottom:32px;">
+      <div class="node pink" style="text-align:center;padding:20px;">
+        <span class="node-icon">&#x1F3D7;</span>
+        <div class="node-title">1. Bootstrap</div>
+        <div class="node-body" style="font-family:'Space Mono',monospace;">./scripts/new_brand.sh mybrand</div>
+        <div class="node-body" style="margin-top:6px;">Creates .env.mybrand, brand_mybrand/, state_mybrand/</div>
+      </div>
+      <div style="text-align:center;color:var(--pink);font-size:20px;">&rarr;</div>
+      <div class="node pink" style="text-align:center;padding:20px;">
+        <span class="node-icon">&#x2699;</span>
+        <div class="node-title">2. Configure</div>
+        <div class="node-body">Fill in API keys in .env.mybrand. Write guidelines. Customize personality.</div>
+      </div>
+      <div style="text-align:center;color:var(--pink);font-size:20px;">&rarr;</div>
+      <div class="node pink" style="text-align:center;padding:20px;">
+        <span class="node-icon">&#x1F680;</span>
+        <div class="node-title">3. Launch</div>
+        <div class="node-body" style="font-family:'Space Mono',monospace;">./scripts/launch_brand.sh mybrand</div>
+        <div class="node-body" style="margin-top:6px;">Runs in separate terminal alongside main brand</div>
+      </div>
+      <div style="text-align:center;color:var(--pink);font-size:20px;">&rarr;</div>
+      <div class="node green" style="text-align:center;padding:20px;">
+        <span class="node-icon">&#x2705;</span>
+        <div class="node-title">4. Isolated</div>
+        <div class="node-body">Different bot, different state, different personality, different skills. Completely independent.</div>
+      </div>
+    </div>
+
+    <div class="section-head">
+      <h3>ISOLATION ARCHITECTURE</h3>
+      <div class="section-line"></div>
+    </div>
+
+    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;margin-bottom:32px;">
+      <div style="background:var(--card);border:1px solid var(--pink);border-radius:8px;padding:16px;">
+        <div style="font-family:'Space Mono',monospace;font-size:10px;color:var(--pink);margin-bottom:8px;">ENV OVERRIDE</div>
+        <div style="font-size:11px;color:var(--muted);line-height:1.8;">BRANDMOVER_ENV_FILE env var tells settings.py which .env to load. Each brand has its own API keys, Telegram bot token, and X credentials.</div>
+      </div>
+      <div style="background:var(--card);border:1px solid var(--pink);border-radius:8px;padding:16px;">
+        <div style="font-family:'Space Mono',monospace;font-size:10px;color:var(--pink);margin-bottom:8px;">CENTRALIZED PATHS</div>
+        <div style="font-size:11px;color:var(--muted);line-height:1.8;">agent/paths.py defines STATE_DIR and BRAND_DIR from settings. Every module imports from paths.py — no hardcoded paths anywhere.</div>
+      </div>
+      <div style="background:var(--card);border:1px solid var(--pink);border-radius:8px;padding:16px;">
+        <div style="font-family:'Space Mono',monospace;font-size:10px;color:var(--pink);margin-bottom:8px;">STATE ISOLATION</div>
+        <div style="font-size:11px;color:var(--muted);line-height:1.8;">STATE_FOLDER setting isolates all runtime state: generation history, feedback, transcripts, drafts. No cross-contamination between brands.</div>
+      </div>
+    </div>
+
+    <!-- What each brand gets -->
+    <div style="background:var(--card);border:1px solid var(--border);border-radius:8px;padding:20px;font-family:'Space Mono',monospace;font-size:11px;line-height:2.2;color:var(--muted);">
+      <div style="color:var(--pink);margin-bottom:8px;"># EACH BRAND INSTANCE GETS:</div>
+      <div>.env.mybrand&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span style="color:#444;">&rarr; API keys, bot token, X credentials</span></div>
+      <div>brand_mybrand/&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span style="color:#444;">&rarr; guidelines.md, personality/, skills/, assets/</span></div>
+      <div>state_mybrand/&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span style="color:#444;">&rarr; state.json, feedback.json, generation_history.json, transcripts/</span></div>
+      <div style="color:#444;margin-top:8px;"># All gitignored. git pull never touches brand data.</div>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════════════════════════════════
+       TEMPLATE SYSTEM TAB
+  ════════════════════════════════════════════════════ -->
+  <div id="panel-templates" class="panel">
+    <div class="section-head">
+      <h3>DETERMINISTIC TEMPLATE SYSTEM</h3>
+      <div class="section-line"></div>
+      <div class="section-badge tag-teal">PIL RENDERER + FIGMA IMPORT + CONVERSATIONAL REFINEMENT</div>
+    </div>
+
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:24px;margin-bottom:32px;">
+      <!-- Path 1 -->
+      <div>
+        <div style="font-family:'Space Mono',monospace;font-size:11px;color:var(--teal);margin-bottom:16px;">PATH 1: UPLOAD REFERENCE IMAGE</div>
+        <div style="display:flex;flex-direction:column;gap:8px;">
+          <div class="node teal">
+            <div class="node-title">1. /template_from_reference</div>
+            <div class="node-body">Upload any template image as reference</div>
+          </div>
+          <div style="text-align:center;color:var(--teal);font-size:14px;">&darr;</div>
+          <div class="node purple">
+            <div class="node-title">2. Claude Vision Analysis</div>
+            <div class="node-body">Extracts TemplateSpec JSON: background, shapes, text zones, image zones</div>
+          </div>
+          <div style="text-align:center;color:var(--teal);font-size:14px;">&darr;</div>
+          <div class="node teal">
+            <div class="node-title">3. PIL Renders Preview</div>
+            <div class="node-body">Instant render with labeled overlays. No API call.</div>
+          </div>
+          <div style="text-align:center;color:var(--teal);font-size:14px;">&darr;</div>
+          <div class="node orange">
+            <div class="node-title">4. Conversational Refinement</div>
+            <div class="node-body">"Make the background darker" &rarr; instant re-render. No Replicate cost.</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Path 2 -->
+      <div>
+        <div style="font-family:'Space Mono',monospace;font-size:11px;color:var(--purple);margin-bottom:16px;">PATH 2: IMPORT FROM FIGMA</div>
+        <div style="display:flex;flex-direction:column;gap:8px;">
+          <div class="node purple">
+            <div class="node-title">1. /template_import &lt;figma_url&gt;</div>
+            <div class="node-body">Paste any Figma design URL</div>
+          </div>
+          <div style="text-align:center;color:var(--purple);font-size:14px;">&darr;</div>
+          <div class="node purple">
+            <div class="node-title">2. Screenshot + Layer Metadata</div>
+            <div class="node-body">Figma REST API fetches screenshot + child positions, fills, text styles</div>
+          </div>
+          <div style="text-align:center;color:var(--purple);font-size:14px;">&darr;</div>
+          <div class="node purple">
+            <div class="node-title">3. Claude Classifies Layers</div>
+            <div class="node-body">Static elements vs image/text/logo placeholders</div>
+          </div>
+          <div style="text-align:center;color:var(--purple);font-size:14px;">&darr;</div>
+          <div class="node green">
+            <div class="node-title">4. Template Ready</div>
+            <div class="node-body">Pixel-perfect from Figma. Regions mapped. Same preview flow.</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- TemplateSpec -->
+    <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:24px;">
+      <div style="background:var(--card);border:1px solid var(--teal);border-radius:8px;padding:16px;">
+        <div style="font-family:'Space Mono',monospace;font-size:10px;color:var(--teal);margin-bottom:8px;">CANVAS</div>
+        <div style="font-size:11px;color:var(--muted);line-height:1.8;">width, height, background Fill (solid / linear / radial gradient)</div>
+      </div>
+      <div style="background:var(--card);border:1px solid var(--teal);border-radius:8px;padding:16px;">
+        <div style="font-family:'Space Mono',monospace;font-size:10px;color:var(--teal);margin-bottom:8px;">SHAPES</div>
+        <div style="font-size:11px;color:var(--muted);line-height:1.8;">ShapeElement: rect / rounded_rect / ellipse / line with z_order layering</div>
+      </div>
+      <div style="background:var(--card);border:1px solid var(--teal);border-radius:8px;padding:16px;">
+        <div style="font-family:'Space Mono',monospace;font-size:10px;color:var(--teal);margin-bottom:8px;">ZONES</div>
+        <div style="font-size:11px;color:var(--muted);line-height:1.8;">TextZone (font/size/weight/color), ImageZone (radius, alpha), LogoZone</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════════════════════════════════
+       PLATFORMS TAB
+  ════════════════════════════════════════════════════ -->
+  <div id="panel-platforms" class="panel">
+    <div class="section-head">
+      <h3>MULTI-PLATFORM PUBLISHING</h3>
+      <div class="section-line"></div>
+      <div class="section-badge tag-blue">5 platforms — analytics — carousel support</div>
+    </div>
+
+    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:12px;margin-bottom:32px;">
+      <div class="node blue">
+        <div class="node-icon">&#x1D54F;</div>
+        <div class="node-title">X / Twitter</div>
+        <div class="node-body">280 chars. Up to 4 images per tweet. Thread support. Engagement analytics (likes, RTs, impressions) feed back into content planning. Bearer token for metrics.</div>
+        <span class="node-tag tag-blue">ANALYTICS</span>
+      </div>
+      <div class="node purple">
+        <div class="node-icon">&#x1F4AC;</div>
+        <div class="node-title">Discord</div>
+        <div class="node-body">Rich embeds with brand colors. Channel routing (announcements, memes, updates). File-based image upload. Auto cross-post from X.</div>
+        <span class="node-tag tag-purple">EMBEDS</span>
+      </div>
+      <div class="node blue">
+        <div class="node-icon">&#x1F4BC;</div>
+        <div class="node-title">LinkedIn</div>
+        <div class="node-body">3000 char limit. UGC Posts API with image upload. Professional formatting. OAuth 2.0 access token. Auto-registered when credentials set.</div>
+        <span class="node-tag tag-blue">NEW v11</span>
+      </div>
+      <div class="node pink">
+        <div class="node-icon">&#x1F4F7;</div>
+        <div class="node-title">Instagram</div>
+        <div class="node-body">2200 chars. Carousel support up to 10 images. Facebook Graph API. Requires publicly accessible image URLs. Business account required.</div>
+        <span class="node-tag tag-pink">NEW v11</span>
+      </div>
+      <div class="node teal">
+        <div class="node-icon">&#x2708;</div>
+        <div class="node-title">Telegram</div>
+        <div class="node-body">Native platform. Draft preview with inline buttons. Photo + caption format. Granular editing (keep image/change caption). Admin notifications.</div>
+        <span class="node-tag tag-teal">NATIVE</span>
+      </div>
+    </div>
+
+    <div class="section-head">
+      <h3>ANALYTICS FEEDBACK LOOP</h3>
+      <div class="section-line"></div>
+      <div class="section-badge tag-green">ENGAGEMENT DATA DRIVES CONTENT MIX</div>
+    </div>
+
+    <div style="display:grid;grid-template-columns:1fr 40px 1fr 40px 1fr 40px 1fr;gap:8px;align-items:center;margin-bottom:32px;">
+      <div class="node green">
+        <div class="node-icon">&#x1F4CA;</div>
+        <div class="node-title">Fetch Metrics</div>
+        <div class="node-body">X API v2 public_metrics: likes, retweets, replies, impressions, engagement rate per post.</div>
+      </div>
+      <div class="flow-arrow" style="text-align:center;color:var(--green);font-size:20px;">&rarr;</div>
+      <div class="node green">
+        <div class="node-icon">&#x1F9E0;</div>
+        <div class="node-title">Analyze Patterns</div>
+        <div class="node-body">Optimal posting times by hour/day. Best content types by engagement. Top performing topics.</div>
+      </div>
+      <div class="flow-arrow" style="text-align:center;color:var(--green);font-size:20px;">&rarr;</div>
+      <div class="node green">
+        <div class="node-icon">&#x1F4C5;</div>
+        <div class="node-title">Adapt Planning</div>
+        <div class="node-body">Content planner weights mix by engagement. Topic bank boosts high-performing angles. Heartbeat uses proactive briefs.</div>
+      </div>
+      <div class="flow-arrow" style="text-align:center;color:var(--green);font-size:20px;">&rarr;</div>
+      <div class="node green">
+        <div class="node-icon">&#x1F680;</div>
+        <div class="node-title">Better Content</div>
+        <div class="node-body">Each post informs the next. The bot gets smarter about what works for YOUR audience.</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════════════════════════════════
+       LEARNING LOOP TAB
+  ════════════════════════════════════════════════════ -->
+  <div id="panel-learning" class="panel">
+    <div class="section-head">
+      <h3>SELF-IMPROVING LOOP</h3>
+      <div class="section-line"></div>
+      <div class="section-badge tag-green">EVERY APPROVAL TEACHES THE AGENT</div>
+    </div>
+
+    <div style="max-width:800px;margin:0 auto 40px;">
+      <div style="background:var(--card);border:1px solid var(--orange);border-radius:8px;padding:20px;text-align:center;">
+        <div style="font-size:13px;font-weight:700;color:var(--orange);margin-bottom:4px;">User sends /approve or /reject + feedback</div>
+        <div style="font-size:11px;color:var(--muted);">Every interaction is a training signal. Event hooks fire to all subscribers.</div>
+      </div>
+      <div style="text-align:center;padding:8px 0;color:var(--orange);font-size:20px;">&darr;</div>
+
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;">
+        <div style="background:var(--card);border:1px solid var(--green);border-radius:8px;padding:16px;">
+          <div style="font-size:11px;font-weight:700;color:var(--green);margin-bottom:8px;">CAPTION LEARNING</div>
+          <div style="font-size:11px;color:var(--muted);line-height:1.6;">feedback.json appended &rarr; every 10 entries Claude auto-summarizes &rarr; preferences stored with timestamps &rarr; newest-first in context</div>
+        </div>
+        <div style="background:var(--card);border:1px solid var(--teal);border-radius:8px;padding:16px;">
+          <div style="font-size:11px;font-weight:700;color:var(--teal);margin-bottom:8px;">VISUAL LEARNING</div>
+          <div style="font-size:11px;color:var(--muted);line-height:1.6;">Approved image saved to brand/references/ &rarr; style profile updated &rarr; next gen uses it at 0.3 strength &rarr; converges</div>
+        </div>
+        <div style="background:var(--card);border:1px solid var(--pink);border-radius:8px;padding:16px;">
+          <div style="font-size:11px;font-weight:700;color:var(--pink);margin-bottom:8px;">TEMPORAL DECAY</div>
+          <div style="font-size:11px;color:var(--muted);line-height:1.6;">Preferences stored as {text, added, source}. Sorted newest-first. Entries &gt;60 days marked "(older)". Recent feedback always wins.</div>
+        </div>
+      </div>
+
+      <div style="text-align:center;padding:8px 0;color:var(--orange);font-size:20px;">&darr;</div>
+
+      <div style="background:var(--card);border:1px solid var(--border);border-radius:8px;padding:20px;text-align:center;">
+        <div style="font-size:13px;font-weight:700;color:var(--white);margin-bottom:4px;">Next generation starts with approved context + semantic memory</div>
+        <div style="font-size:11px;color:var(--muted);">search_memory finds relevant past successes. Style converges. Rounds to approval decreases.</div>
+      </div>
+
+      <div style="text-align:center;padding:8px 0;color:var(--green);font-size:20px;">&darr;</div>
+
+      <div style="background:var(--card);border:1px solid var(--green);border-radius:8px;padding:20px;text-align:center;">
+        <div style="font-size:13px;font-weight:700;color:var(--green);margin-bottom:4px;">20+ approvals &rarr; LoRA training &rarr; style baked into model weights</div>
+        <div style="font-size:11px;color:var(--muted);">Permanently faster, permanently consistent</div>
+      </div>
+    </div>
+
+    <!-- Session Transcript -->
+    <div style="background:var(--card);border:1px solid var(--border);border-radius:8px;padding:20px;">
+      <div style="font-family:'Space Mono',monospace;font-size:11px;color:var(--orange);margin-bottom:8px;">FULL OBSERVABILITY — transcript.py</div>
+      <div style="font-size:12px;color:var(--muted);line-height:1.7;">Every interaction logged to JSONL: user_message, agent_response, tool_call (with duration_ms), draft_action (approve/reject), publish (platform + URL). Per-user files in state/transcripts/. Full debugging + analytics + potential fine-tuning data.</div>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════════════════════════════════
+       IMAGE MODELS TAB
+  ════════════════════════════════════════════════════ -->
+  <div id="panel-models" class="panel">
+    <div class="section-head">
+      <h3>IMAGE MODEL ROUTING</h3>
+      <div class="section-line"></div>
+      <div class="section-badge tag-purple">5 MODELS — SMART ROUTING — MODEL FALLBACK</div>
+    </div>
+
+    <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:12px;margin:24px 0;">
+      <div style="background:var(--card);border:1px solid var(--green);border-radius:8px;padding:16px;position:relative;overflow:hidden;">
+        <div style="position:absolute;top:10px;right:10px;background:var(--green);color:#000;font-family:'Space Mono',monospace;font-size:8px;padding:2px 6px;border-radius:2px;font-weight:700;">DEFAULT</div>
+        <div style="font-family:'Space Mono',monospace;font-size:11px;color:var(--green);margin-bottom:6px;">flux-1.1-pro-ultra</div>
+        <div style="font-size:10px;color:var(--muted);margin-bottom:8px;">Black Forest Labs</div>
+        <div style="font-size:11px;color:var(--white);line-height:1.5;margin-bottom:8px;">High-res general purpose. Ultra quality.</div>
+        <div style="font-family:'Space Mono',monospace;font-size:10px;color:var(--green);">~$0.06 / image</div>
+      </div>
+      <div style="background:var(--card);border:1px solid var(--orange);border-radius:8px;padding:16px;position:relative;overflow:hidden;">
+        <div style="position:absolute;top:10px;right:10px;background:var(--orange);color:#000;font-family:'Space Mono',monospace;font-size:8px;padding:2px 6px;border-radius:2px;font-weight:700;">TEXT</div>
+        <div style="font-family:'Space Mono',monospace;font-size:11px;color:var(--orange);margin-bottom:6px;">nano-banana-pro</div>
+        <div style="font-size:10px;color:var(--muted);margin-bottom:8px;">Google</div>
+        <div style="font-size:11px;color:var(--white);line-height:1.5;margin-bottom:8px;">Best text rendering. Clean headlines.</div>
+        <div style="font-family:'Space Mono',monospace;font-size:10px;color:var(--green);">~$0.04 / image</div>
+      </div>
+      <div style="background:var(--card);border:1px solid var(--teal);border-radius:8px;padding:16px;position:relative;overflow:hidden;">
+        <div style="position:absolute;top:10px;right:10px;background:var(--teal);color:#000;font-family:'Space Mono',monospace;font-size:8px;padding:2px 6px;border-radius:2px;font-weight:700;">IMG2IMG</div>
+        <div style="font-family:'Space Mono',monospace;font-size:11px;color:var(--teal);margin-bottom:6px;">flux-kontext-pro</div>
+        <div style="font-size:10px;color:var(--muted);margin-bottom:8px;">Black Forest Labs</div>
+        <div style="font-size:11px;color:var(--white);line-height:1.5;margin-bottom:8px;">Character consistency via reference grid.</div>
+        <div style="font-family:'Space Mono',monospace;font-size:10px;color:var(--green);">~$0.04 / image</div>
+      </div>
+      <div style="background:var(--card);border:1px solid var(--blue);border-radius:8px;padding:16px;position:relative;overflow:hidden;">
+        <div style="position:absolute;top:10px;right:10px;background:var(--blue);color:#000;font-family:'Space Mono',monospace;font-size:8px;padding:2px 6px;border-radius:2px;font-weight:700;">PHOTO</div>
+        <div style="font-family:'Space Mono',monospace;font-size:11px;color:var(--blue);margin-bottom:6px;">seedream-4.5</div>
+        <div style="font-size:10px;color:var(--muted);margin-bottom:8px;">ByteDance</div>
+        <div style="font-size:11px;color:var(--white);line-height:1.5;margin-bottom:8px;">Photography-quality lifestyle images.</div>
+        <div style="font-family:'Space Mono',monospace;font-size:10px;color:var(--green);">~$0.02 / image</div>
+      </div>
+      <div style="background:var(--card);border:1px solid var(--purple);border-radius:8px;padding:16px;position:relative;overflow:hidden;">
+        <div style="position:absolute;top:10px;right:10px;background:var(--purple);color:#000;font-family:'Space Mono',monospace;font-size:8px;padding:2px 6px;border-radius:2px;font-weight:700;">SVG</div>
+        <div style="font-family:'Space Mono',monospace;font-size:11px;color:var(--purple);margin-bottom:6px;">recraft-v3-svg</div>
+        <div style="font-size:10px;color:var(--muted);margin-bottom:8px;">Recraft</div>
+        <div style="font-size:11px;color:var(--white);line-height:1.5;margin-bottom:8px;">Real SVG output for icons and assets.</div>
+        <div style="font-family:'Space Mono',monospace;font-size:10px;color:var(--green);">~$0.04 / image</div>
+      </div>
+    </div>
+
+    <div style="background:var(--card);border:1px solid var(--border);border-radius:8px;padding:20px;font-family:'Space Mono',monospace;font-size:11px;line-height:2;color:var(--muted)">
+      <div style="color:var(--orange)"># image_gen.py &mdash; _select_model()</div>
+      <div>if manual_override: <span style="color:#444;">&rarr; [override model]</span></div>
+      <div>elif content_type == <span style="color:var(--green)">"announcement"</span>: <span style="color:#444;">&rarr; nano-banana-pro</span></div>
+      <div>elif content_type == <span style="color:var(--green)">"brand_asset"</span>: <span style="color:#444;">&rarr; recraft-v3-svg</span></div>
+      <div>elif content_type in [<span style="color:var(--blue)">"lifestyle", "event", "photography"</span>]: <span style="color:#444;">&rarr; seedream-4.5</span></div>
+      <div>else: <span style="color:#444;">&rarr; flux-1.1-pro-ultra (default)</span></div>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════════════════════════════════
+       MODULES TAB
+  ════════════════════════════════════════════════════ -->
+  <div id="panel-modules" class="panel">
+    <div class="section-head">
+      <h3>CORE MODULES — 70+</h3>
+      <div class="section-line"></div>
+      <div class="section-badge tag-green">agent/ — bot/ — config/ — scripts/</div>
+    </div>
+
+    <!-- Agent Core -->
+    <div style="font-family:'Space Mono',monospace;font-size:11px;color:var(--orange);margin-bottom:12px;margin-top:8px;">AGENT CORE</div>
+    <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:24px;">
+      <div style="background:var(--card);border:1px solid var(--orange);border-radius:6px;padding:12px;">
+        <div style="font-family:'Space Mono',monospace;font-size:10px;color:var(--orange);margin-bottom:4px;">engine.py</div>
+        <div style="font-size:9px;color:var(--muted);">Claude tool-use loop, 15 turns, model fallback</div>
+      </div>
+      <div style="background:var(--card);border:1px solid var(--orange);border-radius:6px;padding:12px;">
+        <div style="font-family:'Space Mono',monospace;font-size:10px;color:var(--orange);margin-bottom:4px;">tools.py</div>
+        <div style="font-size:9px;color:var(--muted);">15 tool definitions + handlers</div>
+      </div>
+      <div style="background:var(--card);border:1px solid var(--orange);border-radius:6px;padding:12px;">
+        <div style="font-family:'Space Mono',monospace;font-size:10px;color:var(--orange);margin-bottom:4px;">skill_prompt.py</div>
+        <div style="font-size:9px;color:var(--muted);">System prompt + workspace injection + skills</div>
+      </div>
+      <div style="background:var(--card);border:1px solid var(--purple);border-radius:6px;padding:12px;">
+        <div style="font-family:'Space Mono',monospace;font-size:10px;color:var(--purple);margin-bottom:4px;">brain.py</div>
+        <div style="font-size:9px;color:var(--muted);">Multi-LLM dispatch (Anthropic / OpenAI / Gemini)</div>
+      </div>
+    </div>
+
+    <!-- Quality Gates (v10) -->
+    <div style="font-family:'Space Mono',monospace;font-size:11px;color:var(--green);margin-bottom:12px;">QUALITY & SAFETY (NEW v10)</div>
+    <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:24px;">
+      <div style="background:var(--card);border:1px solid var(--green);border-radius:6px;padding:12px;">
+        <div style="font-family:'Space Mono',monospace;font-size:10px;color:var(--green);margin-bottom:4px;">scoring.py</div>
+        <div style="font-size:9px;color:var(--muted);">Weighted assertions, A-F grades</div>
+      </div>
+      <div style="background:var(--card);border:1px solid var(--green);border-radius:6px;padding:12px;">
+        <div style="font-family:'Space Mono',monospace;font-size:10px;color:var(--green);margin-bottom:4px;">dedup.py</div>
+        <div style="font-size:9px;color:var(--muted);">TF-IDF cosine similarity dedup</div>
+      </div>
+      <div style="background:var(--card);border:1px solid var(--green);border-radius:6px;padding:12px;">
+        <div style="font-family:'Space Mono',monospace;font-size:10px;color:var(--green);margin-bottom:4px;">cost_gate.py</div>
+        <div style="font-size:9px;color:var(--muted);">Daily cost budget tracking</div>
+      </div>
+      <div style="background:var(--card);border:1px solid var(--green);border-radius:6px;padding:12px;">
+        <div style="font-family:'Space Mono',monospace;font-size:10px;color:var(--green);margin-bottom:4px;">risk_score.py</div>
+        <div style="font-size:9px;color:var(--muted);">5-category content safety scorer</div>
+      </div>
+      <div style="background:var(--card);border:1px solid var(--green);border-radius:6px;padding:12px;">
+        <div style="font-family:'Space Mono',monospace;font-size:10px;color:var(--green);margin-bottom:4px;">self_review.py</div>
+        <div style="font-size:9px;color:var(--muted);">Default-FAIL quality gate + self-review</div>
+      </div>
+      <div style="background:var(--card);border:1px solid var(--green);border-radius:6px;padding:12px;">
+        <div style="font-family:'Space Mono',monospace;font-size:10px;color:var(--green);margin-bottom:4px;">brand_check.py</div>
+        <div style="font-size:9px;color:var(--muted);">7-dim brand compliance audit</div>
+      </div>
+      <div style="background:var(--card);border:1px solid var(--green);border-radius:6px;padding:12px;">
+        <div style="font-family:'Space Mono',monospace;font-size:10px;color:var(--green);margin-bottom:4px;">campaigns.py</div>
+        <div style="font-size:9px;color:var(--muted);">Multi-day campaign orchestration</div>
+      </div>
+    </div>
+
+    <!-- Intelligence -->
+    <div style="font-family:'Space Mono',monospace;font-size:11px;color:var(--purple);margin-bottom:12px;">INTELLIGENCE (v9)</div>
+    <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:24px;">
+      <div style="background:var(--card);border:1px solid var(--green);border-radius:6px;padding:12px;">
+        <div style="font-family:'Space Mono',monospace;font-size:10px;color:var(--green);margin-bottom:4px;">skills.py</div>
+        <div style="font-size:9px;color:var(--muted);">CRUD for persistent agent skills</div>
+      </div>
+      <div style="background:var(--card);border:1px solid var(--green);border-radius:6px;padding:12px;">
+        <div style="font-family:'Space Mono',monospace;font-size:10px;color:var(--green);margin-bottom:4px;">context_engine.py</div>
+        <div style="font-size:9px;color:var(--muted);">Token-budget context assembly</div>
+      </div>
+      <div style="background:var(--card);border:1px solid var(--green);border-radius:6px;padding:12px;">
+        <div style="font-family:'Space Mono',monospace;font-size:10px;color:var(--green);margin-bottom:4px;">memory.py</div>
+        <div style="font-size:9px;color:var(--muted);">TF-IDF semantic search, temporal decay</div>
+      </div>
+      <div style="background:var(--card);border:1px solid var(--green);border-radius:6px;padding:12px;">
+        <div style="font-family:'Space Mono',monospace;font-size:10px;color:var(--green);margin-bottom:4px;">subagent.py</div>
+        <div style="font-size:9px;color:var(--muted);">Haiku sub-agent delegation</div>
+      </div>
+      <div style="background:var(--card);border:1px solid var(--green);border-radius:6px;padding:12px;">
+        <div style="font-family:'Space Mono',monospace;font-size:10px;color:var(--green);margin-bottom:4px;">model_fallback.py</div>
+        <div style="font-size:9px;color:var(--muted);">Auto-retry with fallback chain</div>
+      </div>
+      <div style="background:var(--card);border:1px solid var(--green);border-radius:6px;padding:12px;">
+        <div style="font-family:'Space Mono',monospace;font-size:10px;color:var(--green);margin-bottom:4px;">hooks.py</div>
+        <div style="font-size:9px;color:var(--muted);">Async pub/sub event system</div>
+      </div>
+      <div style="background:var(--card);border:1px solid var(--green);border-radius:6px;padding:12px;">
+        <div style="font-family:'Space Mono',monospace;font-size:10px;color:var(--green);margin-bottom:4px;">transcript.py</div>
+        <div style="font-size:9px;color:var(--muted);">JSONL per-user session logs</div>
+      </div>
+      <div style="background:var(--card);border:1px solid var(--green);border-radius:6px;padding:12px;">
+        <div style="font-family:'Space Mono',monospace;font-size:10px;color:var(--green);margin-bottom:4px;">session.py</div>
+        <div style="font-size:9px;color:var(--muted);">Persistent session with temporal decay</div>
+      </div>
+    </div>
+
+    <!-- Image & Composition -->
+    <div style="font-family:'Space Mono',monospace;font-size:11px;color:var(--teal);margin-bottom:12px;">IMAGE & COMPOSITION</div>
+    <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:24px;">
+      <div style="background:var(--card);border:1px solid var(--teal);border-radius:6px;padding:12px;">
+        <div style="font-family:'Space Mono',monospace;font-size:10px;color:var(--teal);margin-bottom:4px;">image_gen.py</div>
+        <div style="font-size:9px;color:var(--muted);">Replicate API, smart model routing</div>
+      </div>
+      <div style="background:var(--card);border:1px solid var(--teal);border-radius:6px;padding:12px;">
+        <div style="font-family:'Space Mono',monospace;font-size:10px;color:var(--teal);margin-bottom:4px;">compositor.py</div>
+        <div style="font-size:9px;color:var(--muted);">Branded 1280x720 overlay, cached</div>
+      </div>
+      <div style="background:var(--card);border:1px solid var(--teal);border-radius:6px;padding:12px;">
+        <div style="font-family:'Space Mono',monospace;font-size:10px;color:var(--teal);margin-bottom:4px;">template_*.py</div>
+        <div style="font-size:9px;color:var(--muted);">spec, renderer, generator, memory (4 files)</div>
+      </div>
+      <div style="background:var(--card);border:1px solid var(--teal);border-radius:6px;padding:12px;">
+        <div style="font-family:'Space Mono',monospace;font-size:10px;color:var(--teal);margin-bottom:4px;">font_manager.py</div>
+        <div style="font-size:9px;color:var(--muted);">Dynamic font resolution + Google Fonts</div>
+      </div>
+    </div>
+
+    <!-- State & Publishing -->
+    <div style="font-family:'Space Mono',monospace;font-size:11px;color:var(--blue);margin-bottom:12px;">STATE & PUBLISHING</div>
+    <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:24px;">
+      <div style="background:var(--card);border:1px solid var(--blue);border-radius:6px;padding:12px;">
+        <div style="font-family:'Space Mono',monospace;font-size:10px;color:var(--blue);margin-bottom:4px;">state.py</div>
+        <div style="font-size:9px;color:var(--muted);">Draft management, asyncio.Lock</div>
+      </div>
+      <div style="background:var(--card);border:1px solid var(--blue);border-radius:6px;padding:12px;">
+        <div style="font-family:'Space Mono',monospace;font-size:10px;color:var(--blue);margin-bottom:4px;">feedback.py</div>
+        <div style="font-size:9px;color:var(--muted);">Append-only log + auto-learning</div>
+      </div>
+      <div style="background:var(--card);border:1px solid var(--blue);border-radius:6px;padding:12px;">
+        <div style="font-family:'Space Mono',monospace;font-size:10px;color:var(--blue);margin-bottom:4px;">publisher.py</div>
+        <div style="font-size:9px;color:var(--muted);">Tweepy OAuth1 + v2 tweet</div>
+      </div>
+      <div style="background:var(--card);border:1px solid var(--blue);border-radius:6px;padding:12px;">
+        <div style="font-family:'Space Mono',monospace;font-size:10px;color:var(--blue);margin-bottom:4px;">channels/</div>
+        <div style="font-size:9px;color:var(--muted);">Channel ABC, Twitter adapter, registry</div>
+      </div>
+      <div style="background:var(--card);border:1px solid var(--blue);border-radius:6px;padding:12px;">
+        <div style="font-family:'Space Mono',monospace;font-size:10px;color:var(--blue);margin-bottom:4px;">paths.py</div>
+        <div style="font-size:9px;color:var(--muted);">Centralized paths (multi-brand)</div>
+      </div>
+      <div style="background:var(--card);border:1px solid var(--blue);border-radius:6px;padding:12px;">
+        <div style="font-family:'Space Mono',monospace;font-size:10px;color:var(--blue);margin-bottom:4px;">generation_history.py</div>
+        <div style="font-size:9px;color:var(--muted);">Append-only gen log + cost tracking</div>
+      </div>
+      <div style="background:var(--card);border:1px solid var(--blue);border-radius:6px;padding:12px;">
+        <div style="font-family:'Space Mono',monospace;font-size:10px;color:var(--blue);margin-bottom:4px;">heartbeat.py</div>
+        <div style="font-size:9px;color:var(--muted);">Proactive content generation</div>
+      </div>
+      <div style="background:var(--card);border:1px solid var(--border);border-radius:6px;padding:12px;">
+        <div style="font-family:'Space Mono',monospace;font-size:10px;color:var(--white);margin-bottom:4px;">+ 25 more</div>
+        <div style="font-size:9px;color:var(--muted);">asset_gen, auto_state, chat, figma, guidelines, ingest, intent_router, lora_pipeline, onboarding, onchain, pref_extractor, scheduler, strategy, topic_bank, etc.</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════════════════════════════════
+       SECURITY TAB
+  ════════════════════════════════════════════════════ -->
+  <div id="panel-security" class="panel">
+    <div class="section-head">
+      <h3>SECURITY HARDENING</h3>
+      <div class="section-line"></div>
+      <div class="section-badge tag-red">THREE FULL AUDITS — v8 + v9 + v10</div>
+    </div>
+
+    <!-- v10 fixes -->
+    <div style="font-family:'Space Mono',monospace;font-size:11px;color:var(--red);margin-bottom:12px;">v10 SECURITY FIXES (5 issues found and fixed)</div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:24px;">
+      <div style="background:var(--card);border:2px solid var(--red);border-radius:8px;padding:16px;">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
+          <div style="font-size:12px;font-weight:700;color:var(--red);">execute_code Env Filtering</div>
+          <div style="font-family:'Space Mono',monospace;font-size:9px;padding:2px 6px;border-radius:3px;background:var(--red-dim);color:var(--red);border:1px solid var(--red);">CRITICAL &rarr; FIXED</div>
+        </div>
+        <div style="font-size:11px;color:var(--muted);line-height:1.6;">Subprocess now strips all env vars containing KEY, TOKEN, SECRET, PASSWORD, CREDENTIAL. Claude-generated code can no longer access API keys.</div>
+      </div>
+      <div style="background:var(--card);border:2px solid var(--red);border-radius:8px;padding:16px;">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
+          <div style="font-size:12px;font-weight:700;color:var(--red);">HTML Escape LLM Output</div>
+          <div style="font-family:'Space Mono',monospace;font-size:9px;padding:2px 6px;border-radius:3px;background:var(--red-dim);color:var(--red);border:1px solid var(--red);">HIGH &rarr; FIXED</div>
+        </div>
+        <div style="font-size:11px;color:var(--muted);line-height:1.6;">All LLM-generated text now escaped with _esc() before being sent as parse_mode="HTML" to Telegram. Prevents formatting injection.</div>
+      </div>
+      <div style="background:var(--card);border:2px solid var(--red);border-radius:8px;padding:16px;">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
+          <div style="font-size:12px;font-weight:700;color:var(--red);">SSRF Protection in web_fetch</div>
+          <div style="font-family:'Space Mono',monospace;font-size:9px;padding:2px 6px;border-radius:3px;background:var(--orange-dim);color:var(--orange);border:1px solid var(--orange);">MEDIUM &rarr; FIXED</div>
+        </div>
+        <div style="font-size:11px;color:var(--muted);line-height:1.6;">URL scheme validation (http/https only). DNS resolution check blocks private IPs: 127.0.0.0/8, 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 169.254.0.0/16, ::1.</div>
+      </div>
+      <div style="background:var(--card);border:2px solid var(--red);border-radius:8px;padding:16px;">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
+          <div style="font-size:12px;font-weight:700;color:var(--red);">onchain.py Arg Sanitization</div>
+          <div style="font-family:'Space Mono',monospace;font-size:9px;padding:2px 6px;border-radius:3px;background:var(--orange-dim);color:var(--orange);border:1px solid var(--orange);">MEDIUM &rarr; FIXED</div>
+        </div>
+        <div style="font-size:11px;color:var(--muted);line-height:1.6;">Added _UNSAFE_CHARS regex check (;&amp;|`$(){}!&lt;&gt;\) to on-chain script arguments, matching tools.py validation.</div>
+      </div>
+      <div style="background:var(--card);border:2px solid var(--red);border-radius:8px;padding:16px;">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
+          <div style="font-size:12px;font-weight:700;color:var(--red);">skills.py Path Traversal</div>
+          <div style="font-family:'Space Mono',monospace;font-size:9px;padding:2px 6px;border-radius:3px;background:var(--orange-dim);color:var(--orange);border:1px solid var(--orange);">MEDIUM &rarr; FIXED</div>
+        </div>
+        <div style="font-size:11px;color:var(--muted);line-height:1.6;">load_skill now validates name contains only [A-Za-z0-9_-] before path construction. Blocks ../../ traversal attempts.</div>
+      </div>
+    </div>
+
+    <!-- Previous fixes -->
+    <div style="font-family:'Space Mono',monospace;font-size:11px;color:var(--muted);margin-bottom:12px;">PREVIOUS FIXES (v8 + v9)</div>
+    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;margin-bottom:32px;">
+      <div style="background:var(--card);border:1px solid var(--border);border-radius:8px;padding:16px;">
+        <div style="font-size:11px;font-weight:700;color:var(--muted);margin-bottom:6px;">Path Traversal Prevention (v8)</div>
+        <div style="font-size:10px;color:var(--muted);line-height:1.6;">File uploads stripped. img2img restricted. Extension whitelist.</div>
+      </div>
+      <div style="background:var(--card);border:1px solid var(--border);border-radius:8px;padding:16px;">
+        <div style="font-size:11px;font-weight:700;color:var(--muted);margin-bottom:6px;">Skill Script Safety (v9)</div>
+        <div style="font-size:10px;color:var(--muted);line-height:1.6;">Filename stripping. Path resolution checks. 100KB size limit.</div>
+      </div>
+      <div style="background:var(--card);border:1px solid var(--border);border-radius:8px;padding:16px;">
+        <div style="font-size:11px;font-weight:700;color:var(--muted);margin-bottom:6px;">Transcript + Hooks + Keys (v8-v9)</div>
+        <div style="font-size:10px;color:var(--muted);line-height:1.6;">User ID int(), payload isolation, Gemini key in header, generic errors.</div>
+      </div>
+    </div>
+
+    <div style="font-family:'Space Mono',monospace;font-size:11px;color:var(--green);margin-bottom:12px;">PERFORMANCE</div>
+    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;margin-bottom:24px;">
+      <div style="background:var(--card);border:1px solid var(--green);border-radius:8px;padding:16px;">
+        <div style="font-size:12px;font-weight:700;color:var(--green);margin-bottom:6px;">Singleton API Clients</div>
+        <div style="font-size:11px;color:var(--muted);line-height:1.6;">_client.py — one AsyncAnthropic + httpx reused across all modules. ~100ms saved per LLM call.</div>
+      </div>
+      <div style="background:var(--card);border:1px solid var(--green);border-radius:8px;padding:16px;">
+        <div style="font-size:12px;font-weight:700;color:var(--green);margin-bottom:6px;">Model Fallback</div>
+        <div style="font-size:11px;color:var(--muted);line-height:1.6;">Auto-retry on 429/500/503 with configurable fallback chain. Never fails silently.</div>
+      </div>
+      <div style="background:var(--card);border:1px solid var(--green);border-radius:8px;padding:16px;">
+        <div style="font-size:12px;font-weight:700;color:var(--green);margin-bottom:6px;">Cached Backgrounds</div>
+        <div style="font-size:11px;color:var(--muted);line-height:1.6;">Compositor backgrounds cached by config hash. NumPy vectorized gradients. Parallel multi-option compose.</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════════════════════════════════
+       SETUP TAB
+  ════════════════════════════════════════════════════ -->
+  <div id="panel-setup" class="panel">
+    <div class="section-head">
+      <h3>SETUP</h3>
+      <div class="section-line"></div>
+      <div class="section-badge tag-green">SINGLE BRAND OR MULTI-BRAND</div>
+    </div>
+
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:24px;margin-bottom:32px;">
+      <div>
+        <div style="font-family:'Space Mono',monospace;font-size:11px;color:var(--orange);margin-bottom:16px;">SINGLE BRAND (DEFAULT)</div>
+        <div style="background:var(--card);border:1px solid var(--border);border-radius:8px;padding:20px;font-family:'Space Mono',monospace;font-size:11px;line-height:2;color:var(--muted)">
+          <div style="color:var(--orange)">$ git clone ... && cd brandmover_local</div>
+          <div style="color:var(--orange)">$ python3 -m venv venv && source venv/bin/activate</div>
+          <div style="color:var(--orange)">$ pip install -r requirements.txt</div>
+          <div style="color:var(--orange)">$ cp .env.example .env</div>
+          <div style="color:#444">  &rarr; Fill in API keys</div>
+          <div style="color:var(--orange)">$ python3 main.py</div>
+          <div style="color:var(--green)">  &rarr; Bot validates .env on startup</div>
+          <div style="color:var(--green)">  &rarr; Send /onboard in Telegram</div>
+        </div>
+      </div>
+      <div>
+        <div style="font-family:'Space Mono',monospace;font-size:11px;color:var(--pink);margin-bottom:16px;">ADDITIONAL BRAND</div>
+        <div style="background:var(--card);border:1px solid var(--border);border-radius:8px;padding:20px;font-family:'Space Mono',monospace;font-size:11px;line-height:2;color:var(--muted)">
+          <div style="color:var(--pink)">$ ./scripts/new_brand.sh mybrand</div>
+          <div style="color:#444">  &rarr; Creates .env.mybrand + brand_mybrand/ + state_mybrand/</div>
+          <div style="color:var(--pink)">$ vim .env.mybrand</div>
+          <div style="color:#444">  &rarr; Fill in new bot token + API keys</div>
+          <div style="color:var(--pink)">$ vim brand_mybrand/guidelines.md</div>
+          <div style="color:#444">  &rarr; Write brand voice, tone, colors</div>
+          <div style="color:var(--pink)">$ ./scripts/launch_brand.sh mybrand</div>
+          <div style="color:var(--green)">  &rarr; Runs isolated alongside main brand</div>
+        </div>
+      </div>
+    </div>
+
+    <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;">
+      <div style="background:var(--card);border:1px solid var(--border);border-radius:8px;padding:16px;text-align:center;">
+        <div style="font-size:28px;font-weight:800;color:var(--orange);">4</div>
+        <div style="font-size:11px;color:var(--muted);margin-top:4px;">required API keys</div>
+        <div style="font-size:9px;color:#444;margin-top:2px;">Anthropic, Replicate, Telegram, User ID</div>
+      </div>
+      <div style="background:var(--card);border:1px solid var(--border);border-radius:8px;padding:16px;text-align:center;">
+        <div style="font-size:28px;font-weight:800;color:var(--teal);">3</div>
+        <div style="font-size:11px;color:var(--muted);margin-top:4px;">brand setup paths</div>
+        <div style="font-size:9px;color:#444;margin-top:2px;">/onboard, manual, or PDF upload</div>
+      </div>
+      <div style="background:var(--card);border:1px solid var(--border);border-radius:8px;padding:16px;text-align:center;">
+        <div style="font-size:28px;font-weight:800;color:var(--green);">60s</div>
+        <div style="font-size:11px;color:var(--muted);margin-top:4px;">to add a new brand</div>
+        <div style="font-size:9px;color:#444;margin-top:2px;">new_brand.sh + fill .env</div>
+      </div>
+      <div style="background:var(--card);border:1px solid var(--border);border-radius:8px;padding:16px;text-align:center;">
+        <div style="font-size:28px;font-weight:800;color:var(--pink);">&infin;</div>
+        <div style="font-size:11px;color:var(--muted);margin-top:4px;">brands per codebase</div>
+        <div style="font-size:9px;color:#444;margin-top:2px;">each fully isolated</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════════════════════════════════
+       CHANGELOG TAB
+  ════════════════════════════════════════════════════ -->
+  <div id="panel-changelog" class="panel">
+    <div class="section-head">
+      <h3>VERSION HISTORY</h3>
+      <div class="section-line"></div>
+      <div class="section-badge tag-yellow">v1 &rarr; v11 — THE EVOLUTION</div>
+    </div>
+
+    <div style="margin-left:16px;border-left:2px solid var(--border);padding-left:24px;">
+
+      <div class="changelog-entry" style="border-left-color:var(--orange);">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+          <div style="font-family:'Space Mono',monospace;font-size:13px;font-weight:700;color:var(--orange);">v11.0 — INTELLIGENCE OVERHAUL</div>
+          <div style="font-family:'Space Mono',monospace;font-size:10px;color:var(--muted);">MAR 23 2026</div>
+        </div>
+        <div style="font-size:12px;color:var(--muted);line-height:1.8;">
+          <strong style="color:var(--orange)">Creative Director Mode:</strong> Agent thinks strategically about audience, emotion, and brand narrative. Offers 2-3 creative variations per request. Content repurposing tool remixes successful posts.
+          <br><strong style="color:var(--blue)">5-Platform Publishing:</strong> X/Twitter (multi-image up to 4), Discord, LinkedIn (Share API), Instagram (Graph API + carousels up to 10). X engagement analytics feedback loop.
+          <br><strong style="color:var(--teal)">Performance-Driven Planning:</strong> Content mix auto-adjusts from real engagement data. Optimal posting time analysis by hour/day. Proactive creative briefs with data-driven reasoning.
+          <br><strong style="color:var(--green)">Closed Learning Loop:</strong> Auto-retry on quality gate failure. Memory search injects past approved posts as context. Performance-weighted skeleton selection. Skill auto-discovery.
+          <br><strong style="color:var(--purple)">Scheduler Hardening:</strong> Supervised task with auto-restart + exponential backoff. Circuit breaker prevents API hammering. Dead-letter queue for failed posts. Telegram crash alerts.
+          <br><strong style="color:var(--yellow)">UX Polish:</strong> Granular draft editing (keep image/change caption). Refinement presets (--shorter, --playful, --add-cta). Smart scheduling with /schedule next. Competitor analysis from uploads. Trend research sub-agent.
+          <br><strong style="color:var(--white)">Architecture:</strong> 25K lines legacy code deleted. 7 sub-packages (brand, publishing, quality, scheduling, learning, templates, video). 1300+ tests. mypy strict. Configurable allowlists.
+        </div>
+      </div>
+
+      <div class="changelog-entry green">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+          <div style="font-family:'Space Mono',monospace;font-size:13px;font-weight:700;color:var(--green);">v10.0 — QUALITY GATES + SECURITY AUDIT #3</div>
+          <div style="font-family:'Space Mono',monospace;font-size:10px;color:var(--muted);">MAR 13 2026</div>
+        </div>
+        <div style="font-size:12px;color:var(--muted);line-height:1.8;">
+          <strong style="color:var(--green)">Promptfoo-inspired:</strong> Weighted assertion scoring (A-F grades, 6 dimensions). Semantic dedup via TF-IDF cosine similarity. Daily cost budget gate ($5 default). 5-category content risk scoring (profanity, controversial, financial, spam, competitors). All 4 gates integrated into engine draft pipeline.
+          <br><strong style="color:var(--orange)">Agency-agents-inspired:</strong> 5-layer image prompt framework. Default-FAIL quality gate with auto-fix. Brand Guardian 7-dimension audit (voice_tone, emotional_alignment). Campaign runbooks with content mix. Memory tagging on feedback/history.
+          <br><strong style="color:var(--red)">Security audit #3:</strong> Fixed CRITICAL (execute_code env leak), HIGH (HTML injection), MEDIUM (SSRF, onchain args, skill path traversal). 750 tests passing.
+        </div>
+      </div>
+
+      <div class="changelog-entry pink">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+          <div style="font-family:'Space Mono',monospace;font-size:13px;font-weight:700;color:var(--pink);">v9.0 — SKILLS + MULTI-BRAND</div>
+          <div style="font-family:'Space Mono',monospace;font-size:10px;color:var(--muted);">MAR 13 2026</div>
+        </div>
+        <div style="font-size:12px;color:var(--muted);line-height:1.8;">
+          Persistent skills system (agent creates and saves reusable capabilities across sessions). Multi-brand support (isolated state/brand/env per instance). 15 agent tools (was 8). Token-budget context assembly. Async event hooks (pub/sub). Workspace injection in agent mode. Temporal decay on preferences. Model fallback chains. JSONL session transcripts. TF-IDF semantic memory with 30-day half-life. Channel abstraction layer. Subagent delegation. Second security audit (path traversal in skills, transcript user ID hardening, payload isolation, skill size limits).
+        </div>
+      </div>
+
+      <div class="changelog-entry red">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+          <div style="font-family:'Space Mono',monospace;font-size:13px;font-weight:700;color:var(--red);">v8.0 — SECURITY + TEMPLATES</div>
+          <div style="font-family:'Space Mono',monospace;font-size:10px;color:var(--muted);">MAR 02 2026</div>
+        </div>
+        <div style="font-size:12px;color:var(--muted);line-height:1.8;">
+          Deterministic template system (PIL renderer, no AI drift). Figma import. Claude Vision template analysis. Conversational template refinement. First security audit (path traversal, file size limits, Gemini key moved to header, generic error messages). Singleton API clients. NumPy vectorized gradients. Font manager with Google Fonts download.
+        </div>
+      </div>
+
+      <div class="changelog-entry">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+          <div style="font-family:'Space Mono',monospace;font-size:13px;font-weight:700;color:var(--orange);">v7.0 — AGENT MODE</div>
+          <div style="font-family:'Space Mono',monospace;font-size:10px;color:var(--muted);">FEB 2026</div>
+        </div>
+        <div style="font-size:12px;color:var(--muted);line-height:1.8;">
+          Claude tool-use agent loop (8 tools, 15 turns). Replaced rigid pipeline with autonomous decision-making. Real-time progress updates to Telegram on every tool call. Intent router for natural language understanding. brand_3d pipeline with master prompt splicing. Parallel N=3 option generation.
+        </div>
+      </div>
+
+      <div class="changelog-entry teal">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+          <div style="font-family:'Space Mono',monospace;font-size:13px;font-weight:700;color:var(--teal);">v6.0 — VISUAL IDENTITY</div>
+          <div style="font-family:'Space Mono',monospace;font-size:10px;color:var(--muted);">JAN 2026</div>
+        </div>
+        <div style="font-size:12px;color:var(--muted);line-height:1.8;">
+          Style profiles (/style create). Reference image routing (img2img at 0.3 strength). BrandConfig dataclass with mtime caching. Compositor visual effects (glass-morphism, orbs, noise). 7 layout profiles. LoRA training pipeline with version management and rollback.
+        </div>
+      </div>
+
+      <div class="changelog-entry green">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+          <div style="font-family:'Space Mono',monospace;font-size:13px;font-weight:700;color:var(--green);">v5.0 — LEARNING LOOP</div>
+          <div style="font-family:'Space Mono',monospace;font-size:10px;color:var(--muted);">DEC 2025</div>
+        </div>
+        <div style="font-size:12px;color:var(--muted);line-height:1.8;">
+          Feedback learning system (approve/reject history). Claude auto-summarizes preferences every 10 entries. Approved images saved as references. Generation history with cost tracking. Auto-post scheduler with cron-like time slots.
+        </div>
+      </div>
+
+      <div class="changelog-entry purple">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+          <div style="font-family:'Space Mono',monospace;font-size:13px;font-weight:700;color:var(--purple);">v4.0 — SMART ROUTING</div>
+          <div style="font-family:'Space Mono',monospace;font-size:10px;color:var(--muted);">NOV 2025</div>
+        </div>
+        <div style="font-size:12px;color:var(--muted);line-height:1.8;">
+          Smart image model routing (5 models by content type). 14 content types. SPLICE prompt enhancement framework. Figma design integration. Compositor profile mapping. Draft versioning.
+        </div>
+      </div>
+
+      <div class="changelog-entry blue">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+          <div style="font-family:'Space Mono',monospace;font-size:13px;font-weight:700;color:var(--blue);">v3.0 — COMPOSITION</div>
+          <div style="font-family:'Space Mono',monospace;font-size:10px;color:var(--muted);">OCT 2025</div>
+        </div>
+        <div style="font-size:12px;color:var(--muted);line-height:1.8;">
+          PIL compositor (branded image overlay with logo, text, glass-morphism backgrounds). Brand guidelines parser. PDF brand bootstrap via Claude Vision. Photo upload for reference images.
+        </div>
+      </div>
+
+      <div class="changelog-entry" style="border-left-color:var(--muted);">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+          <div style="font-family:'Space Mono',monospace;font-size:13px;font-weight:700;color:var(--muted);">v1-v2 — FOUNDATION</div>
+          <div style="font-family:'Space Mono',monospace;font-size:10px;color:var(--muted);">SEP 2025</div>
+        </div>
+        <div style="font-size:12px;color:var(--muted);line-height:1.8;">
+          Basic Telegram bot + Claude pipeline. Text-to-image via Replicate. X/Twitter posting via Tweepy. Draft approve/reject flow. Brand guidelines.md support.
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+</div>
+
+<script>
+function showTab(name, event) {
+  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+  document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
+  document.querySelector('#panel-' + name).classList.add('active');
+  if (event && event.currentTarget) event.currentTarget.classList.add('active');
+}
+</script>
+</body>
+</html>

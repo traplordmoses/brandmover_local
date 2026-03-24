@@ -1,13 +1,16 @@
 # BrandMover Local
 
-An autonomous AI marketing agent that runs via Telegram. Send a natural language request, get a branded post draft with a generated image, review it, and publish to X with one command. Includes a web dashboard for mission control.
+An autonomous AI marketing agent — with a creative director personality — that runs via Telegram. Send a natural language request, get a branded post draft with a generated image, review it, and publish to X with one command. Includes a web dashboard for mission control.
 
 **Pipeline:** Telegram message → Read brand guidelines → LLM generates caption + image prompt → Smart model routing generates image → Template composition with text overlay → Draft sent to Telegram for review → /approve posts to X.
 
 ## Features
 
 ### Content Generation
-- **Agent mode** — Claude tool-use loop with 15 tools: brand guidelines, Figma, feedback, image generation, skills, memory search, subagent delegation, and more
+- **Agent mode** — Claude tool-use loop with 21 tools: brand guidelines, Figma, feedback, image generation, skills, memory search, subagent delegation, variations, repurposing, trend research, and more
+- **Creative variations** — agent offers 2-3 meaningfully different approaches per request
+- **Content repurposing** — remix high-performing posts into threads, carousels, quote cards
+- **Trend research** — sub-agent researches trending topics in your niche
 - **Skills system** — the agent creates and saves reusable capabilities. Skills persist across sessions, so the agent gets cumulatively smarter over time
 - **Smart image routing** — auto-selects the best Replicate model per content type (Flux 1.1 Pro general, Nano Banana for text overlays, Recraft SVG for brand assets, Seedream for lifestyle)
 - **Template system** — upload custom templates (Figma exports, meme frames, etc.), Claude Vision analyzes regions, alpha-composite layering preserves transparency
@@ -21,17 +24,38 @@ An autonomous AI marketing agent that runs via Telegram. Send a natural language
 
 ### Autonomous Posting
 - **Heartbeat scheduler** — assess → reason → dispatch cycle replaces dumb cron. Claude decides what to post and when based on signals
+- **Performance-driven planning** — content mix auto-adjusts based on real engagement data
+- **Proactive creative briefs** — heartbeat suggests specific, data-informed content with reasoning
+- **Optimal posting times** — learns best hours/days from engagement analytics
+- **Campaign narrative arcs** — campaigns structured as story arcs (hook → buildup → climax → CTA)
 - **Campaign system** — multi-day campaigns with structured posts, progress tracking, auto-execution
 - **Exact-copy posting** — scheduled posts with verbatim text bypass the agent entirely, no unwanted image generation
 - **Content planner** — AI-driven content calendar balancing themes, types, and cadence
 - **Proactive generation** — when the feed goes quiet, the heartbeat picks a topic angle and generates a draft
+- **Circuit breaker** — prevents API hammering during outages, auto-recovers
+- **Crash-resilient scheduler** — auto-restarts with exponential backoff, Telegram alerts on failure
 
 ### Intelligence
 - **Semantic memory** — searches past generations by relevance to find what worked before, with temporal decay
+- **Memory-informed generation** — past approved posts used as context for similar requests
 - **Feedback learning** — learns from approve/reject history, auto-extracts preferences with temporal decay
 - **Preference engine** — scores drafts against learned patterns before submission, auto-rejects low-quality output
+- **Auto-retry on quality failure** — agent re-prompted with failure reasons for self-correction
+- **Performance-weighted skeletons** — content structures weighted by historical engagement
+- **Skill auto-discovery** — detects repeated workflows and suggests creating reusable skills
+- **Competitor analysis** — upload competitor screenshots for brand comparison via Claude Vision
 - **Diversity tracker** — tracks content structure (hooks, body, CTAs) to prevent repetition
 - **Topic bank** — rotating library of content angles with LRU selection for variety
+
+### Multi-Platform Publishing
+- **5 platforms** — X/Twitter, Discord, LinkedIn, Instagram, Telegram
+- **Multi-image tweets** — up to 4 images per tweet
+- **Instagram carousels** — up to 10 images per post
+- **X engagement analytics** — pulls likes, retweets, impressions to inform strategy
+
+### Draft Editing
+- **Granular controls** — inline buttons for Edit Caption, Edit Image, Shorten
+- **Refinement presets** — `/refine --shorter`, `--playful`, `--add-cta`, `--punchy` (combinable)
 
 ### Self-Modification
 - **Claude Code CLI** (`/code`) — run Claude Code directly from Telegram to fix, extend, or debug the bot's own codebase
@@ -48,7 +72,7 @@ An autonomous AI marketing agent that runs via Telegram. Send a natural language
 - **History** — browse past generations with expandable detail cards
 
 ### Infrastructure
-- **Model fallback** — automatic retry with fallback models on API errors
+- **Model fallback** — cross-provider fallback (Anthropic → OpenAI → Gemini) with automatic retry on API errors
 - **Subagent delegation** — spawn lightweight sub-agents for research and analysis
 - **Session transcripts** — JSONL per-user logs for debugging and analytics
 - **Multi-brand support** — run multiple brands from the same codebase with isolated config, state, and assets
@@ -100,12 +124,15 @@ cp .env.example .env
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `AGENT_MODE` | `pipeline` | Set to `agent` for the full tool-use loop (recommended) |
 | `AGENT_MODEL` | `claude-sonnet-4-6` | Which Claude model to use |
 | `BRAND_NAME` | `MyBrand` | Your brand name |
 | `IMAGE_MODEL` | `auto` | `auto` routes by content type, or force a specific model |
 | `AUTO_POST_ENABLED` | `false` | Enable scheduled auto-posting |
 | `HEARTBEAT_ENABLED` | `true` | Enable the heartbeat reasoning layer |
+| `LINKEDIN_ACCESS_TOKEN` | — | LinkedIn OAuth token for publishing |
+| `INSTAGRAM_ACCESS_TOKEN` | — | Instagram Graph API token for publishing |
+| `AGENT_TOOL_RESULT_MAX_CHARS` | `8000` | Max characters per tool result returned to agent |
+| `DAILY_COST_BUDGET_USD` | `10` | Daily spending cap across all API providers |
 | `CLAUDE_CODE_ENABLED` | `false` | Enable `/code` command for self-modification |
 | `CLAUDE_CODE_AUTO_ESCALATE` | `false` | Auto-spawn Claude Code on agent errors |
 | `CLAUDE_CODE_DAILY_LIMIT` | `10` | Max Claude Code invocations per day |
@@ -171,6 +198,7 @@ Message the bot on Telegram:
 
 ### Scheduling
 - **/schedule 3pm tomorrow post about our launch** — schedule a post
+- **/schedule next** — auto-picks the optimal time slot based on engagement data
 - **/autopause** / **/autoresume** — pause/resume auto-posting
 - **/autostatus** — show scheduler status
 
@@ -201,19 +229,17 @@ python3 main.py                    # Terminal 1 — main brand
 
 ```
 agent/              Core logic (no Telegram dependency)
-  engine.py           Tool-use agent loop (main architecture)
-  tools.py            15 tool definitions and handlers
-  brain.py            Claude LLM calls (pipeline + agent modes)
-  image_gen.py        Replicate image generation (Flux, Seedream, Recraft, Nano)
-  compositor.py       PIL image composition (glass-morphism, text overlay)
-  asset_ingest.py     Brand asset analysis + cataloging via Claude Vision
-  video_reverse.py    Video style reverse-engineering (keyframes + scene breakdown)
-  guidelines_editor.py  Conversational guidelines editing via Claude
-  heartbeat.py        Assess → reason → dispatch scheduling layer
-  skills.py           Persistent agent-created capabilities
-  session.py          Session memory with temporal decay
-  feedback.py         Feedback log + learned preferences
-  publisher.py        X/Twitter posting via tweepy
+  engine.py           Tool-use agent loop with self-critique + quality retry
+  tools.py            21 tool definitions and handlers
+  skill_prompt.py     Creative director system prompt
+  model_fallback.py   Cross-provider fallback (Anthropic → OpenAI → Gemini)
+  brand/              Brand context, guidelines, compositor, assets
+  publishing/         Multi-platform publishing (X, Discord, LinkedIn, Instagram)
+  quality/            Quality gates, scoring, dedup, risk, brand compliance
+  scheduling/         Heartbeat, content planner, schedule queue, topics
+  learning/           Feedback, preferences, memory, diversity, session
+  templates/          Visual template system
+  video/              Video generation, styling, scene analysis
 
 bot/                Telegram interface
   telegram_bot.py     Bot setup, handler registration, scheduler launch
@@ -247,6 +273,7 @@ state/              Runtime state (gitignored, per-instance)
 ## Testing
 
 ```bash
+pip install -r requirements-dev.txt
 python3 -m pytest tests/ -v
 ```
 
