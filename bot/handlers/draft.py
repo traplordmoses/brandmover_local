@@ -49,6 +49,69 @@ import random as _random
 logger = logging.getLogger(__name__)
 
 
+async def _auto_queue_calendar(update, pending: dict, user_id: int | None = None) -> int:
+    """Queue all calendar entries into the schedule queue for automatic execution.
+
+    Parses the calendar markdown from the pending draft and creates scheduled
+    items for each entry. The heartbeat will generate content at each scheduled time.
+
+    Returns the number of successfully queued items.
+    """
+    from agent import schedule_queue
+    from datetime import datetime, timezone
+
+    # Get the calendar path and parse entries
+    cal_path = pending.get("_calendar_path", "")
+    if not cal_path:
+        return 0
+
+    try:
+        cal_text = await _aio.to_thread(Path(cal_path).read_text, "utf-8")
+    except OSError:
+        return 0
+
+    # Parse markdown table rows
+    queued = 0
+    for line in cal_text.splitlines():
+        line = line.strip()
+        if not line.startswith("|") or line.startswith("| Date") or line.startswith("|---"):
+            continue
+        parts = [p.strip() for p in line.split("|")[1:-1]]
+        if len(parts) < 5:
+            continue
+
+        date_str, time_str, theme, content_type, topic = parts[0], parts[1], parts[2], parts[3], parts[4]
+        if not date_str or not time_str or not topic:
+            continue
+
+        # Parse the scheduled time
+        try:
+            dt = datetime.strptime(f"{date_str} {time_str}", "%Y-%m-%d %H:%M")
+            dt = dt.replace(tzinfo=timezone.utc)
+            scheduled_ts = dt.timestamp()
+        except ValueError:
+            logger.debug("Calendar queue: skipping unparseable date %s %s", date_str, time_str)
+            continue
+
+        # Skip past dates
+        if scheduled_ts < datetime.now(timezone.utc).timestamp():
+            continue
+
+        # Build the generation prompt
+        prompt = topic.strip()
+        if content_type and content_type not in prompt.lower():
+            prompt = f"[content_type:{content_type}] {prompt}"
+
+        # Add to schedule queue
+        label = f"cal:{theme}/{content_type}" if theme else f"cal:{content_type}"
+        item = schedule_queue.add_scheduled(prompt, scheduled_ts, "once", label=label)
+        if item:
+            queued += 1
+            logger.info("Calendar queued: %s at %s %s", label, date_str, time_str)
+
+    return queued
+
+
 # ---------------------------------------------------------------------------
 # Shared core logic — used by slash commands, NL router, and inline buttons
 # ---------------------------------------------------------------------------
@@ -187,10 +250,27 @@ async def _do_approve(update: Update, context: ContextTypes.DEFAULT_TYPE, option
     except Exception as e:
         logger.debug("Session plan update failed in _do_approve: %s", e)
 
-    await update.message.reply_text(
-        "Approved! Want me to post this to X now, or schedule it for later?",
-        parse_mode="HTML",
-    )
+    # --- Calendar auto-queue: when a content calendar is approved, queue all entries ---
+    draft_format = pending.get("format", "single")
+    if draft_format == "calendar":
+        queued_count = await _auto_queue_calendar(update, pending, user_id=user_id)
+        if queued_count > 0:
+            await update.message.reply_text(
+                f"Calendar approved! <b>{queued_count} posts queued</b> for auto-generation.\n\n"
+                f"The heartbeat will generate and send each one for your approval at the scheduled time.\n"
+                f"Use /scheduled to see the queue. Use /autostatus to check the scheduler.",
+                parse_mode="HTML",
+            )
+        else:
+            await update.message.reply_text(
+                "Calendar approved but no posts could be queued (check dates/times).",
+                parse_mode="HTML",
+            )
+    else:
+        await update.message.reply_text(
+            "Approved! Want me to post this to X now, or schedule it for later?",
+            parse_mode="HTML",
+        )
     logger.info("Draft approved (%s), awaiting post/schedule (feedback #%d)", source, count)
 
     # Fire hooks + transcript + audit log
